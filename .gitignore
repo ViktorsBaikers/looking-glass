@@ -1,0 +1,8 @@
+/target
+.claude
+.agents
+.codex
+.devrites
+.playwright
+.playwright-mcp
+.tokensave
