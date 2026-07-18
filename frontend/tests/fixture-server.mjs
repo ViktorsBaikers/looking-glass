@@ -31,9 +31,28 @@ createServer(async (request, response) => {
 	const fixtureId = request.headers['x-looking-glass-fixture'];
 	const freshInstall =
 		typeof fixtureId === 'string' && fixtureId.startsWith('fresh-install-')
-			? freshInstalls.get(fixtureId) ?? { installed: false, admin: null }
+			? freshInstalls.get(fixtureId) ?? { installed: false, admin: null, authenticated: false }
 			: null;
+	if (
+		freshInstall &&
+		!freshInstall.installed &&
+		path.startsWith('/api/') &&
+		path !== '/api/setup' &&
+		path !== '/api/setup/status'
+	) {
+		return json(
+			response,
+			{ error: 'setup_required', message: 'First-run setup must be completed before this action.' },
+			403
+		);
+	}
 	if (path === '/api/locations') return json(response, [location]);
+	if (path === '/api/admin/me') {
+		if (freshInstall?.authenticated && freshInstall.admin) {
+			return json(response, { username: freshInstall.admin.username });
+		}
+		return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
+	}
 	if (path === '/api/visitor') return json(response, { ip: '198.51.100.7' });
 	if (path === '/api/public/settings') {
 		return json(response, {
@@ -59,7 +78,8 @@ createServer(async (request, response) => {
 		}
 		freshInstalls.set(fixtureId, {
 			installed: true,
-			admin: { username: body.username, password: body.password }
+			admin: { username: body.username, password: body.password },
+			authenticated: false
 		});
 		response.writeHead(204).end();
 		return;
@@ -73,6 +93,7 @@ createServer(async (request, response) => {
 			body.username === freshInstall.admin.username &&
 			body.password === freshInstall.admin.password
 		) {
+			freshInstall.authenticated = true;
 			response.writeHead(204).end();
 			return;
 		}
@@ -84,11 +105,13 @@ createServer(async (request, response) => {
 			'cache-control': 'no-cache',
 			connection: 'keep-alive'
 		});
-		response.write('event: line\ndata: 64 bytes from 1.1.1.1: icmp_seq=1\n\n');
 		setTimeout(() => {
-			response.write('event: done\ndata: {"status":"completed","success":true,"elapsed_ms":100}\n\n');
-			setTimeout(() => response.end(), 25);
-		}, 200);
+			response.write('event: line\ndata: 64 bytes from 1.1.1.1: icmp_seq=1\n\n');
+			setTimeout(() => {
+				response.write('event: done\ndata: {"status":"completed","success":true,"elapsed_ms":100}\n\n');
+				setTimeout(() => response.end(), 25);
+			}, 200);
+		}, 150);
 		return;
 	}
 

@@ -1,5 +1,32 @@
 import { expect, test, type Response } from '@playwright/test';
 
+test('install.e2e redirects a fresh public entry to the installer after its bound setup probe', async ({
+	page,
+	request
+}) => {
+	const fixtureId = `fresh-install-${crypto.randomUUID()}`;
+	await page.setExtraHTTPHeaders({ 'x-looking-glass-fixture': fixtureId });
+	const initialStatus = page.waitForResponse(
+		(response) =>
+			response.url().endsWith('/api/setup/status') &&
+			response.request().method() === 'GET' &&
+			response.request().headers()['x-looking-glass-fixture'] === fixtureId
+	);
+
+	await page.goto('http://127.0.0.1:4174/');
+	const statusResponse = await initialStatus;
+	expect(statusResponse.status()).toBe(200);
+	expect(await statusResponse.json()).toEqual({ installed: false });
+	await expect(page).toHaveURL('http://127.0.0.1:4174/install');
+	await expect(page.getByRole('heading', { name: 'Create the admin account' })).toBeVisible();
+
+	const protectedRoute = await request.get('http://127.0.0.1:4173/api/locations', {
+		headers: { 'x-looking-glass-fixture': fixtureId }
+	});
+	expect(protectedRoute.status()).toBe(403);
+	expect(await protectedRoute.json()).toMatchObject({ error: 'setup_required' });
+});
+
 test('install.e2e creates the only admin and closes the installer', async ({ page, request }) => {
 	const fixtureId = `fresh-install-${crypto.randomUUID()}`;
 	await page.setExtraHTTPHeaders({ 'x-looking-glass-fixture': fixtureId });
@@ -24,15 +51,41 @@ test('install.e2e creates the only admin and closes the installer', async ({ pag
 	expect((await setupResponse).status()).toBe(204);
 	await expect(page).toHaveURL('http://127.0.0.1:4174/login');
 	await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+	const unauthenticatedMe = await request.get('http://127.0.0.1:4173/api/admin/me', {
+		headers: { 'x-looking-glass-fixture': fixtureId }
+	});
+	expect(unauthenticatedMe.status()).toBe(401);
+	expect(await unauthenticatedMe.json()).toMatchObject({ error: 'unauthorized' });
 
 	await page.getByLabel('Username').fill('admin');
+	await page.getByLabel('Password').fill('wrong-password');
+	const failedLoginResponse = page.waitForResponse(
+		(response) => response.url().endsWith('/api/auth/login') && response.request().method() === 'POST'
+	);
+	await page.getByRole('button', { name: 'Sign in' }).click();
+	expect((await failedLoginResponse).status()).toBe(401);
+	await expect(page).toHaveURL('http://127.0.0.1:4174/login');
+	await expect(page.getByRole('alert')).toHaveText('Invalid username or password.');
+
 	await page.getByLabel('Password').fill('fixture-password');
 	const loginResponse = page.waitForResponse(
 		(response) => response.url().endsWith('/api/auth/login') && response.request().method() === 'POST'
 	);
+	const meResponse = page.waitForResponse(
+		(response) => response.url().endsWith('/api/admin/me') && response.request().method() === 'GET'
+	);
 	await page.getByRole('button', { name: 'Sign in' }).click();
 	expect((await loginResponse).status()).toBe(204);
-	await expect(page).toHaveURL('http://127.0.0.1:4174/');
+	const authenticatedMe = await meResponse;
+	expect(authenticatedMe.status()).toBe(200);
+	expect(await authenticatedMe.json()).toEqual({ username: 'admin' });
+	await expect(page).toHaveURL('http://127.0.0.1:4174/admin');
+	await expect(page.getByRole('heading', { name: 'Locations' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'Locations' })).toBeVisible();
+	await page.getByRole('link', { name: 'Settings' }).click();
+	await expect(page).toHaveURL('http://127.0.0.1:4174/admin/settings');
+	await page.getByRole('link', { name: 'Locations' }).click();
+	await expect(page).toHaveURL('http://127.0.0.1:4174/admin');
 
 	const secondSetup = await request.post('http://127.0.0.1:4173/api/setup', {
 		headers: { 'x-looking-glass-fixture': fixtureId },

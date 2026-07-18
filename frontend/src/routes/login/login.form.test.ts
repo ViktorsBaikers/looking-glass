@@ -50,6 +50,7 @@ describe('login form', () => {
 		expect(alerts[0].textContent).not.toMatch(/username (?:is|was)|password (?:is|was)/i);
 		expect(screen.getByLabelText('Username').hasAttribute('aria-invalid')).toBe(false);
 		expect(screen.getByLabelText('Password').hasAttribute('aria-invalid')).toBe(false);
+		expect(goto).not.toHaveBeenCalled();
 	});
 
 	it('enables only filled credentials and submits once while showing progress', async () => {
@@ -81,6 +82,6 @@ describe('login form', () => {
 		expect(screen.getByRole('button', { name: 'Signing in' }).querySelector('svg')).not.toBeNull();
 
 		completeLogin?.(new Response(null, { status: 204 }));
-		await waitFor(() => expect(goto).toHaveBeenCalledWith('/'));
+		await waitFor(() => expect(goto).toHaveBeenCalledWith('/admin'));
 	});
 });

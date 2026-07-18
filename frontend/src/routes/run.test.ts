@@ -167,15 +167,22 @@ describe('public diagnostic run', () => {
 
 		expect(EventSourceStub.instances).toHaveLength(1);
 		expect(EventSourceStub.instances[0].url).toContain('target=1.1.1.1');
+		const connecting = screen.getByRole('status');
+		expect(connecting.textContent).toContain('Connecting');
+		expect(connecting.querySelector('.animate-spin')).toBeTruthy();
 		expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+
+		EventSourceStub.instances[0].emit('line', '64 bytes from 1.1.1.1');
+		await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Running'));
 	});
 
-	it('cancels an active stream visibly', async () => {
+	it('cancels a connecting stream visibly', async () => {
 		render(PublicPage);
 		const user = userEvent.setup();
 		await screen.findByRole('option', { name: 'Frankfurt' });
 		await user.type(screen.getByLabelText('Target'), '1.1.1.1');
 		await user.click(screen.getByRole('button', { name: 'Run' }));
+		expect(screen.getByRole('status').textContent).toContain('Connecting');
 		await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
 		expect(EventSourceStub.instances[0].close).toHaveBeenCalledOnce();

@@ -32,7 +32,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 use tokio_rustls::TlsAcceptor;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{protocol::WebSocketConfig, Message};
 use tokio_tungstenite::WebSocketStream;
 
 use crate::auth::verify_password;
@@ -49,6 +49,10 @@ const PREAUTH_MAX_CONCURRENT: usize = 64;
 const PREAUTH_FAILURE_MAX: u32 = 20;
 const PREAUTH_FAILURE_WINDOW: Duration = Duration::from_secs(60);
 const PREAUTH_PRUNE_THRESHOLD: usize = 4096;
+// A 64 KiB output chunk can expand to roughly 384 KiB when JSON escapes every byte.
+// Keep one authenticated protocol message comfortably above that while preventing
+// unauthenticated peers from claiming tungstenite's 64 MiB default per connection.
+const TUNNEL_MAX_MESSAGE_BYTES: usize = 512 * 1024;
 
 /// Backstop on inter-frame silence during a relayed run: if no frame arrives for
 /// this long the connection is torn down so a silent agent can never hang the
@@ -740,8 +744,11 @@ async fn handle_connection(
     permit: OwnedSemaphorePermit,
 ) -> io::Result<()> {
     let tls = preauth_timeout(acceptor.accept(tcp), "tls handshake").await?;
-    let ws =
-        ws_preauth_timeout(tokio_tungstenite::accept_async(tls), "websocket handshake").await?;
+    let ws = ws_preauth_timeout(
+        tokio_tungstenite::accept_async_with_config(tls, Some(tunnel_websocket_config())),
+        "websocket handshake",
+    )
+    .await?;
     let transport = WsTransport::new(ws);
 
     let (agent_id, channel) = ws_preauth_timeout(
@@ -756,6 +763,12 @@ async fn handle_connection(
 
     serve_agent(channel, hub, store, agent_id).await;
     Ok(())
+}
+
+fn tunnel_websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(TUNNEL_MAX_MESSAGE_BYTES))
+        .max_frame_size(Some(TUNNEL_MAX_MESSAGE_BYTES))
 }
 
 fn random_nonce() -> [u8; TUNNEL_KEY_BYTES] {
@@ -805,10 +818,22 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shared::protocol::{client_handshake, ChannelTransport};
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+    use rustls::crypto::WebPkiSupportedAlgorithms;
+    use rustls::pki_types::{ServerName, UnixTime};
+    use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
+    use shared::protocol::{
+        client_handshake, verify_pinned_identity, ChannelTransport, TunnelAccept, TunnelHello,
+        PROTOCOL_VERSION,
+    };
     use std::sync::OnceLock;
+    use tokio_rustls::TlsConnector;
+    use tokio_tungstenite::client_async;
+    use tower::ServiceExt;
 
     const CRED: &str = "aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44ee55ff66aa11bb22cc33dd44";
+    const TEST_CERT: &str = "-----BEGIN CERTIFICATE-----\nMIIDHzCCAgegAwIBAgIUE9j6GO1vmvEiR+U8AWUAQgAta5AwDQYJKoZIhvcNAQEL\nBQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDcxODE2MjgyOFoXDTI2MDcx\nOTE2MjgyOFowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF\nAAOCAQ8AMIIBCgKCAQEAqYMxqyibqUTXEqhZwC9l98xvsCbsy7rIT9smbo1wkEuK\nC7vzt2+35VZoCdetrufP7AeMlipMtboVvCfol/nJDv6sS7fEue1KF224pxaK+fJ2\nepRUKTZtSuGAlBOlZ9hq9ArihghBi27GaC9D6VXhzwFcgw8wXBaUlC612ENMIxZp\nrTJ3I98MSZJw6URqfM9Jy4w3jzLLAyQnhE+QOYoxXCU+w497A+jgkY4X6bL998PT\nGaXmoFyjaVwYZYuEPcClwzANu+NKM6HY+UaYAxYOcWOrwYw3zP4VQogSrkqIngM4\nFpnPcmCBlHt8SitpoDmBUQl0s/MYmI+kZDeIEFGKeQIDAQABo2kwZzAdBgNVHQ4E\nFgQUNO9xNnkuVM5DKp77D9I/MhTykHwwHwYDVR0jBBgwFoAUNO9xNnkuVM5DKp77\nD9I/MhTykHwwDwYDVR0TAQH/BAUwAwEB/zAUBgNVHREEDTALgglsb2NhbGhvc3Qw\nDQYJKoZIhvcNAQELBQADggEBAJUFLLXcqJwlcE2evAICc7vvgk1hBaJf3Di5CsFQ\nLCGZgfffUeGc9u4FlB6hYJh9dBBUhT5vZxC3zcix42XBcw0OUINwET8EaaY9uAEl\nE1qZUSRFLu35VkuaBanRU/zC9mxVFr1z51mEDycWAg3IvG8V4EENNVX4EsCuzjkZ\ngknfR+HootmuWU3RnaKVgNH65uveP+kmR6RISX+s9q+2oBapgSyx6IorMKcM5vGP\nCVUItooWGUMtlEjJKQshBDAViBt+LXUZEKGF01y4mqYXQflk3IR91Y84daWefsoe\nbwbZf+XByMOy3UZliVC08FfAYbsDq/J4V5yPyXWNJ+bedTc=\n-----END CERTIFICATE-----\n";
+    const TEST_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCpgzGrKJupRNcS\nqFnAL2X3zG+wJuzLushP2yZujXCQS4oLu/O3b7flVmgJ162u58/sB4yWKky1uhW8\nJ+iX+ckO/qxLt8S57UoXbbinFor58nZ6lFQpNm1K4YCUE6Vn2Gr0CuKGCEGLbsZo\nL0PpVeHPAVyDDzBcFpSULrXYQ0wjFmmtMncj3wxJknDpRGp8z0nLjDePMssDJCeE\nT5A5ijFcJT7Dj3sD6OCRjhfpsv33w9MZpeagXKNpXBhli4Q9wKXDMA2740ozodj5\nRpgDFg5xY6vBjDfM/hVCiBKuSoieAzgWmc9yYIGUe3xKK2mgOYFRCXSz8xiYj6Rk\nN4gQUYp5AgMBAAECggEALdKdNpt/mL5XNV/1AxLNCbNl7cRX9qrDQ3MGbJQnfZot\n8wYX19qHZ6N39FEtTj6z4iYYRu+gVO+8uGRBZ/PJ+he2E7HVqD0Q7kxmwiRB5Vc5\n1+EI7ysbWEalL2IwMGY8Y0QeAAVzUnHbiIZeYVEp/X9strEAbaRc/cGyvodSqZkQ\nIJq2s1uEnKRfsTDnHYnC/XlDKo+9vtKL17b03X8BI9+S4VsKCPL8oSapvFndk0EF\n3K2yX0yRmyzP0pEMOwVQo10BGUtRaQbLUFjPStka/SB9oeZf2yIQk6pm+dS4Mmsm\nrh3pwyPmVaDWmVdMstcLsANqnLnLBlhF5u0+FJEJUQKBgQDol7xfXjdtCkHBbz6t\n45Gt8zrESpYqmALY3oOae4yRUBwJR2Ebp9I61CcxwJDaQdy37FYwHjiIe8d3Mn2O\nxV1K3WevQbgZbxP32qXDuwVYL1xRqsl9nhz+ahSlsOvsQP9ptK4AfGebiglem5PF\n3dLDA71pbj6l0Cck8ABiWFdxAwKBgQC6klPxTfmViNLZIOKIFIRoPWiA6VwsmzdZ\nQBWlzAnId03WKHUv9pNNEkOKgLUZZ+RQyqbVIOCjdRayM62BsbRH/KXpvnu5zwNi\nM4zkpONBAWo1lP9kjuqhbU2HK46OY1MX1D4eXS46PA0E2pvx/aaidJ1U92D8zy5Y\nvSwmjz130wKBgGYKq8nrO8XKyi5i78y6Gh+GpjGXx2nIZvdeJ76OlYzq6GHpvuCz\nL7g/ezKImQQoAP1v4iAaIhM+urPAovUQAW3m1KY+3tXJtaj3c+H7Gs0legsaMmu6\nAl5bi9NlWxu7KFLnwa7U5V+Hn7Sx7JLSTrTf3ylyBGoaeBHseT6sIzChAoGATMAF\naC77jVhL5KZyiihmj7szUlStZmwzyLNkNGBLZfwuOPtLuf9leT8aKc/osBrdAZ9c\nIjD0OEninExGBCRmVXbJie6iVz2h1rP+MdDi68r5NjGlHmjsfJvKWODCNDEH7bWS\nGEucyLgLYwPLQzFla08tqdZaP6W7GyY3E2W5k6ECgYEAsRe55Rf8Lvlb8XwEGLNe\nbNAU4xx8/fElMFb5oDSC0dgp+U3IBViMrjTVAKy19xJCuz/dbgQAJyzX5jl/fx41\n7DZ4iIxAW6tGN6xFA81gyczkJhB9yFAlm8QFxPg7UuI1yALR8GiG0BtucPvmB1Wy\nAJaiJD9UQtSneCNnCnNn/uw=\n-----END PRIVATE KEY-----\n";
     static LOG_CAPTURE: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
 
     fn captured_logs() -> Arc<Mutex<Vec<u8>>> {
@@ -843,6 +868,121 @@ mod tests {
         logs.contains(&format!("{name}={value}")) || logs.contains(&format!("{name}=\"{value}\""))
     }
 
+    fn test_identity() -> TunnelIdentity {
+        let certs = CertificateDer::pem_slice_iter(TEST_CERT.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .expect("test certificate");
+        let key = PrivateKeyDer::from_pem_slice(TEST_KEY.as_bytes()).expect("test private key");
+        TunnelIdentity {
+            fingerprint: fingerprint(certs[0].as_ref()),
+            certs,
+            key,
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestPinnedCentral {
+        fingerprint: String,
+        algorithms: WebPkiSupportedAlgorithms,
+    }
+
+    impl ServerCertVerifier for TestPinnedCentral {
+        fn verify_server_cert(
+            &self,
+            end_entity: &CertificateDer<'_>,
+            _intermediates: &[CertificateDer<'_>],
+            _server_name: &ServerName<'_>,
+            _ocsp_response: &[u8],
+            _now: UnixTime,
+        ) -> Result<ServerCertVerified, rustls::Error> {
+            verify_pinned_identity(end_entity.as_ref(), &self.fingerprint)
+                .map(|()| ServerCertVerified::assertion())
+                .map_err(|_| rustls::Error::General("test tunnel identity mismatch".to_string()))
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            self.algorithms.supported_schemes()
+        }
+    }
+
+    fn test_client_config(fingerprint: String) -> ClientConfig {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let verifier = Arc::new(TestPinnedCentral {
+            fingerprint,
+            algorithms: provider.signature_verification_algorithms,
+        });
+        ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("test TLS versions")
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth()
+    }
+
+    async fn start_test_connection(
+        store: Store,
+        hub: TunnelHub,
+    ) -> (
+        SocketAddr,
+        tokio::task::JoinHandle<io::Result<()>>,
+        ClientConfig,
+    ) {
+        let identity = test_identity();
+        let client = test_client_config(identity.fingerprint().to_string());
+        let acceptor = build_acceptor(identity).expect("test TLS acceptor");
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener");
+        let address = listener.local_addr().expect("test listener address");
+        let task = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await?;
+            let permit = Arc::new(Semaphore::new(1))
+                .acquire_owned()
+                .await
+                .expect("test pre-auth permit");
+            handle_connection(acceptor, tcp, store, hub, permit).await
+        });
+        (address, task, client)
+    }
+
+    async fn test_websocket_client(
+        address: SocketAddr,
+        client: ClientConfig,
+    ) -> WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>> {
+        let tcp = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connect test tunnel");
+        let tls = TlsConnector::from(Arc::new(client))
+            .connect(
+                ServerName::try_from("localhost").expect("test server name"),
+                tcp,
+            )
+            .await
+            .expect("test TLS handshake");
+        client_async("ws://localhost/", tls)
+            .await
+            .expect("test WebSocket handshake")
+            .0
+    }
+
     #[test]
     fn preauth_failures_rate_limit_and_clear_by_peer() {
         let limiter = PreAuthFailures::default();
@@ -854,6 +994,108 @@ mod tests {
         assert!(!limiter.allow(peer));
         limiter.clear(peer);
         assert!(limiter.allow(peer));
+    }
+
+    #[test]
+    fn preauth_websocket_messages_are_bounded_to_protocol_scale() {
+        let config = tunnel_websocket_config();
+        assert_eq!(config.max_message_size, Some(512 * 1024));
+        assert_eq!(config.max_frame_size, Some(512 * 1024));
+    }
+
+    #[tokio::test]
+    async fn real_handler_rejects_oversized_preauth_hello_before_auth_and_accepts_a_valid_control()
+    {
+        let store = Store::open(unique_db_path()).expect("test store");
+        store
+            .put_agent(&crate::store::Agent {
+                id: "agent-1".to_string(),
+                location_id: "loc-1".to_string(),
+                credential_hash: crate::auth::hash_password(CRED).expect("test credential hash"),
+                enrolled_at: 0,
+                last_seen: None,
+                revoked: false,
+            })
+            .expect("enroll test agent");
+
+        let hub = TunnelHub::new();
+        let (address, handler, client) = start_test_connection(store.clone(), hub.clone()).await;
+        let mut oversized = test_websocket_client(address, client).await;
+        let payload = serde_json::json!({
+            "protocol_version": PROTOCOL_VERSION,
+            "agent_id": "agent-1",
+            "credential": CRED,
+            "client_nonce": vec![1u8; TUNNEL_KEY_BYTES],
+            "padding": "x".repeat(TUNNEL_MAX_MESSAGE_BYTES),
+        })
+        .to_string()
+        .into_bytes();
+        assert!(
+            payload.len() > TUNNEL_MAX_MESSAGE_BYTES,
+            "test payload exceeds cap"
+        );
+        oversized
+            .send(Message::Binary(payload.into()))
+            .await
+            .expect("send oversized pre-auth hello");
+        let rejected = tokio::time::timeout(Duration::from_secs(2), handler)
+            .await
+            .expect("oversized pre-auth message must be bounded")
+            .expect("handler task");
+        assert!(
+            rejected.is_err(),
+            "oversized message must reject the real handler"
+        );
+        assert!(
+            !hub.is_connected("agent-1"),
+            "oversized hello must not reach credential verification or agent registration"
+        );
+        assert!(
+            store
+                .get_agent("agent-1")
+                .unwrap()
+                .unwrap()
+                .last_seen
+                .is_none(),
+            "oversized hello must not mark the agent as connected"
+        );
+        drop(oversized);
+
+        let (address, handler, client) = start_test_connection(store, hub.clone()).await;
+        let mut control = test_websocket_client(address, client).await;
+        let hello = TunnelHello {
+            protocol_version: PROTOCOL_VERSION,
+            agent_id: "agent-1".to_string(),
+            credential: CRED.to_string(),
+            client_nonce: [2u8; TUNNEL_KEY_BYTES],
+        };
+        control
+            .send(Message::Binary(serde_json::to_vec(&hello).unwrap().into()))
+            .await
+            .expect("send protocol-sized hello");
+        let accept = tokio::time::timeout(Duration::from_secs(2), control.next())
+            .await
+            .expect("valid hello must reach auth path")
+            .expect("valid hello response")
+            .expect("valid WebSocket response");
+        assert!(matches!(
+            accept,
+            Message::Binary(bytes) if serde_json::from_slice::<TunnelAccept>(&bytes).is_ok()
+        ));
+        wait_for(|| hub.is_connected("agent-1")).await;
+        assert!(
+            hub.is_connected("agent-1"),
+            "valid hello must register after authentication"
+        );
+        drop(control);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), handler)
+                .await
+                .expect("valid control handler must finish")
+                .expect("valid control handler task")
+                .is_ok(),
+            "valid control connection must complete normally"
+        );
     }
 
     #[tokio::test]
@@ -892,10 +1134,17 @@ mod tests {
     /// transport: `central_channel` is the real central side; `agent_channel` is
     /// the test playing the agent.
     async fn established_pair() -> (AuthChannel<ChannelTransport>, AuthChannel<ChannelTransport>) {
+        established_pair_for("agent-1").await
+    }
+
+    async fn established_pair_for(
+        agent_id: &str,
+    ) -> (AuthChannel<ChannelTransport>, AuthChannel<ChannelTransport>) {
         let (agent_side, central_side) = ChannelTransport::pair();
+        let agent_id = agent_id.to_owned();
         let client =
             tokio::spawn(
-                async move { client_handshake(agent_side, "agent-1", CRED, [1u8; 32]).await },
+                async move { client_handshake(agent_side, &agent_id, CRED, [1u8; 32]).await },
             );
         let (_id, central_channel) = server_handshake(
             central_side,
@@ -1549,6 +1798,286 @@ mod tests {
             !hub.is_connected("agent-1"),
             "a kicked active relay must unregister the tunnel"
         );
+    }
+
+    #[derive(Debug)]
+    struct LivenessLoadMetrics {
+        agents: usize,
+        completed: Duration,
+        p50: Duration,
+        p95: Duration,
+        max: Duration,
+        heartbeat_failures: usize,
+        health_max: Duration,
+        output: Duration,
+        health_started_with: usize,
+        output_completed_with: usize,
+    }
+
+    async fn liveness_load(agents: usize) -> LivenessLoadMetrics {
+        let started = Instant::now();
+        let store = Store::open(unique_db_path()).expect("open load store");
+        let hub = TunnelHub::new();
+        let mut channels = Vec::with_capacity(agents);
+
+        for index in 0..agents {
+            let agent_id = format!("load-agent-{index}");
+            enrolled_agent(&store, &agent_id);
+            let (central_channel, agent_channel) = established_pair_for(&agent_id).await;
+            let serving_hub = hub.clone();
+            let serving_store = store.clone();
+            tokio::spawn(async move {
+                serve_agent(central_channel, serving_hub, serving_store, agent_id).await;
+            });
+            channels.push(agent_channel);
+        }
+
+        let connected_deadline = Instant::now() + Duration::from_secs(10);
+        while (0..agents).any(|index| !hub.is_connected(&format!("load-agent-{index}"))) {
+            assert!(
+                Instant::now() < connected_deadline,
+                "{agents} agent connections exceeded the 10 second heartbeat interval"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        let output_channel = channels.remove(0);
+
+        // `Liveness` writes once per second. Cross a second boundary so these frames
+        // exercise the production Store::touch_agent_last_seen write rather than its
+        // intentional same-second coalescing.
+        let latest_seen = (1..agents)
+            .map(|index| {
+                store
+                    .get_agent(&format!("load-agent-{index}"))
+                    .expect("read liveness")
+                    .expect("agent exists")
+                    .last_seen
+                    .expect("connected agent has liveness")
+            })
+            .max()
+            .expect("heartbeat agents");
+        while crate::store::unix_now() <= latest_seen {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        let mut writes = Vec::with_capacity(agents);
+        let mut heartbeat_failures = 0;
+        let dispatched = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let write_completions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let previous_liveness = (1..agents)
+            .map(|index| {
+                let agent_id = format!("load-agent-{index}");
+                let last_seen = store
+                    .get_agent(&agent_id)
+                    .expect("read before heartbeat")
+                    .expect("agent exists")
+                    .last_seen
+                    .expect("connected agent has liveness");
+                (agent_id, last_seen)
+            })
+            .collect::<Vec<_>>();
+        let writes_started = Instant::now();
+        for (index, mut channel) in channels.into_iter().enumerate() {
+            let dispatched = dispatched.clone();
+            writes.push(tokio::spawn(async move {
+                channel
+                    .send_message(&TunnelMessage::Heartbeat)
+                    .await
+                    .expect("heartbeat transport");
+                dispatched.fetch_add(1, Ordering::Release);
+                index
+            }));
+        }
+
+        let expected_heartbeats = agents - 1;
+        let overlap_deadline = Instant::now() + Duration::from_secs(2);
+        while dispatched.load(Ordering::Acquire) != expected_heartbeats {
+            assert!(
+                Instant::now() < overlap_deadline,
+                "heartbeats were not all dispatched before the responsiveness probes"
+            );
+            tokio::task::yield_now().await;
+        }
+        let monitor_store = store.clone();
+        let monitor_completions = write_completions.clone();
+        let write_monitor = tokio::spawn(async move {
+            let mut latencies = vec![None; previous_liveness.len()];
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while latencies.iter().any(Option::is_none) {
+                for (index, (agent_id, previous)) in previous_liveness.iter().enumerate() {
+                    if latencies[index].is_none()
+                        && monitor_store
+                            .get_agent(agent_id)
+                            .expect("read after heartbeat")
+                            .expect("agent exists")
+                            .last_seen
+                            .is_some_and(|seen| seen > *previous)
+                    {
+                        latencies[index] = Some(writes_started.elapsed());
+                        monitor_completions.fetch_add(1, Ordering::Release);
+                    }
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "heartbeat writes exceeded the 10 second liveness interval"
+                );
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            latencies
+                .into_iter()
+                .map(|latency| latency.expect("completed heartbeat latency"))
+                .collect::<Vec<_>>()
+        });
+        while write_completions.load(Ordering::Acquire) == 0 {
+            assert!(
+                Instant::now() < overlap_deadline,
+                "no dispatched heartbeat reached the production liveness write seam"
+            );
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            write_completions.load(Ordering::Acquire) < expected_heartbeats,
+            "all heartbeat writes completed before responsiveness probes could overlap them"
+        );
+
+        let health_router = crate::with_routes(axum::Router::new());
+        let health_writes = write_completions.clone();
+        let health_probe = tokio::spawn(async move {
+            let started_with = health_writes.load(Ordering::Acquire);
+            let mut latencies = Vec::new();
+            for _ in 0..3 {
+                let probe_started = Instant::now();
+                let response = health_router
+                    .clone()
+                    .oneshot(
+                        axum::http::Request::builder()
+                            .uri("/health")
+                            .body(axum::body::Body::empty())
+                            .expect("health request"),
+                    )
+                    .await
+                    .expect("health response");
+                assert_eq!(response.status(), axum::http::StatusCode::OK);
+                latencies.push(probe_started.elapsed());
+            }
+            (started_with, latencies)
+        });
+
+        let mut events = hub
+            .submit("load-agent-0", command("load-output"))
+            .await
+            .expect("the output probe agent is connected");
+        let output_started = Instant::now();
+        let output_task = tokio::spawn(async move {
+            let mut channel = output_channel;
+            assert_eq!(
+                channel.recv_message().await.expect("output probe command"),
+                command("load-output")
+            );
+            channel
+                .send_message(&TunnelMessage::Output {
+                    run_id: "load-output".into(),
+                    line: "load probe".into(),
+                })
+                .await
+                .expect("stream output");
+            channel
+                .send_message(&TunnelMessage::Done {
+                    run_id: "load-output".into(),
+                    ok: true,
+                })
+                .await
+                .expect("complete output probe");
+        });
+
+        let output = tokio::time::timeout(Duration::from_secs(2), async {
+            output_task.await.expect("output task");
+            assert_eq!(
+                events.recv().await,
+                Some(RelayEvent::Line("load probe".into()))
+            );
+            assert_eq!(
+                events.recv().await,
+                Some(RelayEvent::Terminal { error: None })
+            );
+            output_started.elapsed()
+        })
+        .await
+        .expect("output stalled beyond the two second responsiveness budget");
+        let output_completed_with = write_completions.load(Ordering::Acquire);
+        assert!(
+            output_completed_with < expected_heartbeats,
+            "output completed after every heartbeat write; the output probe did not overlap active writes"
+        );
+
+        for write in writes {
+            match write.await {
+                Ok(_) => {}
+                Err(_) => heartbeat_failures += 1,
+            }
+        }
+        let mut latencies = write_monitor.await.expect("heartbeat write monitor");
+        let (health_started_with, health_latencies) =
+            health_probe.await.expect("health probe task");
+        assert!(
+            health_started_with < expected_heartbeats,
+            "health started after every heartbeat write; the health probe did not overlap active writes"
+        );
+        let health_max = *health_latencies.iter().max().expect("health samples");
+        assert!(
+            health_max <= Duration::from_secs(2),
+            "health stalled for {health_max:?} while {agents} liveness writes ran"
+        );
+        assert_eq!(heartbeat_failures, 0, "heartbeat tasks failed");
+        assert_eq!(
+            latencies.len(),
+            agents - 1,
+            "every heartbeat write completed"
+        );
+        latencies.push(output);
+        latencies.sort_unstable();
+        let completed = started.elapsed();
+        assert!(
+            completed <= Duration::from_secs(10),
+            "{agents} liveness writes completed in {completed:?}, over the 10 second heartbeat interval"
+        );
+
+        LivenessLoadMetrics {
+            agents,
+            completed,
+            p50: latencies[(latencies.len() - 1) / 2],
+            p95: latencies[(latencies.len() - 1) * 95 / 100],
+            max: *latencies.last().expect("write latencies"),
+            heartbeat_failures,
+            health_max,
+            output,
+            health_started_with,
+            output_completed_with,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn liveness_writes_hold_health_and_output_responsive_at_100_and_500_agents() {
+        for round in 1..=2 {
+            for agents in [100, 500] {
+                let metrics = liveness_load(agents).await;
+                eprintln!(
+                    "liveness-load round={round} agents={} completed_ms={} p50_ms={} p95_ms={} max_ms={} heartbeat_failures={} health_max_ms={} output_ms={} health_started_with={} output_completed_with={}",
+                    metrics.agents,
+                    metrics.completed.as_millis(),
+                    metrics.p50.as_millis(),
+                    metrics.p95.as_millis(),
+                    metrics.max.as_millis(),
+                    metrics.heartbeat_failures,
+                    metrics.health_max.as_millis(),
+                    metrics.output.as_millis(),
+                    metrics.health_started_with,
+                    metrics.output_completed_with,
+                );
+                assert!(metrics.output <= Duration::from_secs(2));
+            }
+        }
     }
 
     #[tokio::test]

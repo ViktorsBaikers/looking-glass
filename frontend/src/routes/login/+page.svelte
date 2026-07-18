@@ -33,10 +33,10 @@
 		formError = '';
 		const result = await postJson('/api/auth/login', { username, password });
 		submitting = false;
-		if (result.ok) {
-			goto('/');
-			return;
-		}
+	if (result.ok) {
+		goto('/admin');
+		return;
+	}
 		formError = result.message;
 	}
 </script>

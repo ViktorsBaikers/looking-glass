@@ -14,7 +14,7 @@
 	--muted: oklch(0.95 0.004 247);
 	--muted-foreground: oklch(0.5 0.02 255);
 
-	--primary: oklch(0.6 0.11 210);
+	--primary: oklch(0.52 0.11 210);
 	--primary-foreground: oklch(0.985 0.005 210);
 
 	--secondary: oklch(0.95 0.004 247);
@@ -30,7 +30,7 @@
 	--input: oklch(0.9 0.005 247);
 	--ring: oklch(0.6 0.11 210);
 
-	--status-online: oklch(0.68 0.16 155);
+	--status-online: oklch(0.52 0.16 155);
 	--status-degraded: oklch(0.78 0.15 80);
 	--status-offline: oklch(0.6 0.04 255);
 }

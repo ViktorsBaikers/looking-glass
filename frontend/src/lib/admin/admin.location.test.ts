@@ -451,6 +451,19 @@ describe('admin location CRUD', () => {
 		expect(runnableMethods((await publicLocations())[0])).toEqual([{ value: 'mtr', label: 'MTR' }]);
 	});
 
+	it('gives every offered method a 44px touch target', async () => {
+		const user = await editor();
+		await user.click(screen.getByRole('tab', { name: 'Methods' }));
+		const panel = screen.getByRole('group', { name: 'Offered methods' });
+
+		for (const method of OFFERED_METHODS) {
+			const checkboxes = within(panel).getAllByRole('checkbox', { name: method });
+			expect(checkboxes).toHaveLength(1);
+			expect(checkboxes[0].closest('label')?.classList.contains('min-h-11')).toBe(true);
+		}
+		expect(within(panel).getAllByRole('checkbox')).toHaveLength(OFFERED_METHODS.length);
+	});
+
 	it('removes a confirmed location and its children from public data', async () => {
 		const record = fixture.locations.get('fra')!;
 		fixture.locations.set('offline', {

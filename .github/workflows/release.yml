@@ -1,11 +1,9 @@
-name: Release image
+name: Release
 
 on:
   push:
     tags:
       - 'v*'
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       push:
@@ -15,7 +13,7 @@ on:
         type: boolean
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
@@ -26,8 +24,36 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
+  release-assets:
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release assets
+        run: |
+          mkdir assets
+          cp scripts/install-agent.sh assets/install-agent.sh
+          docker run --rm \
+            --mount type=bind,src="$GITHUB_WORKSPACE",dst=/src,readonly \
+            --mount type=bind,src="$GITHUB_WORKSPACE/assets",dst=/out \
+            rust:1.96-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663 \
+            sh -ceu 'cd /src && CARGO_TARGET_DIR=/tmp/target cargo build --locked --release --package agent && cp /tmp/target/release/agent /out/lg-agent-x86_64-unknown-linux-gnu'
+
+      - name: Verify release asset checksums
+        run: |
+          printf '%s  %s\n' \
+            d824313a58f19e937f5365b9f5db019e05ba5163e00ec6249513b118142a7880 assets/install-agent.sh \
+            9bb238a79847683432e9f20066b37ea1fbd027829ebb792d14fc983b6e9bb8c7 assets/lg-agent-x86_64-unknown-linux-gnu \
+            | sha256sum --check --strict
+
+      - name: Publish GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes assets/install-agent.sh assets/lg-agent-x86_64-unknown-linux-gnu
+
   image:
-    if: ${{ github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

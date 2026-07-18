@@ -215,7 +215,7 @@
 				<fieldset class="grid grid-cols-2 gap-2 sm:grid-cols-4">
 					<legend class="sr-only">Offered methods</legend>
 					{#each OFFERED_METHODS as method (method)}
-						<label class="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+						<label class="flex min-h-11 items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
 							<input
 								type="checkbox"
 								checked={form.offered_methods.includes(method)}

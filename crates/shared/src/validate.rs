@@ -6,8 +6,8 @@
 //! (`shared::exec`, the local node, the agent) treats a `ValidatedTarget` as trusted.
 //!
 //! Exhaustiveness is the safety property: a non-public range that slips through is an
-//! SSRF hole. The rejection set is closed — an address is public only if it matches
-//! none of the special ranges enumerated in [`validate_ip`].
+//! SSRF hole. IPv6 fails closed: an address is public only if it is currently allocated
+//! by IANA and matches none of the special ranges enumerated in [`validate_ip`].
 
 use std::fmt;
 use std::future::Future;
@@ -59,7 +59,8 @@ pub enum RejectReason {
     Documentation,
     /// `198.18.0.0/15` benchmarking (RFC 2544).
     Benchmarking,
-    /// `240.0.0.0/4` reserved for future use.
+    /// Reserved or unallocated address space (`240.0.0.0/4`, or IPv6 outside
+    /// currently allocated global-unicast space after explicit transition cases).
     Reserved,
     /// `255.255.255.255` limited broadcast.
     Broadcast,
@@ -100,7 +101,7 @@ impl RejectReason {
                 "documentation-reserved address (192.0.2/198.51.100/203.0.113, 2001:db8::/32)"
             }
             Self::Benchmarking => "benchmarking-reserved address (198.18.0.0/15)",
-            Self::Reserved => "reserved address (240.0.0.0/4)",
+            Self::Reserved => "reserved or unallocated address space",
             Self::Broadcast => "broadcast address (255.255.255.255)",
             Self::Multicast => "multicast address (224.0.0.0/4, ff00::/8)",
             Self::ProtocolAssignment => "IETF protocol-assignment address (192.0.0.0/24)",
@@ -370,6 +371,54 @@ fn validate_ipv6(ip: Ipv6Addr) -> Result<(), RejectReason> {
     }
     if seg[0] == 0x2002 {
         return Err(RejectReason::SixToFour); // 2002::/16
+    }
+    // IANA IPv6 Global Unicast Address Space registry, updated 2025-10-10.
+    // Explicit transition forms above retain their narrower validation; unlisted
+    // 2000::/3 space is reserved and fails closed until IANA allocates it.
+    const ALLOCATED: &[(u32, u32)] = &[
+        (0x2001_0000, 23),
+        (0x2001_0200, 23),
+        (0x2001_0400, 23),
+        (0x2001_0600, 23),
+        (0x2001_0800, 22),
+        (0x2001_0c00, 23),
+        (0x2001_0e00, 23),
+        (0x2001_1200, 23),
+        (0x2001_1400, 22),
+        (0x2001_1800, 23),
+        (0x2001_1a00, 23),
+        (0x2001_1c00, 22),
+        (0x2001_2000, 19),
+        (0x2001_4000, 23),
+        (0x2001_4200, 23),
+        (0x2001_4400, 23),
+        (0x2001_4600, 23),
+        (0x2001_4800, 23),
+        (0x2001_4a00, 23),
+        (0x2001_4c00, 23),
+        (0x2001_5000, 20),
+        (0x2001_8000, 19),
+        (0x2001_a000, 20),
+        (0x2001_b000, 20),
+        (0x2002_0000, 16),
+        (0x2003_0000, 18),
+        (0x2400_0000, 12),
+        (0x2410_0000, 12),
+        (0x2600_0000, 12),
+        (0x2610_0000, 23),
+        (0x2620_0000, 23),
+        (0x2630_0000, 12),
+        (0x2800_0000, 12),
+        (0x2a00_0000, 12),
+        (0x2a10_0000, 12),
+        (0x2c00_0000, 12),
+    ];
+    let first_32 = u32::from(seg[0]) << 16 | u32::from(seg[1]);
+    if !ALLOCATED
+        .iter()
+        .any(|&(prefix, prefix_len)| first_32 >> (32 - prefix_len) == prefix >> (32 - prefix_len))
+    {
+        return Err(RejectReason::Reserved);
     }
     Ok(())
 }
@@ -719,6 +768,11 @@ mod tests {
             validate_ipv6(v6("2001:db8::1")),
             Err(RejectReason::Documentation)
         );
+        assert_eq!(
+            validate_ipv6(v6("2001:db8:8000::1")),
+            Err(RejectReason::Documentation)
+        );
+        assert_eq!(validate_ipv6(v6("3fff::1")), Err(RejectReason::Reserved));
     }
     #[test]
     fn rejects_teredo_v6() {
@@ -794,6 +848,155 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unallocated_ipv6_space() {
+        for address in [
+            "2000::1",
+            "2001:1000::1",
+            "2001:6000::1",
+            "2001:c000::1",
+            "2004::1",
+            "2d00::1",
+            "2e00::1",
+            "3000::1",
+            "3800::1",
+            "3c00::1",
+            "3e00::1",
+            "3f00::1",
+            "3f80::1",
+            "3fc0::1",
+            "3fe0::1",
+            "3ff0::1",
+            "3ff8::1",
+            "3ffc::1",
+            "3ffe::1",
+            "3fff::1",
+            "4000::1",
+        ] {
+            assert_eq!(
+                validate_ipv6(v6(address)),
+                Err(RejectReason::Reserved),
+                "{address}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_allocated_global_unicast_v6() {
+        for address in [
+            "2001:200::1",
+            "2001:400::1",
+            "2001:600::1",
+            "2001:800::1",
+            "2001:c00::1",
+            "2001:e00::1",
+            "2001:1200::1",
+            "2001:1400::1",
+            "2001:1800::1",
+            "2001:1a00::1",
+            "2001:1c00::1",
+            "2001:2000::1",
+            "2001:4000::1",
+            "2001:4200::1",
+            "2001:4400::1",
+            "2001:4600::1",
+            "2001:4800::1",
+            "2001:4a00::1",
+            "2001:4c00::1",
+            "2001:5000::1",
+            "2001:8000::1",
+            "2001:a000::1",
+            "2001:b000::1",
+            "2003::1",
+            "2400::1",
+            "2410::1",
+            "2600::1",
+            "2610::1",
+            "2620::1",
+            "2630::1",
+            "2800::1",
+            "2a00::1",
+            "2a10::1",
+            "2c00::1",
+        ] {
+            assert_eq!(validate_ipv6(v6(address)), Ok(()), "{address}");
+        }
+    }
+
+    #[test]
+    fn accepts_upper_bounds_of_allocated_global_unicast_v6() {
+        for address in [
+            "2001:3ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:5ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:7ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:bff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:dff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:fff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:13ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:17ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:19ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:1bff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:1fff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:3fff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:41ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:43ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:45ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:47ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:49ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:4bff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:4dff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:5fff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:9fff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:afff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:bfff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2003:3fff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "240f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "241f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "260f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2610:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2620:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "263f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "280f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2a0f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2a1f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2c0f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        ] {
+            assert_eq!(validate_ipv6(v6(address)), Ok(()), "{address}");
+        }
+    }
+
+    #[test]
+    fn rejects_addresses_immediately_outside_allocated_global_unicast_v6_spans() {
+        for address in [
+            "2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:1000::1",
+            "2001:11ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:4e00::1",
+            "2001:4fff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:6000::1",
+            "2001:7fff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:c000::1",
+            "2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2003:4000::1",
+            "23ff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2420::1",
+            "25ff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2610:200::1",
+            "261f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2620:200::1",
+            "262f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2640::1",
+            "27ff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2810::1",
+            "29ff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2a20::1",
+            "2bff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2c10::1",
+        ] {
+            assert!(validate_ipv6(v6(address)).is_err(), "{address}");
+        }
+    }
+
+    #[test]
     fn rejects_6to4_relay_anycast_v4() {
         assert_eq!(
             validate_ipv4(v4("192.88.99.1")),
@@ -809,6 +1012,19 @@ mod tests {
         let t = validate_target("8.8.8.8", &r).await.unwrap();
         assert_eq!(t.ip(), ip("8.8.8.8"));
         assert_eq!(t.arg(), "8.8.8.8");
+
+        let t = validate_target("2606:4700:4700::1111", &r).await.unwrap();
+        assert_eq!(t.ip(), ip("2606:4700:4700::1111"));
+        assert_eq!(t.arg(), "2606:4700:4700::1111");
+    }
+
+    #[tokio::test]
+    async fn rejects_iana_documentation_ipv6_literal() {
+        let r = StubResolver { addrs: vec![] };
+        assert_eq!(
+            validate_target("3fff::1", &r).await,
+            Err(TargetError::Rejected(RejectReason::Reserved))
+        );
     }
 
     #[tokio::test]
@@ -870,6 +1086,28 @@ mod tests {
         assert_eq!(
             validate_target("split.evil.test", &r).await,
             Err(TargetError::Rejected(RejectReason::Private))
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_hostname_resolving_to_iana_documentation_ipv6() {
+        let r = StubResolver {
+            addrs: vec![ip("3fff::1")],
+        };
+        assert_eq!(
+            validate_target("documentation.example", &r).await,
+            Err(TargetError::Rejected(RejectReason::Reserved))
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_hostname_with_public_and_iana_documentation_ipv6() {
+        let r = StubResolver {
+            addrs: vec![ip("2606:4700:4700::1111"), ip("3fff::1")],
+        };
+        assert_eq!(
+            validate_target("split.example", &r).await,
+            Err(TargetError::Rejected(RejectReason::Reserved))
         );
     }
 

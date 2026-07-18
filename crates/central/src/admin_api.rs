@@ -86,10 +86,10 @@ impl PublicSettings {
         if !(1..=100).contains(&settings.site_title.chars().count())
             || !is_optional_https_url(&settings.logo_url, 500)
             || !is_optional_https_url(&settings.terms_url, 300)
-            || !settings
+            || settings
                 .custom_block
                 .as_ref()
-                .is_none_or(|text| text.chars().count() <= 5000)
+                .is_some_and(|text| text.chars().count() > 5000)
         {
             return Err(ApiError::Internal);
         }

@@ -12,25 +12,79 @@ populated public diagnostics page is recorded in `.devrites/work/looking-glass/b
 ## Install the central container
 
 The central app needs one writable volume for the redb database, local test files,
-and the generated first-run setup token. Set the image variable to your published
-GHCR repository and tag before pasting the run command.
+and the generated first-run setup token. It also needs a publicly reachable HTTPS
+name for the admin API and a direct HTTPS listener for the outbound agent tunnel.
+
+Prepare a certificate whose subject/SAN covers the public name you will use below.
+For a quick local smoke test, replace `lg.example.net` with the name in your test
+certificate and generate a test pair with OpenSSL:
 
 ```sh
-LG_IMAGE=ghcr.io/your-github-owner/looking-glass:v0.1.0
+mkdir -p tls
+openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 30 \
+  -subj '/CN=lg.example.net' \
+  -addext 'subjectAltName=DNS:lg.example.net' \
+  -keyout tls/looking-glass.key -out tls/looking-glass.crt
+sudo chown 999:999 tls/looking-glass.key
+chmod 600 tls/looking-glass.key
+```
+
+The published-image path becomes available only after Slice 39 publishes the planned
+immutable `v0.1.1` release:
+
+```sh
+LG_IMAGE=ghcr.io/viktorsbaikers/looking-glass:v0.1.1
 docker pull "$LG_IMAGE"
+```
+
+Before publication, validate the same deployment from a checked-out source tree:
+
+```sh
+docker build -t looking-glass:local .
+LG_IMAGE=looking-glass:local
+```
+
+Choose one image path above, then set `LG_PUBLIC_NAME` to the public DNS name covered
+by your certificate and `LG_TRUSTED_PROXIES` to the real proxy-to-container source IP.
+Its planned local URL/SHA-256 release metadata is not evidence that those assets are
+published or verified. The following is the complete central start command:
+
+```sh
+LG_PUBLIC_NAME=lg.example.net
+# Set this to the source IP the container sees for the TLS-terminating proxy.
+LG_TRUSTED_PROXIES=SET_THE_REAL_PROXY_TO_CONTAINER_SOURCE_IP
+LG_INSTALLER_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.1/install-agent.sh
+LG_INSTALLER_SHA256=d824313a58f19e937f5365b9f5db019e05ba5163e00ec6249513b118142a7880
+LG_AGENT_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.1/lg-agent-x86_64-unknown-linux-gnu
+LG_AGENT_SHA256=9bb238a79847683432e9f20066b37ea1fbd027829ebb792d14fc983b6e9bb8c7
+docker volume create looking-glass-data
+docker run --rm --user 0 -v looking-glass-data:/data --entrypoint chown "$LG_IMAGE" -R 999:999 /data
 docker run -d --name looking-glass \
   -p 8080:8080 \
+  -p 8443:8443 \
   -v looking-glass-data:/data \
+  -v "$PWD/tls/looking-glass.crt:/run/looking-glass/tls.crt:ro" \
+  -v "$PWD/tls/looking-glass.key:/run/looking-glass/tls.key:ro" \
   -e LG_DB_PATH=/data/lookingglass.redb \
   -e LG_FILES_DIR=/data/files \
-  -e LG_TRUSTED_PROXIES=127.0.0.1 \
+  -e LG_TRUSTED_PROXIES="$LG_TRUSTED_PROXIES" \
+  -e LG_CENTRAL_URL="https://$LG_PUBLIC_NAME" \
+  -e LG_TUNNEL_URL="https://$LG_PUBLIC_NAME:8443" \
+  -e LG_CENTRAL_CERT=/run/looking-glass/tls.crt \
+  -e LG_TUNNEL_CERT=/run/looking-glass/tls.crt \
+  -e LG_TUNNEL_KEY=/run/looking-glass/tls.key \
+  -e LG_AGENT_INSTALL_SCRIPT_URL="$LG_INSTALLER_URL" \
+  -e LG_AGENT_INSTALL_SCRIPT_SHA256="$LG_INSTALLER_SHA256" \
+  -e LG_AGENT_URL="$LG_AGENT_URL" \
+  -e LG_AGENT_SHA256="$LG_AGENT_SHA256" \
   "$LG_IMAGE"
 ```
 
-Put the web surface behind a TLS-terminating reverse proxy and configure
-`LG_TRUSTED_PROXIES` with the proxy IPs that are allowed to attest
-`X-Forwarded-Proto: https`. Admin login and agent enrollment are refused unless
-that trusted proxy attests TLS.
+Put the web surface behind a TLS-terminating reverse proxy that forwards to port
+8080. `LG_TRUSTED_PROXIES` must be the real source IP that container receives from
+that proxy, not a client address or a copied example. The proxy must attest
+`X-Forwarded-Proto: https`; admin login and agent enrollment are refused without
+that trusted attestation. The HTTPS enrollment proxy must present the same leaf certificate configured at `LG_CENTRAL_CERT`; agents pin it when they enroll. Publish port 8443 directly so enrolled agents can reach the TLS/WebSocket tunnel at `LG_TUNNEL_URL`.
 
 On first start, the app writes the one-time setup token beside the database:
 
@@ -44,37 +98,23 @@ generating a file, set `LG_SETUP_TOKEN` before the first start.
 
 ## Remote agent install
 
-Before generating an enrollment command, publish the installer script and agent
-binary, then set their HTTPS URLs and SHA-256 pins on the central container. This
-example uses `LG_INSTALLER_URL` and `LG_INSTALLER_SHA256` as shell variables and
-passes them through the central configuration names:
+The complete central command above configures the four planned release-asset values
+required for enrollment-command generation. Central refuses to generate an enrollment
+command if any URL or SHA-256 pin is missing or invalid. Remote installation works
+only after Slice 39 publishes those exact `v0.1.1` assets and verifies the URL/SHA-256
+values; before then, the generated command is not runnable against a remote release.
 
-```sh
-LG_INSTALLER_URL=https://downloads.example/looking-glass/install-agent.sh
-LG_INSTALLER_SHA256=<64-lowercase-hex-digest>
-LG_AGENT_URL=https://downloads.example/looking-glass/lg-agent
-LG_AGENT_SHA256=<64-lowercase-hex-digest>
-
-docker run ... \
-  -e LG_AGENT_INSTALL_SCRIPT_URL="$LG_INSTALLER_URL" \
-  -e LG_AGENT_INSTALL_SCRIPT_SHA256="$LG_INSTALLER_SHA256" \
-  -e LG_AGENT_URL="$LG_AGENT_URL" \
-  -e LG_AGENT_SHA256="$LG_AGENT_SHA256" \
-  "$LG_IMAGE"
-```
-
-Central refuses enrollment-command generation unless all four configured values
-are present and valid. Add these `-e` options to the central install command above;
-the abbreviated `docker run ...` line only highlights the required asset settings.
-
-Create a remote location in the admin panel, then generate an enrollment command.
-The command embeds:
+After the central container is healthy, finish first-run setup with the token, sign
+in as the administrator, create a remote location, and use that location's
+**Generate install command** action. Copy the resulting command to the Linux node;
+do not invent or hand-edit its token. It embeds:
 
 - the HTTPS central API origin (`LG_CENTRAL_URL`), used for `/api/enroll`;
 - the HTTPS tunnel origin (`LG_TUNNEL_URL`), used after enrollment for the outbound agent tunnel;
 - central's pinned identity fingerprint (`LG_CENTRAL_FP`);
 - a single-use enrollment token (`LG_ENROLL_TOKEN`);
-- verified installer and agent release asset URLs with SHA-256 pins.
+- the planned installer and agent release-asset URLs with SHA-256 pins, after Slice 39
+  has published and verified them.
 
 Run the generated command on the Linux node exactly as shown. It self-escalates
 through `sudo` when pasted by a sudo-capable user, scrubs the root environment with
@@ -82,7 +122,8 @@ an explicit allowlist, downloads and verifies the installer from a root-owned te
 directory, then verifies the agent binary before installing it. The installer
 consumes the enrollment token immediately, writes the issued long-lived agent
 credential owner-only under `/var/lib/lookingglass-agent`, and writes a systemd
-unit that does not contain the enrollment token.
+unit that does not contain the enrollment token. The location becomes connected
+after its agent reaches the tunnel; an enrollment token cannot be reused.
 
 The command-control tunnel is outbound from the agent to central. Speedtest downloads
 and iperf endpoints are separate data-plane services: expose them directly from the
@@ -156,13 +197,15 @@ operator-owned setup.
 
 ## Upgrade and rollback
 
-1. Pull the new image tag.
+1. Select an immutable image tag (for example `v0.1.1`), never `latest`, and pull it.
 2. Stop the old central container.
-3. Start the new image with the same mounted data volume and environment.
+3. Start the new image with the same mounted data volume, certificate/key mounts,
+   and environment.
 4. Verify `/health`, admin login, public location list, and one local diagnostic.
 
-Rollback is the same process with the previous image tag and the same volume. Before
-upgrading, keep a copy of the mounted data directory or redb file:
+Rollback is the same process with the previous immutable image tag and the same
+mounted volume. Before upgrading, keep a copy of the mounted data directory or redb
+file:
 
 ```sh
 docker stop looking-glass

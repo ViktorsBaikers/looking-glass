@@ -241,6 +241,61 @@ async fn corrupt_public_settings_fail_closed_without_cache() {
     assert_eq!(json_body(response).await["error"], "internal_error");
 }
 
+#[tokio::test]
+async fn public_settings_enforces_the_custom_block_boundary() {
+    use redb::{Database, TableDefinition};
+
+    const SETTINGS: TableDefinition<&str, &[u8]> = TableDefinition::new("settings");
+    for (custom_block, expected_status) in [
+        (None, StatusCode::OK),
+        (Some("x".repeat(5000)), StatusCode::OK),
+        (Some("x".repeat(5001)), StatusCode::INTERNAL_SERVER_ERROR),
+    ] {
+        let db_path = common::temp_db_path();
+        let database = Database::create(&db_path).expect("create settings database");
+        let write = database.begin_write().expect("begin settings write");
+        {
+            let mut settings = write.open_table(SETTINGS).expect("open settings table");
+            let encoded = serde_json::to_vec(&json!({
+                "site_title": "Looking Glass",
+                "custom_block": custom_block
+            }))
+            .expect("encode valid stored settings");
+            settings
+                .insert("global", encoded.as_slice())
+                .expect("write stored settings");
+        }
+        write.commit().expect("commit stored settings");
+        drop(database);
+
+        let state = common::test_state_at(db_path);
+        complete_setup(&state).await;
+        let response = send(
+            central::build(state),
+            Request::builder()
+                .uri("/api/public/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+
+        assert_status(&response, expected_status);
+        assert_eq!(
+            response
+                .headers()
+                .get("cache-control")
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+        let body = json_body(response).await;
+        if expected_status == StatusCode::OK {
+            assert_eq!(body["custom_block"], json!(custom_block));
+        } else {
+            assert_eq!(body["error"], "internal_error");
+        }
+    }
+}
+
 fn content_type(response: &axum::http::Response<Body>) -> String {
     response
         .headers()

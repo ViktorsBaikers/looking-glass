@@ -150,15 +150,16 @@
 			<div class="space-y-2">
 				<span class="hidden text-sm sm:block sm:invisible" aria-hidden="true">Run</span>
 				{#if controller.active}
-					<Button type="submit" variant="destructive" class="w-full sm:w-auto">Cancel</Button>
+					<div class="flex items-center gap-3">
+						<span class="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+							<LoaderCircle class="size-4 animate-spin" aria-hidden="true" />
+							{controller.status === 'connecting' ? 'Connecting' : 'Running'}
+						</span>
+						<Button type="submit" variant="destructive" class="flex-1 sm:flex-none">Cancel</Button>
+					</div>
 				{:else}
 					<Button type="submit" class="w-full sm:w-auto" disabled={!canRun}>
-						{#if controller.status === 'connecting'}
-							<LoaderCircle class="animate-spin" aria-hidden="true" />
-							Running
-						{:else}
-							Run
-						{/if}
+						Run
 					</Button>
 				{/if}
 			</div>
