@@ -110,7 +110,7 @@ createServer(async (request, response) => {
 			setTimeout(() => {
 				response.write('event: done\ndata: {"status":"completed","success":true,"elapsed_ms":100}\n\n');
 				setTimeout(() => response.end(), 25);
-			}, 200);
+			}, 750);
 		}, 150);
 		return;
 	}

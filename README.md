@@ -29,15 +29,14 @@ sudo chown 999:999 tls/looking-glass.key
 chmod 600 tls/looking-glass.key
 ```
 
-The published-image path becomes available only after Slice 39 publishes the planned
-immutable `v0.1.1` release:
+The published immutable `v0.1.1` image is available:
 
 ```sh
 LG_IMAGE=ghcr.io/viktorsbaikers/looking-glass:v0.1.1
 docker pull "$LG_IMAGE"
 ```
 
-Before publication, validate the same deployment from a checked-out source tree:
+For a local source validation, build the same deployment from a checked-out tree:
 
 ```sh
 docker build -t looking-glass:local .
@@ -46,8 +45,8 @@ LG_IMAGE=looking-glass:local
 
 Choose one image path above, then set `LG_PUBLIC_NAME` to the public DNS name covered
 by your certificate and `LG_TRUSTED_PROXIES` to the real proxy-to-container source IP.
-Its planned local URL/SHA-256 release metadata is not evidence that those assets are
-published or verified. The following is the complete central start command:
+The URL/SHA-256 values below identify the published `v0.1.1` release assets. The
+following is the complete central start command:
 
 ```sh
 LG_PUBLIC_NAME=lg.example.net
@@ -100,9 +99,8 @@ generating a file, set `LG_SETUP_TOKEN` before the first start.
 
 The complete central command above configures the four planned release-asset values
 required for enrollment-command generation. Central refuses to generate an enrollment
-command if any URL or SHA-256 pin is missing or invalid. Remote installation works
-only after Slice 39 publishes those exact `v0.1.1` assets and verifies the URL/SHA-256
-values; before then, the generated command is not runnable against a remote release.
+command if any URL or SHA-256 pin is missing or invalid. Remote installation uses the
+published `v0.1.1` assets and the URL/SHA-256 values shown above.
 
 After the central container is healthy, finish first-run setup with the token, sign
 in as the administrator, create a remote location, and use that location's
@@ -113,8 +111,7 @@ do not invent or hand-edit its token. It embeds:
 - the HTTPS tunnel origin (`LG_TUNNEL_URL`), used after enrollment for the outbound agent tunnel;
 - central's pinned identity fingerprint (`LG_CENTRAL_FP`);
 - a single-use enrollment token (`LG_ENROLL_TOKEN`);
-- the planned installer and agent release-asset URLs with SHA-256 pins, after Slice 39
-  has published and verified them.
+- the published installer and agent release-asset URLs with SHA-256 pins.
 
 Run the generated command on the Linux node exactly as shown. It self-escalates
 through `sudo` when pasted by a sudo-capable user, scrubs the root environment with
@@ -188,6 +185,9 @@ local installer tests only.
 - tags matching `v*`;
 - GitHub Releases published from repository tags matching `v*`;
 - manual `workflow_dispatch` when `push=true`.
+
+Publication is ordered, not atomic: the image job pushes to GHCR before the
+release-assets job verifies and publishes the installer and agent assets.
 
 Manual dispatch with `push=false` runs the same build path without logging in or
 pushing, which is the no-credential dry-run equivalent. Manual dispatch with

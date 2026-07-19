@@ -326,6 +326,10 @@ impl Liveness {
             return;
         }
         self.last_written = now;
+        #[cfg(test)]
+        if let Some(gate) = tests::liveness_write_gate() {
+            gate.enter();
+        }
         if let Err(error) = self.store.touch_agent_last_seen(&self.agent_id, now) {
             // Liveness is best-effort telemetry; a failed write must not tear down a
             // healthy tunnel. Surface it, keep serving.
@@ -826,7 +830,7 @@ mod tests {
         client_handshake, verify_pinned_identity, ChannelTransport, TunnelAccept, TunnelHello,
         PROTOCOL_VERSION,
     };
-    use std::sync::OnceLock;
+    use std::sync::{Condvar, OnceLock};
     use tokio_rustls::TlsConnector;
     use tokio_tungstenite::client_async;
     use tower::ServiceExt;
@@ -835,6 +839,212 @@ mod tests {
     const TEST_CERT: &str = "-----BEGIN CERTIFICATE-----\nMIIDHzCCAgegAwIBAgIUE9j6GO1vmvEiR+U8AWUAQgAta5AwDQYJKoZIhvcNAQEL\nBQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDcxODE2MjgyOFoXDTI2MDcx\nOTE2MjgyOFowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF\nAAOCAQ8AMIIBCgKCAQEAqYMxqyibqUTXEqhZwC9l98xvsCbsy7rIT9smbo1wkEuK\nC7vzt2+35VZoCdetrufP7AeMlipMtboVvCfol/nJDv6sS7fEue1KF224pxaK+fJ2\nepRUKTZtSuGAlBOlZ9hq9ArihghBi27GaC9D6VXhzwFcgw8wXBaUlC612ENMIxZp\nrTJ3I98MSZJw6URqfM9Jy4w3jzLLAyQnhE+QOYoxXCU+w497A+jgkY4X6bL998PT\nGaXmoFyjaVwYZYuEPcClwzANu+NKM6HY+UaYAxYOcWOrwYw3zP4VQogSrkqIngM4\nFpnPcmCBlHt8SitpoDmBUQl0s/MYmI+kZDeIEFGKeQIDAQABo2kwZzAdBgNVHQ4E\nFgQUNO9xNnkuVM5DKp77D9I/MhTykHwwHwYDVR0jBBgwFoAUNO9xNnkuVM5DKp77\nD9I/MhTykHwwDwYDVR0TAQH/BAUwAwEB/zAUBgNVHREEDTALgglsb2NhbGhvc3Qw\nDQYJKoZIhvcNAQELBQADggEBAJUFLLXcqJwlcE2evAICc7vvgk1hBaJf3Di5CsFQ\nLCGZgfffUeGc9u4FlB6hYJh9dBBUhT5vZxC3zcix42XBcw0OUINwET8EaaY9uAEl\nE1qZUSRFLu35VkuaBanRU/zC9mxVFr1z51mEDycWAg3IvG8V4EENNVX4EsCuzjkZ\ngknfR+HootmuWU3RnaKVgNH65uveP+kmR6RISX+s9q+2oBapgSyx6IorMKcM5vGP\nCVUItooWGUMtlEjJKQshBDAViBt+LXUZEKGF01y4mqYXQflk3IR91Y84daWefsoe\nbwbZf+XByMOy3UZliVC08FfAYbsDq/J4V5yPyXWNJ+bedTc=\n-----END CERTIFICATE-----\n";
     const TEST_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCpgzGrKJupRNcS\nqFnAL2X3zG+wJuzLushP2yZujXCQS4oLu/O3b7flVmgJ162u58/sB4yWKky1uhW8\nJ+iX+ckO/qxLt8S57UoXbbinFor58nZ6lFQpNm1K4YCUE6Vn2Gr0CuKGCEGLbsZo\nL0PpVeHPAVyDDzBcFpSULrXYQ0wjFmmtMncj3wxJknDpRGp8z0nLjDePMssDJCeE\nT5A5ijFcJT7Dj3sD6OCRjhfpsv33w9MZpeagXKNpXBhli4Q9wKXDMA2740ozodj5\nRpgDFg5xY6vBjDfM/hVCiBKuSoieAzgWmc9yYIGUe3xKK2mgOYFRCXSz8xiYj6Rk\nN4gQUYp5AgMBAAECggEALdKdNpt/mL5XNV/1AxLNCbNl7cRX9qrDQ3MGbJQnfZot\n8wYX19qHZ6N39FEtTj6z4iYYRu+gVO+8uGRBZ/PJ+he2E7HVqD0Q7kxmwiRB5Vc5\n1+EI7ysbWEalL2IwMGY8Y0QeAAVzUnHbiIZeYVEp/X9strEAbaRc/cGyvodSqZkQ\nIJq2s1uEnKRfsTDnHYnC/XlDKo+9vtKL17b03X8BI9+S4VsKCPL8oSapvFndk0EF\n3K2yX0yRmyzP0pEMOwVQo10BGUtRaQbLUFjPStka/SB9oeZf2yIQk6pm+dS4Mmsm\nrh3pwyPmVaDWmVdMstcLsANqnLnLBlhF5u0+FJEJUQKBgQDol7xfXjdtCkHBbz6t\n45Gt8zrESpYqmALY3oOae4yRUBwJR2Ebp9I61CcxwJDaQdy37FYwHjiIe8d3Mn2O\nxV1K3WevQbgZbxP32qXDuwVYL1xRqsl9nhz+ahSlsOvsQP9ptK4AfGebiglem5PF\n3dLDA71pbj6l0Cck8ABiWFdxAwKBgQC6klPxTfmViNLZIOKIFIRoPWiA6VwsmzdZ\nQBWlzAnId03WKHUv9pNNEkOKgLUZZ+RQyqbVIOCjdRayM62BsbRH/KXpvnu5zwNi\nM4zkpONBAWo1lP9kjuqhbU2HK46OY1MX1D4eXS46PA0E2pvx/aaidJ1U92D8zy5Y\nvSwmjz130wKBgGYKq8nrO8XKyi5i78y6Gh+GpjGXx2nIZvdeJ76OlYzq6GHpvuCz\nL7g/ezKImQQoAP1v4iAaIhM+urPAovUQAW3m1KY+3tXJtaj3c+H7Gs0legsaMmu6\nAl5bi9NlWxu7KFLnwa7U5V+Hn7Sx7JLSTrTf3ylyBGoaeBHseT6sIzChAoGATMAF\naC77jVhL5KZyiihmj7szUlStZmwzyLNkNGBLZfwuOPtLuf9leT8aKc/osBrdAZ9c\nIjD0OEninExGBCRmVXbJie6iVz2h1rP+MdDi68r5NjGlHmjsfJvKWODCNDEH7bWS\nGEucyLgLYwPLQzFla08tqdZaP6W7GyY3E2W5k6ECgYEAsRe55Rf8Lvlb8XwEGLNe\nbNAU4xx8/fElMFb5oDSC0dgp+U3IBViMrjTVAKy19xJCuz/dbgQAJyzX5jl/fx41\n7DZ4iIxAW6tGN6xFA81gyczkJhB9yFAlm8QFxPg7UuI1yALR8GiG0BtucPvmB1Wy\nAJaiJD9UQtSneCNnCnNn/uw=\n-----END PRIVATE KEY-----\n";
     static LOG_CAPTURE: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
+    static LIVENESS_WRITE_GATE: OnceLock<Mutex<Option<Arc<LivenessWriteGate>>>> = OnceLock::new();
+    static LIVENESS_WRITE_GATE_TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+    pub(super) struct LivenessWriteGate {
+        claimed: AtomicBool,
+        state: Mutex<LivenessWriteGateState>,
+        changed: Condvar,
+    }
+
+    #[derive(Default)]
+    struct LivenessWriteGateState {
+        entered: bool,
+        held: bool,
+        departed: bool,
+        health_completed: bool,
+        output_completed: bool,
+        released: bool,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct LivenessWriteGateTransitions {
+        entered: bool,
+        held: bool,
+        departed: bool,
+        health_completed: bool,
+        output_completed: bool,
+        released: bool,
+    }
+
+    impl LivenessWriteGate {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                claimed: AtomicBool::new(false),
+                state: Mutex::new(LivenessWriteGateState::default()),
+                changed: Condvar::new(),
+            })
+        }
+
+        pub(super) fn enter(&self) {
+            if self
+                .claimed
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return;
+            }
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.entered = true;
+            state.held = true;
+            self.changed.notify_all();
+            while !state.released {
+                let (next, timeout) = self
+                    .changed
+                    .wait_timeout(state, Duration::from_secs(2))
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                assert!(
+                    !timeout.timed_out(),
+                    "liveness write gate was not released within the responsiveness budget"
+                );
+                state = next;
+            }
+            state.held = false;
+            state.departed = true;
+            self.changed.notify_all();
+        }
+
+        fn wait_for_entry(&self) {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            while !state.entered {
+                let (next, timeout) = self
+                    .changed
+                    .wait_timeout(state, Duration::from_secs(2))
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                assert!(
+                    !timeout.timed_out(),
+                    "no dispatched heartbeat entered the liveness write gate"
+                );
+                state = next;
+            }
+        }
+
+        fn release(&self) {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert!(state.entered, "release requires a live liveness write gate");
+            assert!(state.held, "release requires a held liveness write gate");
+            assert!(
+                !state.departed,
+                "release requires the liveness write not to have departed"
+            );
+            assert!(
+                state.health_completed,
+                "release requires the health probe to complete"
+            );
+            assert!(
+                state.output_completed,
+                "release requires the output probe to complete"
+            );
+            state.released = true;
+            self.changed.notify_all();
+        }
+
+        fn record_health_completion(&self) {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert!(state.entered, "health completion requires gate entry");
+            assert!(
+                state.held && !state.departed,
+                "health completion requires a held, not-departed liveness write"
+            );
+            state.health_completed = true;
+        }
+
+        fn record_output_completion(&self) {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert!(state.entered, "output completion requires gate entry");
+            assert!(
+                state.held && !state.departed,
+                "output completion requires a held, not-departed liveness write"
+            );
+            state.output_completed = true;
+        }
+
+        fn transitions(&self) -> LivenessWriteGateTransitions {
+            let state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            LivenessWriteGateTransitions {
+                entered: state.entered,
+                held: state.held,
+                departed: state.departed,
+                health_completed: state.health_completed,
+                output_completed: state.output_completed,
+                released: state.released,
+            }
+        }
+    }
+
+    pub(super) fn liveness_write_gate() -> Option<Arc<LivenessWriteGate>> {
+        LIVENESS_WRITE_GATE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .expect("liveness write gate registry")
+            .clone()
+    }
+
+    struct LivenessWriteGateGuard {
+        gate: Arc<LivenessWriteGate>,
+    }
+
+    impl std::ops::Deref for LivenessWriteGateGuard {
+        type Target = LivenessWriteGate;
+
+        fn deref(&self) -> &Self::Target {
+            &self.gate
+        }
+    }
+
+    impl Drop for LivenessWriteGateGuard {
+        fn drop(&mut self) {
+            {
+                let mut state = self
+                    .gate
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                state.released = true;
+                self.gate.changed.notify_all();
+            }
+            let mut slot = LIVENESS_WRITE_GATE
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if slot
+                .as_ref()
+                .is_some_and(|armed| Arc::ptr_eq(armed, &self.gate))
+            {
+                *slot = None;
+            }
+        }
+    }
+
+    fn arm_liveness_write_gate() -> LivenessWriteGateGuard {
+        let gate = LivenessWriteGate::new();
+        let mut slot = LIVENESS_WRITE_GATE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .expect("liveness write gate registry");
+        assert!(slot.is_none(), "only one liveness load gate may be armed");
+        *slot = Some(gate.clone());
+        LivenessWriteGateGuard { gate }
+    }
 
     fn captured_logs() -> Arc<Mutex<Vec<u8>>> {
         LOG_CAPTURE
@@ -1810,8 +2020,7 @@ mod tests {
         heartbeat_failures: usize,
         health_max: Duration,
         output: Duration,
-        health_started_with: usize,
-        output_completed_with: usize,
+        gate: LivenessWriteGateTransitions,
     }
 
     async fn liveness_load(agents: usize) -> LivenessLoadMetrics {
@@ -1833,10 +2042,18 @@ mod tests {
         }
 
         let connected_deadline = Instant::now() + Duration::from_secs(10);
-        while (0..agents).any(|index| !hub.is_connected(&format!("load-agent-{index}"))) {
+        while (0..agents).any(|index| {
+            let agent_id = format!("load-agent-{index}");
+            !hub.is_connected(&agent_id)
+                || store
+                    .get_agent(&agent_id)
+                    .expect("read connected agent")
+                    .and_then(|agent| agent.last_seen)
+                    .is_none()
+        }) {
             assert!(
                 Instant::now() < connected_deadline,
-                "{agents} agent connections exceeded the 10 second heartbeat interval"
+                "{agents} agent connections or initial liveness writes exceeded the 10 second heartbeat interval"
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -1864,7 +2081,6 @@ mod tests {
         let mut writes = Vec::with_capacity(agents);
         let mut heartbeat_failures = 0;
         let dispatched = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let write_completions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let previous_liveness = (1..agents)
             .map(|index| {
                 let agent_id = format!("load-agent-{index}");
@@ -1878,6 +2094,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let writes_started = Instant::now();
+        let gate = arm_liveness_write_gate();
         for (index, mut channel) in channels.into_iter().enumerate() {
             let dispatched = dispatched.clone();
             writes.push(tokio::spawn(async move {
@@ -1899,8 +2116,8 @@ mod tests {
             );
             tokio::task::yield_now().await;
         }
+        gate.wait_for_entry();
         let monitor_store = store.clone();
-        let monitor_completions = write_completions.clone();
         let write_monitor = tokio::spawn(async move {
             let mut latencies = vec![None; previous_liveness.len()];
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -1915,7 +2132,6 @@ mod tests {
                             .is_some_and(|seen| seen > *previous)
                     {
                         latencies[index] = Some(writes_started.elapsed());
-                        monitor_completions.fetch_add(1, Ordering::Release);
                     }
                 }
                 assert!(
@@ -1929,22 +2145,9 @@ mod tests {
                 .map(|latency| latency.expect("completed heartbeat latency"))
                 .collect::<Vec<_>>()
         });
-        while write_completions.load(Ordering::Acquire) == 0 {
-            assert!(
-                Instant::now() < overlap_deadline,
-                "no dispatched heartbeat reached the production liveness write seam"
-            );
-            tokio::task::yield_now().await;
-        }
-        assert!(
-            write_completions.load(Ordering::Acquire) < expected_heartbeats,
-            "all heartbeat writes completed before responsiveness probes could overlap them"
-        );
 
         let health_router = crate::with_routes(axum::Router::new());
-        let health_writes = write_completions.clone();
         let health_probe = tokio::spawn(async move {
-            let started_with = health_writes.load(Ordering::Acquire);
             let mut latencies = Vec::new();
             for _ in 0..3 {
                 let probe_started = Instant::now();
@@ -1961,7 +2164,7 @@ mod tests {
                 assert_eq!(response.status(), axum::http::StatusCode::OK);
                 latencies.push(probe_started.elapsed());
             }
-            (started_with, latencies)
+            latencies
         });
 
         let mut events = hub
@@ -2005,11 +2208,10 @@ mod tests {
         })
         .await
         .expect("output stalled beyond the two second responsiveness budget");
-        let output_completed_with = write_completions.load(Ordering::Acquire);
-        assert!(
-            output_completed_with < expected_heartbeats,
-            "output completed after every heartbeat write; the output probe did not overlap active writes"
-        );
+        gate.record_output_completion();
+        let health_latencies = health_probe.await.expect("health probe task");
+        gate.record_health_completion();
+        gate.release();
 
         for write in writes {
             match write.await {
@@ -2017,12 +2219,22 @@ mod tests {
                 Err(_) => heartbeat_failures += 1,
             }
         }
-        let mut latencies = write_monitor.await.expect("heartbeat write monitor");
-        let (health_started_with, health_latencies) =
-            health_probe.await.expect("health probe task");
+        let gate_transitions = gate.transitions();
+        assert!(gate_transitions.entered, "liveness gate entered");
         assert!(
-            health_started_with < expected_heartbeats,
-            "health started after every heartbeat write; the health probe did not overlap active writes"
+            gate_transitions.health_completed,
+            "health probe completed while the liveness gate was held and not departed"
+        );
+        assert!(
+            gate_transitions.output_completed,
+            "output probe completed while the liveness gate was held and not departed"
+        );
+        assert!(gate_transitions.released, "liveness gate released");
+        let mut latencies = write_monitor.await.expect("heartbeat write monitor");
+        let gate_transitions = gate.transitions();
+        assert!(
+            !gate_transitions.held && gate_transitions.departed,
+            "the liveness write departed only after release and monitor completion"
         );
         let health_max = *health_latencies.iter().max().expect("health samples");
         assert!(
@@ -2052,18 +2264,25 @@ mod tests {
             heartbeat_failures,
             health_max,
             output,
-            health_started_with,
-            output_completed_with,
+            gate: gate_transitions,
         }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn liveness_writes_hold_health_and_output_responsive_at_100_and_500_agents() {
+        let _gate_test_lock = LIVENESS_WRITE_GATE_TEST_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
         for round in 1..=2 {
             for agents in [100, 500] {
                 let metrics = liveness_load(agents).await;
+                assert!(
+                    liveness_write_gate().is_none(),
+                    "liveness load gate registry disarms after every round"
+                );
                 eprintln!(
-                    "liveness-load round={round} agents={} completed_ms={} p50_ms={} p95_ms={} max_ms={} heartbeat_failures={} health_max_ms={} output_ms={} health_started_with={} output_completed_with={}",
+                    "liveness-load round={round} agents={} completed_ms={} p50_ms={} p95_ms={} max_ms={} heartbeat_failures={} health_max_ms={} output_ms={} gate=entry>held>health+output>release>departed entry={} held={} health_completed={} output_completed={} released={} departed={}",
                     metrics.agents,
                     metrics.completed.as_millis(),
                     metrics.p50.as_millis(),
@@ -2072,12 +2291,98 @@ mod tests {
                     metrics.heartbeat_failures,
                     metrics.health_max.as_millis(),
                     metrics.output.as_millis(),
-                    metrics.health_started_with,
-                    metrics.output_completed_with,
+                    metrics.gate.entered,
+                    metrics.gate.held,
+                    metrics.gate.health_completed,
+                    metrics.gate.output_completed,
+                    metrics.gate.released,
+                    metrics.gate.departed,
                 );
                 assert!(metrics.output <= Duration::from_secs(2));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn liveness_write_gate_cleanup_releases_and_disarms_after_entry() {
+        let _gate_test_lock = LIVENESS_WRITE_GATE_TEST_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let gate = arm_liveness_write_gate();
+        let entered_gate = gate.gate.clone();
+        let observed_gate = entered_gate.clone();
+        let blocked_touch = std::thread::spawn(move || entered_gate.enter());
+        gate.wait_for_entry();
+        drop(gate);
+        blocked_touch.join().expect("released liveness gate task");
+        let transitions = observed_gate.transitions();
+        assert!(transitions.released, "cleanup releases an entered gate");
+        assert!(
+            !transitions.held && transitions.departed,
+            "cleanup lets an entered liveness write depart"
+        );
+        assert!(
+            liveness_write_gate().is_none(),
+            "cleanup disarms the liveness write gate registry"
+        );
+    }
+
+    #[tokio::test]
+    async fn liveness_write_gate_cleanup_releases_and_disarms_after_assertion() {
+        let _gate_test_lock = LIVENESS_WRITE_GATE_TEST_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let gate = arm_liveness_write_gate();
+        let entered_gate = gate.gate.clone();
+        let observed_gate = entered_gate.clone();
+        let blocked_touch = std::thread::spawn(move || entered_gate.enter());
+        gate.wait_for_entry();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gate.release())).is_err(),
+            "release rejects a gate whose probes have not completed"
+        );
+        drop(gate);
+        blocked_touch
+            .join()
+            .expect("assertion cleanup releases liveness gate task");
+        let transitions = observed_gate.transitions();
+        assert!(transitions.released, "assertion cleanup releases the gate");
+        assert!(
+            !transitions.held && transitions.departed,
+            "assertion cleanup lets the liveness write depart"
+        );
+        assert!(
+            liveness_write_gate().is_none(),
+            "assertion cleanup disarms the liveness write gate registry"
+        );
+    }
+
+    #[tokio::test]
+    async fn liveness_write_gate_cleanup_disarms_before_late_entry() {
+        let _gate_test_lock = LIVENESS_WRITE_GATE_TEST_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let gate = arm_liveness_write_gate();
+        let late_gate = gate.gate.clone();
+        let observed_gate = late_gate.clone();
+        drop(gate);
+        std::thread::spawn(move || late_gate.enter())
+            .join()
+            .expect("late liveness gate entry returns after cleanup");
+        let transitions = observed_gate.transitions();
+        assert!(transitions.entered, "late entry reaches the test gate");
+        assert!(transitions.released, "cleanup releases a late entry");
+        assert!(
+            !transitions.held && transitions.departed,
+            "late liveness gate entry departs without blocking"
+        );
+        assert!(
+            liveness_write_gate().is_none(),
+            "late-entry cleanup leaves the liveness write gate disarmed"
+        );
     }
 
     #[tokio::test]

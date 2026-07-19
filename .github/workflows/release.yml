@@ -12,9 +12,7 @@ on:
         default: false
         type: boolean
 
-permissions:
-  contents: write
-  packages: write
+permissions: {}
 
 concurrency:
   group: release-image-${{ github.ref }}
@@ -24,12 +22,19 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
-  release-assets:
+  prepare-release-assets:
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-    needs: image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+    env:
+      BASH_ENV: /dev/null
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout tag tree
+        uses: actions/checkout@v4
 
       - name: Build release assets
         run: |
@@ -41,20 +46,67 @@ jobs:
             rust:1.96-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663 \
             sh -ceu 'cd /src && CARGO_TARGET_DIR=/tmp/target cargo build --locked --release --package agent && cp /tmp/target/release/agent /out/lg-agent-x86_64-unknown-linux-gnu'
 
-      - name: Verify release asset checksums
+      - name: Verify release assets against README pins
         run: |
-          printf '%s  %s\n' \
-            d824313a58f19e937f5365b9f5db019e05ba5163e00ec6249513b118142a7880 assets/install-agent.sh \
-            9bb238a79847683432e9f20066b37ea1fbd027829ebb792d14fc983b6e9bb8c7 assets/lg-agent-x86_64-unknown-linux-gnu \
-            | sha256sum --check --strict
+          lg_installer_sha256=$(/usr/bin/grep -E '^LG_INSTALLER_SHA256=[0-9a-f]{64}$' README.md | /usr/bin/cut -d= -f2)
+          lg_agent_sha256=$(/usr/bin/grep -E '^LG_AGENT_SHA256=[0-9a-f]{64}$' README.md | /usr/bin/cut -d= -f2)
+          [ "$(/usr/bin/printf '%s\n' "$lg_installer_sha256" | /usr/bin/wc -l)" -eq 1 ]
+          [ "$(/usr/bin/printf '%s\n' "$lg_agent_sha256" | /usr/bin/wc -l)" -eq 1 ]
+          /usr/bin/printf '%s  %s\n' \
+            "$lg_installer_sha256" assets/install-agent.sh \
+            "$lg_agent_sha256" assets/lg-agent-x86_64-unknown-linux-gnu \
+            | /usr/bin/sha256sum --check --strict
 
-      - name: Publish GitHub Release assets
+      - name: Upload verified release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            assets/install-agent.sh
+            assets/lg-agent-x86_64-unknown-linux-gnu
+          if-no-files-found: error
+          compression-level: 0
+
+  release-assets:
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [image, prepare-release-assets]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+    env:
+      BASH_ENV: /dev/null
+    steps:
+      - name: Checkout tag tree
+        uses: actions/checkout@v4
+
+      - name: Download verified release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: assets
+
+      - name: Verify and publish GitHub Release assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes assets/install-agent.sh assets/lg-agent-x86_64-unknown-linux-gnu
+        run: |
+          lg_installer_sha256=$(/usr/bin/grep -E '^LG_INSTALLER_SHA256=[0-9a-f]{64}$' README.md | /usr/bin/cut -d= -f2)
+          lg_agent_sha256=$(/usr/bin/grep -E '^LG_AGENT_SHA256=[0-9a-f]{64}$' README.md | /usr/bin/cut -d= -f2)
+          [ "$(/usr/bin/printf '%s\n' "$lg_installer_sha256" | /usr/bin/wc -l)" -eq 1 ]
+          [ "$(/usr/bin/printf '%s\n' "$lg_agent_sha256" | /usr/bin/wc -l)" -eq 1 ]
+          /usr/bin/printf '%s  %s\n' \
+            "$lg_installer_sha256" assets/install-agent.sh \
+            "$lg_agent_sha256" assets/lg-agent-x86_64-unknown-linux-gnu \
+            | /usr/bin/sha256sum --check --strict
+          /usr/bin/gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes assets/install-agent.sh assets/lg-agent-x86_64-unknown-linux-gnu
 
   image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
