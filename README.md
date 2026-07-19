@@ -29,10 +29,10 @@ sudo chown 999:999 tls/looking-glass.key
 chmod 600 tls/looking-glass.key
 ```
 
-The published immutable `v0.1.1` image is available:
+The published immutable `v0.1.3` image is available:
 
 ```sh
-LG_IMAGE=ghcr.io/viktorsbaikers/looking-glass:v0.1.1
+LG_IMAGE=ghcr.io/viktorsbaikers/looking-glass:v0.1.3
 docker pull "$LG_IMAGE"
 ```
 
@@ -45,16 +45,16 @@ LG_IMAGE=looking-glass:local
 
 Choose one image path above, then set `LG_PUBLIC_NAME` to the public DNS name covered
 by your certificate and `LG_TRUSTED_PROXIES` to the real proxy-to-container source IP.
-The URL/SHA-256 values below identify the published `v0.1.1` release assets. The
+The URL/SHA-256 values below identify the published `v0.1.3` release assets. The
 following is the complete central start command:
 
 ```sh
 LG_PUBLIC_NAME=lg.example.net
 # Set this to the source IP the container sees for the TLS-terminating proxy.
 LG_TRUSTED_PROXIES=SET_THE_REAL_PROXY_TO_CONTAINER_SOURCE_IP
-LG_INSTALLER_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.1/install-agent.sh
+LG_INSTALLER_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/install-agent.sh
 LG_INSTALLER_SHA256=d824313a58f19e937f5365b9f5db019e05ba5163e00ec6249513b118142a7880
-LG_AGENT_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.1/lg-agent-x86_64-unknown-linux-gnu
+LG_AGENT_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/lg-agent-x86_64-unknown-linux-gnu
 LG_AGENT_SHA256=9bb238a79847683432e9f20066b37ea1fbd027829ebb792d14fc983b6e9bb8c7
 docker volume create looking-glass-data
 docker run --rm --user 0 -v looking-glass-data:/data --entrypoint chown "$LG_IMAGE" -R 999:999 /data
@@ -100,7 +100,7 @@ generating a file, set `LG_SETUP_TOKEN` before the first start.
 The complete central command above configures the four planned release-asset values
 required for enrollment-command generation. Central refuses to generate an enrollment
 command if any URL or SHA-256 pin is missing or invalid. Remote installation uses the
-published `v0.1.1` assets and the URL/SHA-256 values shown above.
+published `v0.1.3` assets and the URL/SHA-256 values shown above.
 
 After the central container is healthy, finish first-run setup with the token, sign
 in as the administrator, create a remote location, and use that location's
@@ -197,7 +197,7 @@ operator-owned setup.
 
 ## Upgrade and rollback
 
-1. Select an immutable image tag (for example `v0.1.1`), never `latest`, and pull it.
+1. Select an immutable image tag (for example `v0.1.3`), never `latest`, and pull it.
 2. Stop the old central container.
 3. Start the new image with the same mounted data volume, certificate/key mounts,
    and environment.

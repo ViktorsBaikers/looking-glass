@@ -61,7 +61,7 @@ need_lead_run() {
 }
 
 published_image_path=$(awk '
-  /^LG_IMAGE=ghcr\.io\/viktorsbaikers\/looking-glass:v0\.1\.1$/ { in_block = 1 }
+  /^LG_IMAGE=ghcr\.io\/viktorsbaikers\/looking-glass:v0\.1\.3$/ { in_block = 1 }
   in_block { print }
   in_block && /^```$/ { exit }
 ' "$readme")
@@ -72,7 +72,7 @@ local_image_path=$(awk '
 ' "$readme")
 
 check_image_paths() {
-  published_line=$(grep -n -m 1 '^LG_IMAGE=ghcr.io/viktorsbaikers/looking-glass:v0.1.1$' "$readme" | cut -d: -f1 || true)
+  published_line=$(grep -n -m 1 '^LG_IMAGE=ghcr.io/viktorsbaikers/looking-glass:v0.1.3$' "$readme" | cut -d: -f1 || true)
   local_line=$(grep -n -m 1 '^LG_IMAGE=looking-glass:local$' "$readme" | cut -d: -f1 || true)
   start_line=$(grep -n -m 1 '^docker run -d --name looking-glass \\$' "$readme" | cut -d: -f1 || true)
   if [ -z "$published_line" ] || [ -z "$local_line" ] || [ -z "$start_line" ] || [ "$local_line" -ge "$start_line" ]; then
@@ -99,6 +99,11 @@ if [ -z "$screenshot" ] || [ ! -f "$screenshot" ]; then
   exit 1
 fi
 
+if grep -Fq 'releases/download/v0.1.1/' "$readme"; then
+  echo "README must not reference stale v0.1.1 release URLs" >&2
+  exit 1
+fi
+
 need "Install the central container" "central container install guide"
 need "Remote agent install" "remote agent install guide"
 need_before 'LG_AGENT_URL' 'Generate install command' 'LG_AGENT_URL'
@@ -110,10 +115,12 @@ need_before 'LG_AGENT_INSTALL_SCRIPT_SHA256' 'Generate install command' 'LG_AGEN
 need "Configuration reference" "configuration reference"
 need "Upgrade and rollback" "upgrade/rollback notes"
 need "Publication is ordered, not atomic" "ordered release publication"
-need "LG_IMAGE=ghcr.io/viktorsbaikers/looking-glass:v0.1.1" "published immutable GHCR image/tag"
-need 'The published immutable `v0.1.1` image is available' "published image status"
-need 'The URL/SHA-256 values below identify the published `v0.1.1` release assets' "published release-asset status"
-need 'published `v0.1.1` assets and the URL/SHA-256 values shown above' "published remote-install status"
+need "LG_IMAGE=ghcr.io/viktorsbaikers/looking-glass:v0.1.3" "published immutable GHCR image/tag"
+need 'The published immutable `v0.1.3` image is available' "published image status"
+need 'The URL/SHA-256 values below identify the published `v0.1.3` release assets' "published release-asset status"
+need 'LG_INSTALLER_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/install-agent.sh' "published installer URL"
+need 'LG_AGENT_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/lg-agent-x86_64-unknown-linux-gnu' "published agent URL"
+need 'published `v0.1.3` assets and the URL/SHA-256 values shown above' "published remote-install status"
 need 'LG_IMAGE=looking-glass:local' "pre-publication local smoke image override"
 need '`LG_TRUSTED_PROXIES` to the real proxy-to-container source IP' "real trusted proxy setup"
 need_lead_run '-p 8080:8080' "central HTTP port publication"
