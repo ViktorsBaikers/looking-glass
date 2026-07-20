@@ -23,6 +23,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Uri};
 use axum::routing::post;
 use axum::{Json, Router};
+use redb::{ReadableDatabase, ReadableTable};
 use rustls::pki_types::ServerName;
 use rustls::pki_types::{pem::PemObject, CertificateDer};
 use serde::Serialize;
@@ -32,7 +33,7 @@ use shared::protocol::{
 
 use crate::auth::{hash_password, random_hex, random_id, AdminSession, ApiError, ClientContext};
 use crate::observability::{correlation_id, log_validation_rejected};
-use crate::store::{unix_now, Agent, EnrollmentToken, NodeKind};
+use crate::store::{unix_now, Agent, EnrollmentToken, NodeKind, StoreError, ENROLLMENT_TOKEN};
 use crate::AppState;
 
 /// Enrollment tokens live for 15 minutes — long enough to paste and run the install
@@ -51,6 +52,29 @@ const AGENT_INSTALL_SCRIPT_URL_ENV: &str = "LG_AGENT_INSTALL_SCRIPT_URL";
 const AGENT_INSTALL_SCRIPT_SHA_ENV: &str = "LG_AGENT_INSTALL_SCRIPT_SHA256";
 const DEFAULT_CENTRAL_URL: &str = "https://localhost";
 const DEFAULT_TUNNEL_URL: &str = "https://localhost:8443";
+
+impl AppState {
+    #[doc(hidden)]
+    pub fn enrollment_token_count(&self, location_id: &str) -> Result<usize, StoreError> {
+        let transaction = self
+            .store
+            .database()
+            .begin_read()
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+        let table = transaction
+            .open_table(ENROLLMENT_TOKEN)
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+        table
+            .iter()
+            .map_err(|error| StoreError::Backend(error.to_string()))?
+            .try_fold(0, |count, entry| {
+                let (_, value) = entry.map_err(|error| StoreError::Backend(error.to_string()))?;
+                let token: EnrollmentToken = serde_json::from_slice(value.value())
+                    .map_err(|error| StoreError::Backend(error.to_string()))?;
+                Ok(count + usize::from(token.location_id == location_id))
+            })
+    }
+}
 
 /// Central's API identity — the certificate an enrolling agent pins.
 /// Its [`Self::fingerprint`] (SHA-256 hex) is what the install command carries. In
@@ -213,10 +237,21 @@ struct EnrollmentTicket {
 async fn create_enrollment(
     State(state): State<AppState>,
     _admin: AdminSession,
+    ctx: ClientContext,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<EnrollmentTicket>, ApiError> {
     let correlation_id = correlation_id(&headers);
+    if !ctx.secure {
+        tracing::warn!(
+            event = "agent.enroll",
+            correlation_id = %correlation_id,
+            outcome = "rejected",
+            reason = "insecure_transport",
+            "enrollment ticket rejected"
+        );
+        return Err(ApiError::CleartextRefused);
+    }
     let location = state.store.get_location(&id)?.ok_or(ApiError::NotFound)?;
     if location.kind != NodeKind::Remote {
         log_validation_rejected(&correlation_id, "agent.enroll", "local_location");

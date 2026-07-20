@@ -8,7 +8,7 @@ mod common;
 
 use axum::body::Body;
 use axum::extract::ConnectInfo;
-use axum::http::{Request, StatusCode};
+use axum::http::{header::COOKIE, Request, StatusCode};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 
@@ -59,6 +59,14 @@ fn authed(method: &str, uri: &str, cookie: &str, body: &str) -> Request<Body> {
         .unwrap()
 }
 
+fn cleartext_authed(method: &str, uri: &str, cookie: &str, body: &str) -> Request<Body> {
+    let mut request = cleartext_request(method, uri, body);
+    request
+        .headers_mut()
+        .insert(COOKIE, cookie.parse().expect("valid session cookie"));
+    request
+}
+
 async fn json_body(response: axum::http::Response<Body>) -> Value {
     serde_json::from_str(&body_string(response).await).expect("json body")
 }
@@ -103,6 +111,76 @@ async fn request_ticket(
         ),
     )
     .await
+}
+
+// FR-071: even an authenticated admin must not receive a ticket unless the
+// configured trusted proxy attests the external request was TLS.
+#[tokio::test]
+async fn cleartext_ticket_issuance_is_refused_before_a_ticket_is_exposed() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let location_id = create_remote_location(&state, &cookie).await;
+
+    let refused = send(
+        central::build(state.clone()),
+        cleartext_authed(
+            "POST",
+            &format!("/api/admin/locations/{location_id}/enroll"),
+            &cookie,
+            "",
+        ),
+    )
+    .await;
+
+    assert_status(&refused, StatusCode::FORBIDDEN);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"], "insecure_transport");
+    assert!(
+        body.get("token").is_none(),
+        "refused response exposes no ticket"
+    );
+    assert!(
+        body.get("install_command").is_none(),
+        "refused response exposes no install command"
+    );
+    assert_eq!(
+        state.enrollment_token_count(&location_id).unwrap(),
+        0,
+        "cleartext refusal must not persist a ticket"
+    );
+
+    let issued = request_ticket(&state, &cookie, &location_id).await;
+    assert_status(&issued, StatusCode::OK);
+    let ticket = json_body(issued).await;
+    assert!(
+        ticket["token"].as_str().is_some(),
+        "secure request mints a ticket"
+    );
+    assert_eq!(
+        state.enrollment_token_count(&location_id).unwrap(),
+        1,
+        "the secure request persists exactly one ticket"
+    );
+}
+
+#[tokio::test]
+async fn cleartext_ticket_refusal_precedes_location_lookup() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+
+    let refused = send(
+        central::build(state),
+        cleartext_authed(
+            "POST",
+            "/api/admin/locations/not-a-location/enroll",
+            &cookie,
+            "",
+        ),
+    )
+    .await;
+
+    assert_status(&refused, StatusCode::FORBIDDEN);
+    assert_eq!(json_body(refused).await["error"], "insecure_transport");
 }
 
 fn enroll_request(token: &str, version: u16, secure: bool) -> Request<Body> {
