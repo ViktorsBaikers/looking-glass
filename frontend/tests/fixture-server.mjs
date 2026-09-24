@@ -207,6 +207,20 @@ const seededAdministrators = () => [
 	}
 ];
 
+// Global settings (branding + execution limits), mutable per bucket.
+const seededSettings = () => ({
+	site_title: 'Looking Glass',
+	logo_url: null,
+	default_theme: 'system',
+	terms_url: null,
+	custom_block: null,
+	exec_max_concurrent: 8,
+	exec_timeout_secs: 30,
+	exec_max_output_kib: 256,
+	exec_rate_max: 20,
+	exec_rate_window_secs: 60
+});
+
 // ----- Per-fixture state ----------------------------------------------------------
 
 const states = new Map();
@@ -216,11 +230,29 @@ function stateFor(fixtureId) {
 	let state = states.get(key);
 	if (!state) {
 		state = key.startsWith('fresh-install-')
-			? { installed: false, administrators: [], authenticatedAs: null }
-			: { installed: true, administrators: seededAdministrators(), authenticatedAs: null };
+			? { installed: false, administrators: [], authenticatedAs: null, settings: seededSettings() }
+			: {
+					installed: true,
+					administrators: seededAdministrators(),
+					authenticatedAs: null,
+					settings: seededSettings()
+				};
 		states.set(key, state);
 	}
 	return state;
+}
+
+// Per-state mutable clone of the seeded catalogue: admin location CRUD (list
+// create/update/delete/revoke + sub-resources) mutates only the requesting
+// test's bucket. Sub-resource arrays stay nested inside each location object.
+function locationsFor(state) {
+	if (!state.locations) {
+		state.locations = structuredClone(locations);
+		for (const location of state.locations) {
+			location.last_seen = location.id === 'vie' ? now() : null;
+		}
+	}
+	return state.locations;
 }
 
 // ----- Helpers ----------------------------------------------------------------------
@@ -294,6 +326,92 @@ function serveBytes(request, response) {
 	});
 	response.end(FILE_BYTES);
 }
+// ----- Sub-resource CRUD specs (issue #7): test IPs, iperf endpoints, files -----
+// Mirrors central's admin_api validation closely enough for e2e: required fields
+// present and typed, else 422 invalid_input.
+const SUB_RESOURCES = {
+	'test-ips': {
+		key: 'test_ips',
+		prefix: 'ip',
+		validate: (body) =>
+			(body.family === 'v4' || body.family === 'v6') &&
+			typeof body.address === 'string' &&
+			body.address.length > 0,
+		apply: (body) => ({
+			family: body.family,
+			address: body.address,
+			label: typeof body.label === 'string' && body.label.length > 0 ? body.label : null
+		})
+	},
+	iperf: {
+		key: 'iperf',
+		prefix: 'iperf',
+		validate: (body) =>
+			typeof body.label === 'string' &&
+			body.label.length > 0 &&
+			typeof body.host === 'string' &&
+			body.host.length > 0 &&
+			typeof body.port === 'number',
+		apply: (body) => ({
+			label: body.label,
+			host: body.host,
+			port: body.port,
+			cmd_incoming: typeof body.cmd_incoming === 'string' ? body.cmd_incoming : '',
+			cmd_outgoing: typeof body.cmd_outgoing === 'string' ? body.cmd_outgoing : ''
+		})
+	},
+	files: {
+		key: 'files',
+		prefix: 'file',
+		validate: (body) =>
+			typeof body.label === 'string' &&
+			body.label.length > 0 &&
+			typeof body.declared_size === 'string' &&
+			body.declared_size.length > 0 &&
+			typeof body.source_ref === 'string' &&
+			body.source_ref.length > 0,
+		apply: (body) => ({
+			label: body.label,
+			declared_size: body.declared_size,
+			source_ref: body.source_ref
+		})
+	}
+};
+
+/// Realistic per-method run output for the diagnostics e2e (the design's sample
+/// ping run, a 3-hop mtr report, a 3-hop traceroute, a BGP table entry).
+const RUN_OUTPUT = {
+	ping: (target) => [
+		`$ ping -c 4 ${target}`,
+		`PING ${target} (1.1.1.1) 56(84) bytes of data.`,
+		'64 bytes from 1.1.1.1: icmp_seq=1 ttl=56 time=12.3 ms',
+		'64 bytes from 1.1.1.1: icmp_seq=2 ttl=56 time=12.1 ms',
+		'64 bytes from 1.1.1.1: icmp_seq=3 ttl=55 time=11.9 ms',
+		'64 bytes from 1.1.1.1: icmp_seq=4 ttl=56 time=12.0 ms',
+		`--- ${target} ping statistics ---`,
+		'4 packets transmitted, 4 received, 0% packet loss, time 3004ms',
+		'rtt min/avg/max/mdev = 11.9/12.1/12.3/0.2 ms'
+	],
+	mtr: (target) => [
+		`HOST: mtr --report ${target}    Loss%   Snt   Last   Avg  Best  Wrst StDev`,
+		'  1.|-- 192.0.2.1             0.0%    10    1.1   1.2   1.0   1.5   0.2',
+		'  2.|-- 198.51.100.1          0.0%    10    4.3   4.5   4.1   5.0   0.3',
+		'  3.|-- 1.1.1.1               0.0%    10   12.0  12.2  11.8  12.9   0.4'
+	],
+	traceroute: (target) => [
+		`traceroute to ${target} (1.1.1.1), 30 hops max, 60 byte packets`,
+		' 1  192.0.2.1 (192.0.2.1)  1.045 ms  1.012 ms  0.998 ms',
+		' 2  198.51.100.1 (198.51.100.1)  4.221 ms  4.190 ms  4.177 ms',
+		' 3  1.1.1.1 (1.1.1.1)  12.043 ms  12.001 ms  11.987 ms'
+	],
+	bgp: (target) => [
+		`BGP routing table entry for ${target}`,
+		'Paths: (1 available, best #1)',
+		'  64500 64511 13335',
+		'    192.0.2.1 from 192.0.2.1 (192.0.2.1)',
+		'      Origin IGP, localpref 100, valid, external, best'
+	]
+};
 
 // ----- Server --------------------------------------------------------------------------
 
@@ -301,6 +419,7 @@ createServer(async (request, response) => {
 	const path = new URL(request.url, 'http://127.0.0.1').pathname;
 	const method = request.method;
 	const state = stateFor(request.headers['x-looking-glass-fixture']);
+	const locations = locationsFor(state);
 
 	// Fail closed before setup, exactly like central's require_setup gate.
 	if (
@@ -320,16 +439,22 @@ createServer(async (request, response) => {
 
 	// ----- public catalogue -----
 	if (path === '/api/locations') {
-		return json(response, locations.filter((location) => location.status === 'online'));
+		const online = locations.filter((location) => location.status === 'online');
+		// `no-files-` buckets blank the Test files so the disabled Speed test e2e
+		// has seeded data to work against.
+		const fixtureId = request.headers['x-looking-glass-fixture'];
+		const noFiles = typeof fixtureId === 'string' && fixtureId.startsWith('no-files-');
+		return json(response, noFiles ? online.map((location) => ({ ...location, files: [] })) : online);
 	}
 	if (path === '/api/visitor') return json(response, { ip: '198.51.100.7' });
 	if (path === '/api/public/settings') {
+		const settings = state.settings;
 		return json(response, {
-			site_title: 'Looking Glass',
-			logo_url: null,
-			default_theme: 'system',
-			terms_url: null,
-			custom_block: null
+			site_title: settings.site_title,
+			logo_url: settings.logo_url,
+			default_theme: settings.default_theme,
+			terms_url: settings.terms_url,
+			custom_block: settings.custom_block
 		});
 	}
 
@@ -467,6 +592,21 @@ createServer(async (request, response) => {
 		return response.end();
 	}
 
+	// ----- admin: global settings -----
+	if (path === '/api/admin/settings') {
+		const me = signedIn();
+		if (!me) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
+		if (method === 'GET') return json(response, state.settings);
+		if (method === 'PUT') {
+			const next = parseSettings(await readJson(request));
+			if (!next) {
+				return json(response, { error: 'invalid_input', message: 'Settings payload is invalid.' }, 422);
+			}
+			state.settings = next;
+			return json(response, next);
+		}
+	}
+
 	// ----- admin: administrators -----
 	if (path === '/api/admin/administrators') {
 		const me = signedIn();
@@ -527,38 +667,186 @@ createServer(async (request, response) => {
 		return response.end();
 	}
 
-	// ----- admin: locations (read-only mirror of the seeded catalogue) -----
+	// ----- admin: locations (per-state mutable mirror of the seeded catalogue) -----
 	if (path === '/api/admin/locations') {
 		if (!signedIn()) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
-		return json(
-			response,
-			locations.map((location) => ({
-				...location,
-				last_seen: location.id === 'vie' ? now() : null
-			}))
-		);
+		if (method === 'GET') return json(response, locations);
+		if (method === 'POST') {
+			const body = await readJson(request);
+			if (typeof body.name !== 'string' || body.name.length === 0) {
+				return json(response, { error: 'invalid_input', message: 'name: invalid length: expected 1 <= length' }, 422);
+			}
+			const location = {
+				id: `loc-${randomUUID()}`,
+				name: body.name,
+				geo_label: typeof body.geo_label === 'string' ? body.geo_label : '',
+				map_query: body.map_query ?? null,
+				facility: body.facility ?? null,
+				facility_url: body.facility_url ?? null,
+				kind: body.kind === 'remote' ? 'remote' : 'local',
+				data_plane_origin: body.data_plane_origin ?? null,
+				asn: body.asn ?? null,
+				offered_methods: Array.isArray(body.offered_methods) ? body.offered_methods : [],
+				status: body.kind === 'remote' ? 'offline' : 'online',
+				created_at: now(),
+				last_seen: null,
+				test_ips: [],
+				iperf: [],
+				files: []
+			};
+			locations.push(location);
+			return json(response, location, 201);
+		}
 	}
 	const adminLocation = /^\/api\/admin\/locations\/([^/]+)$/.exec(path);
-	if (method === 'GET' && adminLocation) {
+	if (adminLocation) {
 		if (!signedIn()) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
 		const location = locations.find((candidate) => candidate.id === adminLocation[1]);
 		if (!location) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
-		return json(response, { ...location, last_seen: location.id === 'vie' ? now() : null });
+		if (method === 'GET') return json(response, location);
+		if (method === 'DELETE') {
+			locations.splice(locations.indexOf(location), 1);
+			response.writeHead(204);
+			return response.end();
+		}
+	}
+	const revokeAgent = /^\/api\/admin\/locations\/([^/]+)\/agent\/revoke$/.exec(path);
+	if (method === 'POST' && revokeAgent) {
+		if (!signedIn()) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
+		const location = locations.find((candidate) => candidate.id === revokeAgent[1]);
+		if (!location) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
+		location.status = 'offline';
+		location.last_seen = null;
+		return json(response, location);
+	}
+	// ----- admin: location update + enrollment (issue #7) -----
+	if (method === 'PUT' && adminLocation) {
+		const location = locations.find((candidate) => candidate.id === adminLocation[1]);
+		if (!location) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
+		const body = await readJson(request);
+		if (typeof body.name !== 'string' || body.name.length === 0 || typeof body.geo_label !== 'string') {
+			return json(response, { error: 'invalid_input', message: 'name: invalid length: expected 1 <= length' }, 422);
+		}
+		// Mirrors central's clean_asn: any non-whole or out-of-range value is the
+		// coded 400 invalid_asn, judged here rather than by a body extractor.
+		if (body.asn !== null && body.asn !== undefined) {
+			if (!Number.isInteger(body.asn) || body.asn < 1 || body.asn > 4294967295) {
+				return json(response, { error: 'invalid_asn', message: 'ASN must be a whole number between 1 and 4294967295.' }, 400);
+			}
+		}
+		location.name = body.name;
+		location.geo_label = body.geo_label;
+		location.map_query = body.map_query ?? null;
+		location.facility = body.facility ?? null;
+		location.facility_url = body.facility_url ?? null;
+		location.kind = body.kind === 'remote' ? 'remote' : 'local';
+		location.data_plane_origin = body.data_plane_origin ?? null;
+		location.asn = body.asn ?? null;
+		if (Array.isArray(body.offered_methods)) location.offered_methods = body.offered_methods;
+		if (location.kind === 'local') location.status = 'online';
+		return json(response, location);
+	}
+	const enrollLocation = /^\/api\/admin\/locations\/([^/]+)\/enroll$/.exec(path);
+	if (method === 'POST' && enrollLocation) {
+		if (!signedIn()) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
+		const target = locations.find((candidate) => candidate.id === enrollLocation[1]);
+		if (!target) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
+		if (target.kind !== 'remote') {
+			return json(response, { error: 'invalid_input', message: 'Enrollment applies only to remote locations.' }, 422);
+		}
+		const token = randomUUID();
+		return json(response, {
+			install_command: `curl -fsSL ${APP_ORIGIN}/install-agent.sh | sh -s -- --token ${token}`,
+			token,
+			fingerprint: 'sha256:fixture-central-fingerprint',
+			expires_at: now() + 900
+		}, 201);
+	}
+
+	// ----- admin: sub-resource CRUD (issue #7) -----
+	for (const [slug, spec] of Object.entries(SUB_RESOURCES)) {
+		const created = new RegExp(`^/api/admin/locations/([^/]+)/${slug}$`).exec(path);
+		if (method === 'POST' && created) {
+			if (!signedIn()) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
+			const owner = locations.find((candidate) => candidate.id === created[1]);
+			if (!owner) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
+			const body = await readJson(request);
+			if (!spec.validate(body)) {
+				return json(response, { error: 'invalid_input', message: 'A required field is missing or invalid.' }, 422);
+			}
+			const record = { id: `${spec.prefix}-${randomUUID()}`, location_id: owner.id, ...spec.apply(body) };
+			owner[spec.key].push(record);
+			return json(response, record, 201);
+		}
+		const addressed = new RegExp(`^/api/admin/${slug}/([^/]+)$`).exec(path);
+		if (addressed) {
+			if (!signedIn()) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
+			let owner = null;
+			let record = null;
+			for (const candidate of locations) {
+				record = candidate[spec.key].find((entry) => entry.id === addressed[1]) ?? null;
+				if (record) {
+					owner = candidate;
+					break;
+				}
+			}
+			if (!record) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
+			if (method === 'PUT') {
+				const body = await readJson(request);
+				if (!spec.validate(body)) {
+					return json(response, { error: 'invalid_input', message: 'A required field is missing or invalid.' }, 422);
+				}
+				Object.assign(record, spec.apply(body));
+				return json(response, record);
+			}
+			if (method === 'DELETE') {
+				owner[spec.key].splice(owner[spec.key].indexOf(record), 1);
+				response.writeHead(204);
+				return response.end();
+			}
+		}
 	}
 
 	// ----- run stream -----
 	if (path === '/api/run/stream') {
+		const query = new URL(request.url, 'http://127.0.0.1').searchParams;
+		const streamMethod = query.get('method') ?? 'ping';
+		const streamTarget = query.get('target') ?? '1.1.1.1';
 		response.writeHead(200, {
 			'content-type': 'text/event-stream',
 			'cache-control': 'no-cache',
 			connection: 'keep-alive'
 		});
-		setTimeout(() => {
-			response.write('event: line\ndata: 64 bytes from 1.1.1.1: icmp_seq=1\n\n');
+		const send = (event, data) => response.write(`event: ${event}\ndata: ${data}\n\n`);
+
+		// `slow.test` never finishes: keeps emitting until the client disconnects,
+		// so the cancel e2e can stop a live run. `fail.test` refuses the run.
+		if (streamTarget === 'slow.test') {
+			let seq = 0;
+			const timer = setInterval(
+				() => send('line', `64 bytes from ${streamTarget}: icmp_seq=${++seq} ttl=56 time=12.0 ms`),
+				300
+			);
+			response.on('close', () => clearInterval(timer));
+			return;
+		}
+		if (streamTarget === 'fail.test') {
 			setTimeout(() => {
-				response.write('event: done\ndata: {"status":"completed","success":true,"elapsed_ms":100}\n\n');
+				send('run-error', 'The node refused the run.');
+				send('done', JSON.stringify({ status: 'failed', success: false, elapsed_ms: 10 }));
 				setTimeout(() => response.end(), 25);
-			}, 750);
+			}, 150);
+			return;
+		}
+
+		const family = streamMethod.replace(/6$/, '');
+		const lines = RUN_OUTPUT[family]
+			? RUN_OUTPUT[family](streamTarget)
+			: [`$ ${streamMethod} ${streamTarget}`];
+		setTimeout(() => {
+			for (const line of lines) send('line', line);
+			send('done', JSON.stringify({ status: 'completed', success: true, elapsed_ms: 100 }));
+			setTimeout(() => response.end(), 25);
 		}, 150);
 		return;
 	}
@@ -575,4 +863,38 @@ async function readJsonBytes(request) {
 	const chunks = [];
 	for await (const chunk of request) chunks.push(chunk);
 	return Buffer.concat(chunks).length;
+}
+
+/// Mirrors central's GlobalSettings validation closely enough for e2e: rejects
+/// payloads the real server would 422.
+function parseSettings(body) {
+	if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+	const positiveInt = (value) => Number.isInteger(value) && value >= 1;
+	const optionalString = (value, max) =>
+		value === null || (typeof value === 'string' && value.length <= max);
+	if (typeof body.site_title !== 'string' || body.site_title.length < 1 || body.site_title.length > 100) return null;
+	if (body.default_theme !== 'system' && body.default_theme !== 'light' && body.default_theme !== 'dark') return null;
+	if (!optionalString(body.logo_url, 500) || !optionalString(body.terms_url, 300)) return null;
+	if (!optionalString(body.custom_block, 5000)) return null;
+	if (
+		!positiveInt(body.exec_max_concurrent) ||
+		!positiveInt(body.exec_timeout_secs) ||
+		!positiveInt(body.exec_max_output_kib) ||
+		!positiveInt(body.exec_rate_max) ||
+		!positiveInt(body.exec_rate_window_secs)
+	) {
+		return null;
+	}
+	return {
+		site_title: body.site_title,
+		logo_url: body.logo_url,
+		default_theme: body.default_theme,
+		terms_url: body.terms_url,
+		custom_block: body.custom_block,
+		exec_max_concurrent: body.exec_max_concurrent,
+		exec_timeout_secs: body.exec_timeout_secs,
+		exec_max_output_kib: body.exec_max_output_kib,
+		exec_rate_max: body.exec_rate_max,
+		exec_rate_window_secs: body.exec_rate_window_secs
+	};
 }

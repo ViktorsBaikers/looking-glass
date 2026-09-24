@@ -1,74 +1,50 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import SpeedtestBlock from './SpeedtestBlock.svelte';
-import type { LocationDetail } from '../admin/types.js';
+import { describe, expect, it } from 'vitest';
+import { declaredSizeBytes, largestTestFile, mbps } from './speedtest.js';
+import type { TestFile } from '../admin/types.js';
 
-const location: LocationDetail = {
-	id: 'fra',
-	name: 'Frankfurt',
-	geo_label: 'Frankfurt, DE',
-	map_query: null,
-	facility: null,
-	facility_url: null,
-	kind: 'local',
-	data_plane_origin: null,
-	offered_methods: ['ping'],
-	status: 'online',
-	created_at: 0,
-	test_ips: [],
-	iperf: [
-		{
-			id: 'iperf-1',
-			location_id: 'fra',
-			label: 'Primary',
-			host: 'fra.example.test',
-			port: 5201,
-			cmd_incoming: 'iperf3 -c fra.example.test -p 5201',
-			cmd_outgoing: 'iperf3 -c fra.example.test -p 5201 -R'
-		}
-	],
-	files: [
-		{
-			id: 'file-1',
-			location_id: 'fra',
-			label: '100 MB',
-			declared_size: '100 MB',
-			source_ref: '100mb.bin'
-		}
-	]
-};
+function file(id: string, declared: string): TestFile {
+	return { id, location_id: 'fra', label: id, declared_size: declared, source_ref: `${id}.bin` };
+}
 
-describe('public speedtest information', () => {
-	let writeText: ReturnType<typeof vi.fn>;
-
-	beforeEach(() => {
-		writeText = vi.fn().mockResolvedValue(undefined);
-		Object.defineProperty(navigator, 'clipboard', {
-			configurable: true,
-			value: { writeText }
-		});
-		vi.stubGlobal('fetch', vi.fn());
-		vi.stubGlobal('EventSource', vi.fn());
+describe('declaredSizeBytes', () => {
+	it('parses decimal units', () => {
+		expect(declaredSizeBytes('100 MB')).toBe(100_000_000);
+		expect(declaredSizeBytes('10 MB')).toBe(10_000_000);
+		expect(declaredSizeBytes('1.5 GB')).toBe(1_500_000_000);
+		expect(declaredSizeBytes('512 KB')).toBe(512_000);
 	});
 
-	afterEach(() => {
-		cleanup();
-		vi.unstubAllGlobals();
+	it('parses binary units', () => {
+		expect(declaredSizeBytes('1 GiB')).toBe(1024 ** 3);
+		expect(declaredSizeBytes('2 MiB')).toBe(2 * 1024 ** 2);
 	});
 
-	it('links to the real download route and keeps iperf commands display-only', async () => {
-		render(SpeedtestBlock, { location });
+	it('returns 0 for unparseable declarations', () => {
+		expect(declaredSizeBytes('')).toBe(0);
+		expect(declaredSizeBytes('huge')).toBe(0);
+		expect(declaredSizeBytes('10 parsecs')).toBe(0);
+	});
+});
 
-		const download = screen.getByRole('link', { name: /100 MB/ });
-		expect(download.getAttribute('href')).toBe('/api/locations/fra/files/file-1/download');
-		expect(screen.getByText('iperf3 -c fra.example.test -p 5201')).toBeTruthy();
-		expect(screen.getByText('iperf3 -c fra.example.test -p 5201 -R')).toBeTruthy();
+describe('largestTestFile', () => {
+	it('picks the largest declared size regardless of order', () => {
+		const files = [file('small', '10 MB'), file('big', '100 MB'), file('mid', '50 MB')];
+		expect(largestTestFile(files)?.id).toBe('big');
+	});
 
-		await fireEvent.click(screen.getByRole('button', { name: 'Copy Primary Incoming command' }));
-		await waitFor(() =>
-			expect(writeText).toHaveBeenCalledWith('iperf3 -c fra.example.test -p 5201')
-		);
-		expect(fetch).not.toHaveBeenCalled();
-		expect(EventSource).not.toHaveBeenCalled();
+	it('returns null when there are no files', () => {
+		expect(largestTestFile([])).toBeNull();
+	});
+});
+
+describe('mbps', () => {
+	it('converts bytes over elapsed time to whole megabits per second', () => {
+		expect(mbps(12_500_000, 1000)).toBe(100); // 100 Mbit in 1 s
+		expect(mbps(1_250_000, 2000)).toBe(5); // 10 Mbit in 2 s
+	});
+
+	it('guards against zero or negative inputs', () => {
+		expect(mbps(1000, 0)).toBe(0);
+		expect(mbps(0, 1000)).toBe(0);
 	});
 });

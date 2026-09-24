@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { cx } from 'styled-system/css';
+	import { mtrTable, mtrTh, mtrThNum, mtrTd, mtrTdHop, mtrTdHost } from '$lib/public/styles.js';
 	import type { MtrRow } from './mtr.js';
 
 	let { rows }: { rows: MtrRow[] } = $props();
@@ -14,23 +16,23 @@
 	] as const;
 </script>
 
-<table class="w-full min-w-[36rem] border-collapse text-left text-xs">
+<table class={mtrTable}>
 	<thead>
-		<tr class="text-muted-foreground">
-			<th class="py-1 pr-3 font-medium">#</th>
-			<th class="py-1 pr-3 font-medium">Host</th>
+		<tr>
+			<th class={mtrTh} scope="col">#</th>
+			<th class={mtrTh} scope="col">Host</th>
 			{#each columns as column (column.key)}
-				<th class="py-1 pr-3 text-right font-medium tabular-nums">{column.label}</th>
+				<th class={cx(mtrTh, mtrThNum)} scope="col">{column.label}</th>
 			{/each}
 		</tr>
 	</thead>
 	<tbody>
 		{#each rows as row (row.hop)}
-			<tr class="border-t border-border/60">
-				<td class="py-1 pr-3 text-muted-foreground tabular-nums">{row.hop}</td>
-				<td class="py-1 pr-3">{row.host}</td>
+			<tr>
+				<td class={cx(mtrTd, mtrTdHop)}>{row.hop}</td>
+				<td class={cx(mtrTd, mtrTdHost)}>{row.host}</td>
 				{#each columns as column (column.key)}
-					<td class="py-1 pr-3 text-right tabular-nums">{row[column.key]}</td>
+					<td class={mtrTd}>{row[column.key]}</td>
 				{/each}
 			</tr>
 		{/each}
