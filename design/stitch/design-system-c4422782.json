@@ -1,0 +1,144 @@
+{
+  "displayName": "Looking Glass Design System",
+  "styleGuidelines": "## Brand & Style\n\nThis design system is engineered for the \"Developer Pro\"\u2014an audience that values precision, speed, and information density over decorative flourish. The brand personality is authoritative, reliable, and technically sophisticated. \n\nThe visual style is **Corporate Modern** with a high-density utility focus. It utilizes a deep, layered dark theme to reduce eye strain during long administration sessions, accented by a high-visibility emerald green that signifies health, connectivity, and \"go\" states. The aesthetic avoids unnecessary depth, opting for flat surfaces with subtle tonal separation to maintain a clean, organized hierarchy of complex data sets.\n\nKey principles:\n- **Precision:** Every pixel serves a purpose; alignments are rigorous.\n- **Clarity:** Technical information is prioritized through clear typographic contrast.\n- **Responsiveness:** Interactive states are immediate and unmistakable.\n\n## Layout & Spacing\n\nThe design system utilizes a **12-column fluid grid** for main content areas, allowing the dashboard to scale from laptop screens to ultrawide monitors. \n\n- **Rhythm:** A strict 4px baseline grid ensures vertical consistency. All margins and paddings must be multiples of 4px.\n- **Density:** We employ a \"Compact-First\" philosophy. Elements are tightly grouped by logic, with `md` (16px) spacing between related items and `xl` (32px) between distinct modules.\n- **Breakpoints:**\n    - Mobile (<768px): Single column, fixed side margins of 16px.\n    - Tablet (768px - 1024px): 8-column grid, sidebar collapses to icon-only.\n    - Desktop (>1024px): 12-column grid with a fixed 240px navigation sidebar.\n\n## Elevation & Depth\n\nTo maintain a \"Developer Pro\" aesthetic, elevation is communicated through **Tonal Layering** and **Low-Contrast Outlines** rather than heavy shadows.\n\n- **Level 0 (Background):** #020617. The canvas.\n- **Level 1 (Default Surface):** #0F172A. Used for the primary container/card. Features a 1px solid border of #334155.\n- **Level 2 (Raised/Active):** #1E293B. Used for hover states on list items or nested sections within a card.\n- **Level 3 (Popovers/Modals):** #1E293B with a subtle ambient shadow (Black, 25% opacity, 12px blur, 0 offset).\n\nBorder-glow is used exclusively for primary active states: an Emerald #10B981 outer glow (2px) indicates the currently focused diagnostic or selected location.\n\n## Components\n\n### Buttons\n- **Primary:** Background Emerald #10B981, Text #020617 (High contrast). Weight: 600.\n- **Secondary:** Border #334155, Text #F8FAFC. Background: Transparent.\n- **Ghost:** No background or border. Text #94A3B8. Emerald on hover.\n\n### Input Fields\n- **Default:** Background #0F172A, Border #334155, Text #F8FAFC.\n- **Focus:** Border #10B981, 2px Emerald glow.\n- **Technical Inputs:** Use Mono font for IP/Domain entry fields.\n\n### Cards & Modules\n- Cards must have a header area with a `surface_alt` background to clearly separate title and metadata from the action area.\n- Borders are always 1px solid.\n\n### Status Indicators\n- **Online:** #10B981 dot + soft glow.\n- **Offline/Critical:** #EF4444.\n- **In-Progress:** Spin animation using a 270-degree arc in Primary Emerald.\n\n### Diagnostic Console\n- Background: #000000.\n- Text: #F8FAFC (Primary), #10B981 (Success messages), #38BDF8 (Metadata/Time).\n- Padding: 16px constant.",
+  "theme": {
+    "colorMode": "DARK",
+    "font": "INTER",
+    "roundness": "ROUND_FOUR",
+    "customColor": "#10b981",
+    "headlineFont": "INTER",
+    "bodyFont": "INTER",
+    "labelFont": "JETBRAINS_MONO",
+    "namedColors": {
+      "on_tertiary": "#003825",
+      "on_tertiary_fixed": "#002114",
+      "tertiary": "#45dfa4",
+      "surface_container_low": "#131b2e",
+      "on_surface": "#dae2fd",
+      "surface_container_lowest": "#060e20",
+      "surface_tint": "#4edea3",
+      "on_secondary": "#003829",
+      "tertiary_fixed": "#68fcbf",
+      "outline_variant": "#3c4a42",
+      "primary_fixed": "#6ffbbe",
+      "error_container": "#93000a",
+      "background": "#0b1326",
+      "secondary_fixed_dim": "#95d3ba",
+      "tertiary_fixed_dim": "#45dfa4",
+      "on_surface_variant": "#bbcabf",
+      "on_error_container": "#ffdad6",
+      "on_secondary_fixed": "#002117",
+      "primary_container": "#10b981",
+      "on_secondary_fixed_variant": "#0b513d",
+      "surface_variant": "#2d3449",
+      "secondary": "#95d3ba",
+      "inverse_surface": "#dae2fd",
+      "on_primary_container": "#00422b",
+      "surface_container_highest": "#2d3449",
+      "on_primary_fixed": "#002113",
+      "secondary_container": "#0b513d",
+      "surface": "#0b1326",
+      "on_background": "#dae2fd",
+      "on_tertiary_container": "#00422c",
+      "secondary_fixed": "#b0f0d6",
+      "tertiary_container": "#00b982",
+      "on_error": "#690005",
+      "on_secondary_container": "#83c2a9",
+      "inverse_primary": "#006c49",
+      "surface_container_high": "#222a3d",
+      "on_primary": "#003824",
+      "primary": "#4edea3",
+      "primary_fixed_dim": "#4edea3",
+      "surface_bright": "#31394d",
+      "outline": "#86948a",
+      "inverse_on_surface": "#283044",
+      "surface_dim": "#0b1326",
+      "error": "#ffb4ab",
+      "surface_container": "#171f33",
+      "on_primary_fixed_variant": "#005236",
+      "on_tertiary_fixed_variant": "#005137"
+    },
+    "designMd": "---\nname: Looking Glass Design System\ncolors:\n  surface: '#0b1326'\n  surface-dim: '#0b1326'\n  surface-bright: '#31394d'\n  surface-container-lowest: '#060e20'\n  surface-container-low: '#131b2e'\n  surface-container: '#171f33'\n  surface-container-high: '#222a3d'\n  surface-container-highest: '#2d3449'\n  on-surface: '#dae2fd'\n  on-surface-variant: '#bbcabf'\n  inverse-surface: '#dae2fd'\n  inverse-on-surface: '#283044'\n  outline: '#86948a'\n  outline-variant: '#3c4a42'\n  surface-tint: '#4edea3'\n  primary: '#4edea3'\n  on-primary: '#003824'\n  primary-container: '#10b981'\n  on-primary-container: '#00422b'\n  inverse-primary: '#006c49'\n  secondary: '#95d3ba'\n  on-secondary: '#003829'\n  secondary-container: '#0b513d'\n  on-secondary-container: '#83c2a9'\n  tertiary: '#45dfa4'\n  on-tertiary: '#003825'\n  tertiary-container: '#00b982'\n  on-tertiary-container: '#00422c'\n  error: '#ffb4ab'\n  on-error: '#690005'\n  error-container: '#93000a'\n  on-error-container: '#ffdad6'\n  primary-fixed: '#6ffbbe'\n  primary-fixed-dim: '#4edea3'\n  on-primary-fixed: '#002113'\n  on-primary-fixed-variant: '#005236'\n  secondary-fixed: '#b0f0d6'\n  secondary-fixed-dim: '#95d3ba'\n  on-secondary-fixed: '#002117'\n  on-secondary-fixed-variant: '#0b513d'\n  tertiary-fixed: '#68fcbf'\n  tertiary-fixed-dim: '#45dfa4'\n  on-tertiary-fixed: '#002114'\n  on-tertiary-fixed-variant: '#005137'\n  background: '#0b1326'\n  on-background: '#dae2fd'\n  surface-variant: '#2d3449'\ntypography:\n  headline-xl:\n    fontFamily: Inter\n    fontSize: 32px\n    fontWeight: '700'\n    lineHeight: 40px\n    letterSpacing: -0.02em\n  headline-lg:\n    fontFamily: Inter\n    fontSize: 24px\n    fontWeight: '600'\n    lineHeight: 32px\n    letterSpacing: -0.01em\n  headline-md:\n    fontFamily: Inter\n    fontSize: 20px\n    fontWeight: '600'\n    lineHeight: 28px\n  body-lg:\n    fontFamily: Inter\n    fontSize: 16px\n    fontWeight: '400'\n    lineHeight: 24px\n  body-md:\n    fontFamily: Inter\n    fontSize: 14px\n    fontWeight: '400'\n    lineHeight: 20px\n  label-md:\n    fontFamily: JetBrains Mono\n    fontSize: 13px\n    fontWeight: '500'\n    lineHeight: 16px\n    letterSpacing: 0.02em\n  label-sm:\n    fontFamily: JetBrains Mono\n    fontSize: 11px\n    fontWeight: '500'\n    lineHeight: 14px\n    letterSpacing: 0.05em\n  mono-data:\n    fontFamily: JetBrains Mono\n    fontSize: 14px\n    fontWeight: '400'\n    lineHeight: 22px\n  headline-lg-mobile:\n    fontFamily: Inter\n    fontSize: 20px\n    fontWeight: '700'\n    lineHeight: 28px\nrounded:\n  sm: 0.125rem\n  DEFAULT: 0.25rem\n  md: 0.375rem\n  lg: 0.5rem\n  xl: 0.75rem\n  full: 9999px\nspacing:\n  base: 4px\n  xs: 4px\n  sm: 8px\n  md: 16px\n  lg: 24px\n  xl: 32px\n  2xl: 48px\n  gutter: 20px\n  margin-mobile: 16px\n  margin-desktop: 32px\n---\n\n## Brand & Style\n\nThis design system is engineered for the \"Developer Pro\"\u2014an audience that values precision, speed, and information density over decorative flourish. The brand personality is authoritative, reliable, and technically sophisticated. \n\nThe visual style is **Corporate Modern** with a high-density utility focus. It utilizes a deep, layered dark theme to reduce eye strain during long administration sessions, accented by a high-visibility emerald green that signifies health, connectivity, and \"go\" states. The aesthetic avoids unnecessary depth, opting for flat surfaces with subtle tonal separation to maintain a clean, organized hierarchy of complex data sets.\n\nKey principles:\n- **Precision:** Every pixel serves a purpose; alignments are rigorous.\n- **Clarity:** Technical information is prioritized through clear typographic contrast.\n- **Responsiveness:** Interactive states are immediate and unmistakable.\n\n## Colors\n\nThe palette is anchored in a \"Deep Space\" neutral scale, providing a sophisticated backdrop that allows technical data to pop. \n\n- **Primary Emerald (#10B981):** Reserved for primary actions, active status indicators, and successful connection states. \n- **Emerald Deep (#064E3B):** Used for subtle backgrounds of primary elements and low-priority active states.\n- **The Neutral Scale:** Uses a Slate/Navy tint rather than pure gray to maintain a premium, high-fidelity feel. \n    - `background` is the darkest tier for the main application shell.\n    - `surface` is used for cards and primary content areas.\n    - `surface_alt` provides a secondary tier for headers or nested components.\n- **Semantic Colors:** \n    - Critical/Error: #EF4444 (Red-500)\n    - Warning: #F59E0B (Amber-500)\n    - Info/Neutral Trace: #38BDF8 (Sky-400)\n\n## Typography\n\nThis system uses **Inter** for all UI elements to ensure maximum legibility and a clean, neutral professional tone. For technical data, IP addresses, and console outputs, **JetBrains Mono** is employed to provide the necessary character distinction (e.g., 0 vs O) required for network administration.\n\n- **Scale:** High contrast between headlines and body text helps define section boundaries in data-heavy views.\n- **Mono Usage:** Any value that is a result of a diagnostic (latency, IP, packet counts) should use the `mono-data` or `label` tokens.\n- **Weight:** Use Semibold (600) for interactive labels and Bold (700) sparingly for primary section headers.\n\n## Layout & Spacing\n\nThe design system utilizes a **12-column fluid grid** for main content areas, allowing the dashboard to scale from laptop screens to ultrawide monitors. \n\n- **Rhythm:** A strict 4px baseline grid ensures vertical consistency. All margins and paddings must be multiples of 4px.\n- **Density:** We employ a \"Compact-First\" philosophy. Elements are tightly grouped by logic, with `md` (16px) spacing between related items and `xl` (32px) between distinct modules.\n- **Breakpoints:**\n    - Mobile (<768px): Single column, fixed side margins of 16px.\n    - Tablet (768px - 1024px): 8-column grid, sidebar collapses to icon-only.\n    - Desktop (>1024px): 12-column grid with a fixed 240px navigation sidebar.\n\n## Elevation & Depth\n\nTo maintain a \"Developer Pro\" aesthetic, elevation is communicated through **Tonal Layering** and **Low-Contrast Outlines** rather than heavy shadows.\n\n- **Level 0 (Background):** #020617. The canvas.\n- **Level 1 (Default Surface):** #0F172A. Used for the primary container/card. Features a 1px solid border of #334155.\n- **Level 2 (Raised/Active):** #1E293B. Used for hover states on list items or nested sections within a card.\n- **Level 3 (Popovers/Modals):** #1E293B with a subtle ambient shadow (Black, 25% opacity, 12px blur, 0 offset).\n\nBorder-glow is used exclusively for primary active states: an Emerald #10B981 outer glow (2px) indicates the currently focused diagnostic or selected location.\n\n## Shapes\n\nThe shape language is **Soft-Geometric**. We use small radii to soften the technical edge of the platform without making it feel \"bubbly\" or consumer-grade.\n\n- **Standard Elements (Buttons, Inputs, Cards):** 4px (rounded-sm).\n- **Secondary Containers (Large Modules):** 8px (rounded-lg).\n- **Indicators (Status Dots, Tags):** Full pill (999px) for status badges to distinguish them clearly from interactive buttons.\n\n## Components\n\n### Buttons\n- **Primary:** Background Emerald #10B981, Text #020617 (High contrast). Weight: 600.\n- **Secondary:** Border #334155, Text #F8FAFC. Background: Transparent.\n- **Ghost:** No background or border. Text #94A3B8. Emerald on hover.\n\n### Input Fields\n- **Default:** Background #0F172A, Border #334155, Text #F8FAFC.\n- **Focus:** Border #10B981, 2px Emerald glow.\n- **Technical Inputs:** Use Mono font for IP/Domain entry fields.\n\n### Cards & Modules\n- Cards must have a header area with a `surface_alt` background to clearly separate title and metadata from the action area.\n- Borders are always 1px solid.\n\n### Status Indicators\n- **Online:** #10B981 dot + soft glow.\n- **Offline/Critical:** #EF4444.\n- **In-Progress:** Spin animation using a 270-degree arc in Primary Emerald.\n\n### Diagnostic Console\n- Background: #000000.\n- Text: #F8FAFC (Primary), #10B981 (Success messages), #38BDF8 (Metadata/Time).\n- Padding: 16px constant.",
+    "colorVariant": "FIDELITY",
+    "overridePrimaryColor": "#10b981",
+    "overrideSecondaryColor": "#064e3b",
+    "overrideTertiaryColor": "#34d399",
+    "overrideNeutralColor": "#0f172a",
+    "spacingScale": 2,
+    "typography": {
+      "mono-data": {
+        "fontFamily": "JetBrains Mono",
+        "fontSize": "14px",
+        "fontWeight": "400",
+        "lineHeight": "22px"
+      },
+      "headline-md": {
+        "fontFamily": "Inter",
+        "fontSize": "20px",
+        "fontWeight": "600",
+        "lineHeight": "28px"
+      },
+      "headline-lg": {
+        "fontFamily": "Inter",
+        "fontSize": "24px",
+        "fontWeight": "600",
+        "lineHeight": "32px",
+        "letterSpacing": "-0.01em"
+      },
+      "label-md": {
+        "fontFamily": "JetBrains Mono",
+        "fontSize": "13px",
+        "fontWeight": "500",
+        "lineHeight": "16px",
+        "letterSpacing": "0.02em"
+      },
+      "body-lg": {
+        "fontFamily": "Inter",
+        "fontSize": "16px",
+        "fontWeight": "400",
+        "lineHeight": "24px"
+      },
+      "body-md": {
+        "fontFamily": "Inter",
+        "fontSize": "14px",
+        "fontWeight": "400",
+        "lineHeight": "20px"
+      },
+      "headline-lg-mobile": {
+        "fontFamily": "Inter",
+        "fontSize": "20px",
+        "fontWeight": "700",
+        "lineHeight": "28px"
+      },
+      "headline-xl": {
+        "fontFamily": "Inter",
+        "fontSize": "32px",
+        "fontWeight": "700",
+        "lineHeight": "40px",
+        "letterSpacing": "-0.02em"
+      },
+      "label-sm": {
+        "fontFamily": "JetBrains Mono",
+        "fontSize": "11px",
+        "fontWeight": "500",
+        "lineHeight": "14px",
+        "letterSpacing": "0.05em"
+      }
+    },
+    "spacing": {
+      "2xl": "48px",
+      "lg": "24px",
+      "md": "16px",
+      "base": "4px",
+      "xl": "32px",
+      "xs": "4px",
+      "margin-mobile": "16px",
+      "sm": "8px",
+      "margin-desktop": "32px",
+      "gutter": "20px"
+    },
+    "headlineFontFamily": "Inter",
+    "bodyFontFamily": "Inter",
+    "labelFontFamily": "Jetbrains Mono"
+  }
+}

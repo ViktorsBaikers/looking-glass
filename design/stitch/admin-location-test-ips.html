@@ -1,0 +1,514 @@
+<!DOCTYPE html><html class="dark" lang="en" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Edit Location - Looking Glass</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "on-surface-variant": "#bbcabf",
+                        "surface-container": "#171f33",
+                        "on-background": "#dae2fd",
+                        "on-secondary-fixed-variant": "#0b513d",
+                        "primary": "#4edea3",
+                        "surface-tint": "#4edea3",
+                        "outline-variant": "#3c4a42",
+                        "surface-variant": "#2d3449",
+                        "secondary": "#95d3ba",
+                        "on-secondary": "#003829",
+                        "surface-container-highest": "#2d3449",
+                        "surface-container-lowest": "#060e20",
+                        "on-secondary-container": "#83c2a9",
+                        "inverse-primary": "#006c49",
+                        "background": "#0b1326",
+                        "secondary-fixed-dim": "#95d3ba",
+                        "on-secondary-fixed": "#002117",
+                        "tertiary": "#45dfa4",
+                        "tertiary-container": "#00b982",
+                        "surface-container-high": "#222a3d",
+                        "primary-container": "#10b981",
+                        "surface": "#0b1326",
+                        "on-surface": "#dae2fd",
+                        "error-container": "#93000a",
+                        "inverse-surface": "#dae2fd",
+                        "secondary-fixed": "#b0f0d6",
+                        "surface-dim": "#0b1326",
+                        "surface-bright": "#31394d",
+                        "on-tertiary-fixed": "#002114",
+                        "secondary-container": "#0b513d",
+                        "tertiary-fixed": "#68fcbf",
+                        "primary-fixed": "#6ffbbe",
+                        "inverse-on-surface": "#283044",
+                        "on-error": "#690005",
+                        "on-primary-container": "#00422b",
+                        "primary-fixed-dim": "#4edea3",
+                        "outline": "#86948a",
+                        "on-tertiary-container": "#00422c",
+                        "on-primary-fixed": "#002113",
+                        "tertiary-fixed-dim": "#45dfa4",
+                        "on-primary-fixed-variant": "#005236",
+                        "on-tertiary": "#003825",
+                        "on-error-container": "#ffdad6",
+                        "on-tertiary-fixed-variant": "#005137",
+                        "on-primary": "#003824",
+                        "error": "#ffb4ab",
+                        "surface-container-low": "#131b2e"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    spacing: {
+                        "base": "8px",
+                        "xl": "80px",
+                        "sm": "12px",
+                        "margin-desktop": "64px",
+                        "lg": "48px",
+                        "xs": "4px",
+                        "md": "24px",
+                        "gutter": "24px",
+                        "margin-mobile": "16px"
+                    },
+                    fontFamily: {
+                        "label-md": ["Plus Jakarta Sans"],
+                        "label-sm": ["Plus Jakarta Sans"],
+                        "body-md": ["Plus Jakarta Sans"],
+                        "headline-lg-mobile": ["Plus Jakarta Sans"],
+                        "body-lg": ["Plus Jakarta Sans"],
+                        "body-sm": ["Plus Jakarta Sans"],
+                        "headline-sm": ["Plus Jakarta Sans"],
+                        "headline-md": ["Plus Jakarta Sans"],
+                        "headline-lg": ["Plus Jakarta Sans"]
+                    },
+                    fontSize: {
+                        "label-md": ["14px", { lineHeight: "20px", letterSpacing: "0.05em", fontWeight: "600" }],
+                        "label-sm": ["12px", { lineHeight: "16px", letterSpacing: "0.05em", fontWeight: "600" }],
+                        "body-md": ["16px", { lineHeight: "24px", fontWeight: "400" }],
+                        "headline-lg-mobile": ["32px", { lineHeight: "40px", letterSpacing: "-0.01em", fontWeight: "700" }],
+                        "body-lg": ["18px", { lineHeight: "28px", fontWeight: "400" }],
+                        "body-sm": ["14px", { lineHeight: "20px", fontWeight: "400" }],
+                        "headline-sm": ["24px", { lineHeight: "32px", fontWeight: "600" }],
+                        "headline-md": ["32px", { lineHeight: "40px", letterSpacing: "-0.01em", fontWeight: "600" }],
+                        "headline-lg": ["48px", { lineHeight: "56px", letterSpacing: "-0.02em", fontWeight: "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body {
+            background-color: theme('colors.surface');
+            color: theme('colors.on-surface');
+        }
+        
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Custom Input Styles */
+        input[type="text"], select {
+            background-color: theme('colors.surface-container-high');
+            border-color: theme('colors.outline-variant');
+            color: theme('colors.on-surface');
+            transition: all 0.2s ease-in-out;
+        }
+        input[type="text"]:focus, select:focus {
+            border-color: theme('colors.primary-container');
+            box-shadow: 0 0 0 1px theme('colors.primary-container');
+            outline: none;
+        }
+
+        /* Custom Checkbox */
+        input[type="checkbox"] {
+            background-color: theme('colors.surface-container-high');
+            border-color: theme('colors.outline-variant');
+            color: theme('colors.primary-container');
+        }
+        input[type="checkbox"]:checked {
+            background-color: theme('colors.primary-container');
+            border-color: theme('colors.primary-container');
+        }
+        
+        /* Hide scrollbar for horizontal scrolling tabs */
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="antialiased h-screen flex flex-col font-body-md bg-surface overflow-hidden">
+<!-- TopNavBar -->
+<nav class="bg-surface border-b flex justify-between items-center w-full px-margin-desktop h-16 z-50 flex-shrink-0 border-surface-bright">
+<div class="flex items-center gap-sm">
+<span class="w-2 h-2 rounded-full bg-primary-container"></span>
+<span class="text-headline-md font-headline-md font-bold text-on-surface">Looking Glass</span>
+</div>
+<div class="hidden md:flex items-center gap-md">
+<a class="text-on-surface-variant hover:text-primary-container transition-colors duration-200 text-label-md font-label-md" href="#">Diagnostics</a>
+<a class="font-bold border-b-2 pb-1 text-label-md font-label-md text-primary-container border-primary-container" href="#">Administration</a>
+<button class="text-on-surface-variant hover:text-primary-container transition-colors duration-200 flex items-center justify-center rounded-full p-xs hover:bg-surface-container-high">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">light_mode</span>
+</button>
+</div>
+</nav>
+<div class="flex flex-1 overflow-hidden">
+<!-- SideNavBar -->
+<aside class="hidden md:flex flex-col bg-surface-container-low border-r border-outline-variant w-[240px] h-full p-md flex-shrink-0 min-h-screen">
+<nav class="flex-1 space-y-xs mt-lg font-body-md"><div class="mb-lg"><h2 class="text-headline-sm font-headline-sm text-primary-container">Administration</h2><p class="text-body-sm font-body-sm text-on-surface-variant">Network Settings</p></div><div class="space-y-2"><a class="flex items-center gap-sm px-sm py-2 bg-primary-container/10 text-primary-container rounded-lg font-semibold scale-95 transition-transform text-label-md font-label-md" href="#"><span class="material-symbols-outlined text-[20px]">location_on</span>Locations</a><a class="flex items-center gap-sm px-sm py-2 text-on-surface-variant hover:bg-surface-container-high hover:text-primary-container transition-colors rounded-lg text-label-md font-label-md" href="#"><span class="material-symbols-outlined text-[20px]">group</span>Administrators</a><a class="flex items-center gap-sm px-sm py-2 text-on-surface-variant hover:bg-surface-container-high hover:text-primary-container transition-colors rounded-lg text-label-md font-label-md" href="#"><span class="material-symbols-outlined text-[20px]">settings</span>Settings</a></div></nav>
+<div class="mt-auto">
+<a class="flex items-center gap-sm px-sm py-2 text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-colors rounded-lg text-label-md font-label-md hover:text-primary" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="logout">logout</span>
+                    Log out
+                </a>
+</div></aside>
+<!-- Main Content Canvas -->
+<main class="flex-1 overflow-y-auto bg-surface p-margin-mobile md:p-margin-desktop">
+<div class="max-w-4xl mx-auto">
+<!-- Header / Breadcrumb area -->
+<div class="mb-lg">
+<a class="inline-flex items-center gap-xs text-on-surface-variant hover:text-primary-container transition-colors text-label-sm font-label-sm mb-md" href="#">
+<span class="material-symbols-outlined text-[16px]">arrow_back</span>
+                        Back to locations
+                    </a>
+<div class="flex items-baseline gap-sm mb-xs">
+<h1 class="text-headline-lg font-headline-lg text-on-surface">a</h1>
+</div>
+<p class="text-body-md font-body-md text-on-surface-variant">remote node · offline</p>
+</div>
+<!-- Tabs -->
+<div class="border-b border-outline-variant mb-md flex gap-md overflow-x-auto hide-scrollbar">
+<button class="tab-btn px-xs py-sm border-b-2 border-transparent text-on-surface-variant hover:text-on-surface transition-colors text-label-md font-label-md whitespace-nowrap" data-target="tab-settings">Settings</button>
+<button class="tab-btn px-xs py-sm border-b-2 border-transparent text-on-surface-variant hover:text-on-surface transition-colors text-label-md font-label-md whitespace-nowrap" data-target="tab-methods">Methods</button>
+<button class="tab-btn px-xs py-sm border-b-2 border-primary-container text-primary-container font-semibold text-label-md font-label-md whitespace-nowrap" data-target="tab-testips">Test IPs</button>
+<button class="tab-btn px-xs py-sm border-b-2 border-transparent text-on-surface-variant hover:text-on-surface transition-colors text-label-md font-label-md whitespace-nowrap" data-target="tab-iperf">iperf</button>
+<button class="tab-btn px-xs py-sm border-b-2 border-transparent text-on-surface-variant hover:text-on-surface transition-colors text-label-md font-label-md whitespace-nowrap" data-target="tab-speedtest">Speedtest</button>
+<button class="tab-btn px-xs py-sm border-b-2 border-transparent text-on-surface-variant hover:text-on-surface transition-colors text-label-md font-label-md whitespace-nowrap" data-target="tab-enrollment">Enrollment</button>
+</div>
+<!-- Tab Contents -->
+<div class="bg-surface-container-low rounded-xl p-md border border-outline-variant shadow-lg shadow-surface-container-lowest/50">
+<!-- Settings Tab -->
+<div class="tab-content space-y-md" id="tab-settings">
+<div>
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs">Display name</label>
+<input class="w-full rounded-md border border-outline-variant bg-surface-container-high px-sm py-sm text-body-md text-on-surface focus:ring-1 focus:ring-primary-container focus:border-primary-container" type="text" value="a">
+</div>
+<div>
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs">Geographic label</label>
+<input class="w-full rounded-md border border-outline-variant bg-surface-container-high px-sm py-sm text-body-md text-on-surface focus:ring-1 focus:ring-primary-container focus:border-primary-container" type="text" value="FF">
+</div>
+<div>
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs">Node kind</label>
+<select class="w-full rounded-md border border-outline-variant bg-surface-container-high px-sm py-sm text-body-md text-on-surface focus:ring-1 focus:ring-primary-container focus:border-primary-container appearance-none">
+<option>Remote (enrolled agent)</option>
+<option>Local</option>
+</select>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-md">
+<div>
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs">Facility (optional)</label>
+<input class="w-full rounded-md border border-outline-variant bg-surface-container-high px-sm py-sm text-body-md text-on-surface focus:ring-1 focus:ring-primary-container focus:border-primary-container" type="text">
+</div>
+<div>
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs">Facility link (optional)</label>
+<input class="w-full rounded-md border border-outline-variant bg-surface-container-high px-sm py-sm text-body-md text-on-surface focus:ring-1 focus:ring-primary-container focus:border-primary-container" type="text">
+</div>
+</div>
+<div>
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs">Map query (optional)</label>
+<input class="w-full rounded-md border border-outline-variant bg-surface-container-high px-sm py-sm text-body-md text-on-surface focus:ring-1 focus:ring-primary-container focus:border-primary-container" placeholder="50.11,8.68" type="text" value="50.11,8.68">
+</div>
+<div>
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs">Data-plane origin (optional)</label>
+<input class="w-full rounded-md border border-outline-variant bg-surface-container-high px-sm py-sm text-body-md text-on-surface focus:ring-1 focus:ring-primary-container focus:border-primary-container" placeholder="https://remote.example.net:9443" type="text">
+</div>
+<div class="pt-sm">
+<button class="w-full md:w-auto bg-primary-container hover:bg-primary-container/80 text-on-primary-container px-lg py-sm rounded-md text-label-md font-label-md transition-colors shadow-sm font-bold">
+                                Save location
+                            </button>
+</div>
+</div>
+<!-- Methods Tab -->
+<div class="tab-content" id="tab-methods">
+<div class="flex justify-between items-center mb-md">
+<div>
+<h3 class="text-headline-sm font-headline-sm text-on-surface mb-xs">Diagnostic Methods</h3>
+<p class="text-body-sm text-on-surface-variant mb-md">A method that is not enabled here cannot be run at this location.</p>
+</div>
+</div>
+<div class="mb-lg">
+<h4 class="text-label-md font-label-md text-on-surface-variant mb-sm uppercase tracking-wider">IPv4 Tools</h4>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-sm">
+<label class="flex items-center gap-sm p-sm rounded-md border border-outline-variant bg-surface-container hover:bg-surface-container-high cursor-pointer transition-colors group">
+<input checked="" class="rounded border-outline-variant text-primary-container focus:ring-primary-container w-4 h-4 bg-transparent" type="checkbox">
+<span class="text-body-md text-on-surface font-mono text-sm group-hover:text-primary-container transition-colors">ping</span>
+</label>
+<label class="flex items-center gap-sm p-sm rounded-md border border-outline-variant bg-surface-container hover:bg-surface-container-high cursor-pointer transition-colors group">
+<input checked="" class="rounded border-outline-variant text-primary-container focus:ring-primary-container w-4 h-4 bg-transparent" type="checkbox">
+<span class="text-body-md text-on-surface font-mono text-sm group-hover:text-primary-container transition-colors">mtr</span>
+</label>
+<label class="flex items-center gap-sm p-sm rounded-md border border-outline-variant bg-surface-container hover:bg-surface-container-high cursor-pointer transition-colors group">
+<input checked="" class="rounded border-outline-variant text-primary-container focus:ring-primary-container w-4 h-4 bg-transparent" type="checkbox">
+<span class="text-body-md text-on-surface font-mono text-sm group-hover:text-primary-container transition-colors">traceroute</span>
+</label>
+<label class="flex items-center gap-sm p-sm rounded-md border border-outline-variant bg-surface-container hover:bg-surface-container-high cursor-pointer transition-colors group">
+<input class="rounded border-outline-variant text-primary-container focus:ring-primary-container w-4 h-4 bg-transparent" type="checkbox">
+<span class="text-body-md text-on-surface font-mono text-sm group-hover:text-primary-container transition-colors">bgp</span>
+</label>
+<label class="flex items-center gap-sm p-sm rounded-md border border-outline-variant bg-surface-container hover:bg-surface-container-high cursor-pointer transition-colors group">
+<input class="rounded border-outline-variant text-primary-container focus:ring-primary-container w-4 h-4 bg-transparent" type="checkbox">
+<span class="text-body-md text-on-surface font-mono text-sm group-hover:text-primary-container transition-colors">curl</span>
+</label>
+<label class="flex items-center gap-sm p-sm rounded-md border border-outline-variant bg-surface-container hover:bg-surface-container-high cursor-pointer transition-colors group">
+<input class="rounded border-outline-variant text-primary-container focus:ring-primary-container w-4 h-4 bg-transparent" type="checkbox">
+<span class="text-body-md text-on-surface font-mono text-sm group-hover:text-primary-container transition-colors">whois</span>
+</label>
+</div>
+</div>
+<div class="mb-lg">
+<h4 class="text-label-md font-label-md text-on-surface-variant mb-sm uppercase tracking-wider">IPv6 Tools</h4>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-sm">
+<label class="flex items-center gap-sm p-sm rounded-md border border-outline-variant bg-surface-container hover:bg-surface-container-high cursor-pointer transition-colors group">
+<input checked="" class="rounded border-outline-variant text-primary-container focus:ring-primary-container w-4 h-4 bg-transparent" type="checkbox">
+<span class="text-body-md text-on-surface font-mono text-sm group-hover:text-primary-container transition-colors">ping6</span>
+</label>
+<label class="flex items-center gap-sm p-sm rounded-md border border-outline-variant bg-surface-container hover:bg-surface-container-high cursor-pointer transition-colors group">
+<input checked="" class="rounded border-outline-variant text-primary-container focus:ring-primary-container w-4 h-4 bg-transparent" type="checkbox">
+<span class="text-body-md text-on-surface font-mono text-sm group-hover:text-primary-container transition-colors">mtr6</span>
+</label>
+<label class="flex items-center gap-sm p-sm rounded-md border border-outline-variant bg-surface-container hover:bg-surface-container-high cursor-pointer transition-colors group">
+<input checked="" class="rounded border-outline-variant text-primary-container focus:ring-primary-container w-4 h-4 bg-transparent" type="checkbox">
+<span class="text-body-md text-on-surface font-mono text-sm group-hover:text-primary-container transition-colors">traceroute6</span>
+</label>
+<label class="flex items-center gap-sm p-sm rounded-md border border-outline-variant bg-surface-container hover:bg-surface-container-high cursor-pointer transition-colors group">
+<input class="rounded border-outline-variant text-primary-container focus:ring-primary-container w-4 h-4 bg-transparent" type="checkbox">
+<span class="text-body-md text-on-surface font-mono text-sm group-hover:text-primary-container transition-colors">bgp6</span>
+</label>
+</div>
+</div>
+<div class="pt-sm border-t border-outline-variant">
+<button class="w-full md:w-auto bg-primary-container hover:bg-primary-container/80 text-on-primary-container px-lg py-sm rounded-md text-label-md font-label-md transition-colors shadow-sm font-bold">
+                                Save methods
+                            </button>
+</div>
+</div>
+<!-- Test IPs Tab -->
+<div class="tab-content active" id="tab-testips">
+<div class="flex justify-between items-center mb-md">
+<div>
+<h3 class="text-headline-sm font-headline-sm text-on-surface mb-xs">Test IP addresses</h3>
+<p class="text-body-sm text-on-surface-variant">Configure target IP addresses for diagnostic testing from this location.</p>
+</div>
+<button class="bg-surface-container-high border border-outline-variant hover:border-primary-container text-on-surface hover:text-primary-container px-sm py-xs rounded-md text-label-sm font-label-sm flex items-center gap-xs transition-colors">
+<span class="material-symbols-outlined text-[18px]">add</span> Add IP
+                            </button>
+</div>
+<div class="overflow-x-auto rounded-lg border border-outline-variant mb-md">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container border-b border-outline-variant">
+<th class="p-sm text-label-sm font-label-sm text-on-surface-variant uppercase tracking-wider">Name</th>
+<th class="p-sm text-label-sm font-label-sm text-on-surface-variant uppercase tracking-wider">IP Address</th>
+<th class="p-sm text-label-sm font-label-sm text-on-surface-variant uppercase tracking-wider">Type</th>
+<th class="p-sm text-label-sm font-label-sm text-on-surface-variant uppercase tracking-wider w-16 text-center">Actions</th>
+</tr>
+</thead>
+<tbody>
+<tr class="border-b border-outline-variant hover:bg-surface-container-high transition-colors">
+<td class="p-sm text-body-sm font-body-sm text-on-surface">Primary DNS (Cloudflare)</td>
+<td class="p-sm text-body-sm font-mono text-primary-fixed-dim">1.1.1.1</td>
+<td class="p-sm text-body-sm font-body-sm text-on-surface-variant">IPv4</td>
+<td class="p-sm text-center">
+<button class="text-on-surface-variant hover:text-error transition-colors p-1 rounded hover:bg-surface-container">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</td>
+</tr>
+<tr class="border-b border-outline-variant hover:bg-surface-container-high transition-colors">
+<td class="p-sm text-body-sm font-body-sm text-on-surface">Secondary DNS (Cloudflare)</td>
+<td class="p-sm text-body-sm font-mono text-primary-fixed-dim">1.0.0.1</td>
+<td class="p-sm text-body-sm font-body-sm text-on-surface-variant">IPv4</td>
+<td class="p-sm text-center">
+<button class="text-on-surface-variant hover:text-error transition-colors p-1 rounded hover:bg-surface-container">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</td>
+</tr>
+<tr class="border-b border-outline-variant hover:bg-surface-container-high transition-colors">
+<td class="p-sm text-body-sm font-body-sm text-on-surface">Google DNS IPv6</td>
+<td class="p-sm text-body-sm font-mono text-primary-fixed-dim">2001:4860:4860::8888</td>
+<td class="p-sm text-body-sm font-body-sm text-on-surface-variant">IPv6</td>
+<td class="p-sm text-center">
+<button class="text-on-surface-variant hover:text-error transition-colors p-1 rounded hover:bg-surface-container">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<!-- iperf Tab -->
+<div class="tab-content" id="tab-iperf">
+<div class="flex justify-between items-center mb-md">
+<div>
+<h3 class="text-headline-sm font-headline-sm text-on-surface mb-xs">iperf3 Configuration</h3>
+<p class="text-body-sm text-on-surface-variant">Configure iperf3 server settings for bandwidth testing.</p>
+</div>
+</div>
+<div class="space-y-md">
+<div class="p-md rounded-lg border border-outline-variant bg-surface-container">
+<div class="flex items-center justify-between mb-sm">
+<h4 class="text-label-md font-label-md text-on-surface font-semibold">Enable iperf3 Server</h4>
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer" type="checkbox" value="">
+<div class="w-11 h-6 bg-surface-variant peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-container"></div>
+</label>
+</div>
+<p class="text-body-sm text-on-surface-variant mb-md">Run an iperf3 server daemon on this node to accept incoming bandwidth tests.</p>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-md">
+<div>
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs">Port</label>
+<input class="w-full rounded-md border border-outline-variant bg-surface-container-high px-sm py-sm text-body-md text-on-surface font-mono focus:ring-1 focus:ring-primary-container focus:border-primary-container" type="text" value="5201">
+</div>
+<div>
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs">Bind Address (optional)</label>
+<input class="w-full rounded-md border border-outline-variant bg-surface-container-high px-sm py-sm text-body-md text-on-surface font-mono focus:ring-1 focus:ring-primary-container focus:border-primary-container" placeholder="0.0.0.0" type="text">
+</div>
+</div>
+</div>
+<div>
+<h4 class="text-label-md font-label-md text-on-surface-variant mb-sm mt-lg uppercase tracking-wider">Known iperf3 Endpoints</h4>
+<div class="flex justify-end mb-sm">
+<button class="bg-surface-container-high border border-outline-variant hover:border-primary-container text-on-surface hover:text-primary-container px-sm py-xs rounded-md text-label-sm font-label-sm flex items-center gap-xs transition-colors">
+<span class="material-symbols-outlined text-[18px]">add</span> Add Endpoint
+                                    </button>
+</div>
+<div class="overflow-x-auto rounded-lg border border-outline-variant">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container border-b border-outline-variant">
+<th class="p-sm text-label-sm font-label-sm text-on-surface-variant uppercase tracking-wider">Name</th>
+<th class="p-sm text-label-sm font-label-sm text-on-surface-variant uppercase tracking-wider">Host/IP</th>
+<th class="p-sm text-label-sm font-label-sm text-on-surface-variant uppercase tracking-wider">Port</th>
+<th class="p-sm text-label-sm font-label-sm text-on-surface-variant uppercase tracking-wider w-16 text-center">Actions</th>
+</tr>
+</thead>
+<tbody>
+<tr class="border-b border-outline-variant hover:bg-surface-container-high transition-colors">
+<td class="p-sm text-body-sm font-body-sm text-on-surface">Public Server (Ping.online)</td>
+<td class="p-sm text-body-sm font-mono text-primary-fixed-dim">iperf.ping.online</td>
+<td class="p-sm text-body-sm font-mono text-on-surface-variant">5201</td>
+<td class="p-sm text-center">
+<button class="text-on-surface-variant hover:text-error transition-colors p-1 rounded hover:bg-surface-container">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="pt-sm border-t border-outline-variant mt-lg">
+<button class="w-full md:w-auto bg-primary-container hover:bg-primary-container/80 text-on-primary-container px-lg py-sm rounded-md text-label-md font-label-md transition-colors shadow-sm font-bold">
+                                    Save iperf settings
+                                </button>
+</div>
+</div>
+</div>
+<!-- Speedtest Tab -->
+<div class="tab-content" id="tab-speedtest">
+<div class="flex justify-between items-center mb-md">
+<div>
+<h3 class="text-headline-sm font-headline-sm text-on-surface mb-xs">Speedtest Configuration</h3>
+<p class="text-body-sm text-on-surface-variant">Configure settings for the automated speed testing module.</p>
+</div>
+</div>
+<div class="space-y-md">
+<div class="p-md rounded-lg border border-outline-variant bg-surface-container">
+<div class="flex items-center justify-between mb-sm">
+<h4 class="text-label-md font-label-md text-on-surface font-semibold">Enable Speedtest Module</h4>
+<label class="relative inline-flex items-center cursor-pointer">
+<input class="sr-only peer" type="checkbox" value="">
+<div class="w-11 h-6 bg-surface-variant peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-container"></div>
+</label>
+</div>
+<p class="text-body-sm text-on-surface-variant mb-md">Allow users to run Ookla Speedtest client from this node.</p>
+<div>
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs">Preferred Server ID (optional)</label>
+<input class="w-full md:w-1/2 rounded-md border border-outline-variant bg-surface-container-high px-sm py-sm text-body-md text-on-surface focus:ring-1 focus:ring-primary-container focus:border-primary-container" placeholder="e.g. 12345" type="text">
+<p class="text-xs text-on-surface-variant mt-1">Leave blank to auto-select the best server.</p>
+</div>
+</div>
+<div class="pt-sm border-t border-outline-variant">
+<button class="w-full md:w-auto bg-primary-container hover:bg-primary-container/80 text-on-primary-container px-lg py-sm rounded-md text-label-md font-label-md transition-colors shadow-sm font-bold">
+                                    Save speedtest settings
+                                </button>
+</div>
+</div>
+</div>
+<!-- Enrollment Tab -->
+<div class="tab-content" id="tab-enrollment">
+<h3 class="text-headline-sm font-headline-sm text-on-surface mb-md">Agent Enrollment</h3>
+<p class="text-body-md text-on-surface-variant mb-md">Use the following command to enroll a remote agent for this location.</p>
+<div class="bg-surface-container-lowest border border-outline-variant p-md rounded-lg font-mono text-sm text-primary-fixed-dim relative group">
+<code>curl -sSL https://lg.example.com/enroll/a | bash</code>
+<button class="absolute top-2 right-2 p-xs text-on-surface-variant hover:text-primary-container bg-surface-container rounded opacity-0 group-hover:opacity-100 transition-opacity" title="Copy to clipboard">
+<span class="material-symbols-outlined text-[16px]">content_copy</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+<script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const tabBtns = document.querySelectorAll('.tab-btn');
+            const tabContents = document.querySelectorAll('.tab-content');
+
+            tabBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    // Remove active styles from all buttons
+                    tabBtns.forEach(b => {
+                        b.classList.remove('border-primary-container', 'text-primary-container', 'font-semibold');
+                        b.classList.add('border-transparent', 'text-on-surface-variant');
+                    });
+                    
+                    // Add active style to clicked button
+                    btn.classList.add('border-primary-container', 'text-primary-container', 'font-semibold');
+                    btn.classList.remove('border-transparent', 'text-on-surface-variant');
+
+                    // Hide all contents
+                    tabContents.forEach(content => {
+                        content.classList.remove('active');
+                    });
+
+                    // Show target content
+                    const targetId = btn.getAttribute('data-target');
+                    document.getElementById(targetId).classList.add('active');
+                });
+            });
+        });
+    </script>
+
+
+</body></html>
