@@ -48,7 +48,7 @@ test.describe('diagnostics page', () => {
 		await page.getByRole('tab', { name: 'Vienna (AS64500)' }).click();
 		const panel = page.getByRole('tabpanel', { name: 'Vienna (AS64500)' });
 		await expect(panel.getByRole('combobox', { name: 'Method' })).toBeVisible();
-		await expect(panel.getByRole('button', { name: 'Run Diagnostic' })).toBeVisible();
+		await expect(panel.getByRole('button', { name: 'Run diagnostic' })).toBeVisible();
 		await expect(page.getByRole('tabpanel')).toHaveCount(1);
 	});
 
@@ -87,7 +87,7 @@ test.describe('diagnostics page', () => {
 		await expect(page.getByRole('alert')).toHaveText(
 			'Enter a publicly routable IPv4 address or hostname.'
 		);
-		await expect(page.getByRole('button', { name: 'Run Diagnostic' })).toBeDisabled();
+		await expect(page.getByRole('button', { name: 'Run diagnostic' })).toBeDisabled();
 
 		// BGP takes route prefixes and is exempt from the client-side refusal.
 		await page.getByRole('tab', { name: 'Vienna (AS64500)' }).click();
@@ -95,7 +95,7 @@ test.describe('diagnostics page', () => {
 		await page.getByRole('option', { name: 'BGP', exact: true }).click();
 		await expect(target).toHaveAttribute('placeholder', 'e.g. 8.8.8.0/24 or 2001:db8::/32');
 		await expect(page.getByRole('alert')).toHaveCount(0);
-		await expect(page.getByRole('button', { name: 'Run Diagnostic' })).toBeEnabled();
+		await expect(page.getByRole('button', { name: 'Run diagnostic' })).toBeEnabled();
 	});
 
 	test('status panel shows location and visitor facts', async ({ page }) => {
@@ -131,10 +131,10 @@ test.describe('diagnostics page', () => {
 		// Visitor facts.
 		await expect(status.getByText('Your IP')).toBeVisible();
 		await expect(status.getByText('198.51.100.7')).toBeVisible();
-		await expect(status.getByText('Latency ≈')).toBeVisible();
+		await expect(status.getByText('Your latency')).toBeVisible();
 		const latency = status.locator(
-			'xpath=//span[text()="Latency ≈"]/following-sibling::span'
+			'xpath=//span[text()="Your latency"]/following-sibling::span'
 		);
-		await expect(latency).toHaveText(/^(\d+ ms|—)$/, { timeout: 5_000 });
+		await expect(latency).toHaveText(/^(≈ \d+ ms|—)$/, { timeout: 5_000 });
 	});
 });

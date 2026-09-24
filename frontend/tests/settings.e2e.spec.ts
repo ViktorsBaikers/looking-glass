@@ -50,11 +50,11 @@ test('settings.e2e changes the default theme through the select and persists it'
 	await signIn(page, fixtureId);
 	await page.goto(`${APP}/admin/settings`);
 
-	await expect(page.getByText('Default: system')).toHaveCount(2);
+	await expect(page.getByText('Default: Follow system')).toHaveCount(2);
 	await page.getByRole('combobox').click();
 	await page.getByRole('option', { name: 'Dark' }).click();
 	await expect(page.getByRole('combobox')).toHaveText('Dark');
-	await expect(page.getByText('Default: dark')).toHaveCount(2);
+	await expect(page.getByText('Default: Dark')).toHaveCount(2);
 	await expect(page.getByText('Unsaved changes.')).toBeVisible();
 
 	await page.getByRole('button', { name: 'Save settings' }).click();

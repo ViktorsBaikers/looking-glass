@@ -48,11 +48,10 @@ export const brand = css({
 	minWidth: '0',
 	textDecoration: 'none',
 	color: 'ink',
-	fontSize: '15px',
-	lineHeight: '20px',
-	fontWeight: 800,
-	md: { fontSize: '17px' },
-	letterSpacing: '-0.015em',
+	textStyle: 'item',
+	// Narrow headers share the row with nav and the theme toggle.
+	fontSize: '14px',
+	md: { fontSize: '16px' },
 	'& > span:last-child': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '4px' }
 });
@@ -151,8 +150,7 @@ export const sidebar = css({
 	}
 });
 export const heading = css({
-	textStyle: 'caption',
-	fontWeight: 700,
+	textStyle: 'key',
 	color: 'ink-muted',
 	marginBottom: '16px'
 });
@@ -178,7 +176,7 @@ export const navItem = css({
 	alignItems: 'center',
 	gap: '14px',
 	minHeight: '36px',
-	fontSize: '15px',
+	fontSize: '14px',
 	fontWeight: 600,
 	textDecoration: 'none',
 	color: 'ink-muted',
@@ -266,7 +264,8 @@ export const drawerBackdrop = css({
 	inset: '0',
 	background: 'rgba(10, 11, 13, 0.55)',
 	zIndex: 50,
-	animation: 'fade-in'
+	_open: { animation: 'fade-in' },
+	_closed: { animation: 'fade-out' }
 });
 export const drawerPositioner = css({
 	position: 'fixed',
@@ -290,7 +289,9 @@ export const drawerContent = css({
 	boxShadow: 'popup',
 	outline: 'none',
 	overflowY: 'auto',
-	animation: 'content-in'
+	// Slides in from the edge it lives on; leaves faster than it arrives.
+	_open: { animation: 'drawer-in' },
+	_closed: { animation: 'drawer-out' }
 });
 export const drawerClose = css({
 	position: 'absolute',
@@ -328,6 +329,9 @@ export const sectionLede = css({ textStyle: 'body-sm', color: 'ink-muted', margi
 // ----- primitive one-offs -----
 export const textareaArea = css({ minHeight: 'auto', resize: 'vertical', lineHeight: '1.5' });
 export const labelStyle = css({ textStyle: 'label', color: 'ink' });
+/** Field label followed by its info tooltip trigger. */
+export const fieldLabelRow = css({ display: 'flex', alignItems: 'center', gap: '4px' });
+export const fieldInfoIcon = css({ display: 'inline-flex', '& svg': { width: '15px', height: '15px' } });
 /** Status signal: a short line segment (solid, broken, or dashed). */
 export const statusBadgeDot = css({
 	display: 'inline-block',
@@ -364,7 +368,7 @@ export const copyBtn = css({
 	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '1px' },
 	'& svg': { width: '17px', height: '17px' }
 });
-export const copyOk = css({ color: 'ok', _hover: { color: 'ok' } });
+export const copyOk = css({ color: 'ok', _hover: { color: 'ok' }, '& svg': { animation: 'check-in' } });
 export const toastOkIcon = css({ color: 'inherit' });
 export const toastBody = css({ minWidth: '0', flex: '1' });
 export const themeToggleBtn = css({

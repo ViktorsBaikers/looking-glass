@@ -106,7 +106,7 @@
 		revoking = false;
 		if (result.ok) {
 			askRevoke = false;
-			toast.success('Agent revoked.');
+			toast.success(`Revoked ${locationName}'s agent.`);
 			onchanged();
 		} else {
 			toast.error(result.message);
@@ -130,10 +130,10 @@
 		<Button variant="secondary" size="sm" onclick={regenerate} class={retryBtn}>Try again</Button>
 	</div>
 {:else if ticket}
-	<h3 class={enrollTitle}>Agent Enrollment</h3>
+	<h3 class={enrollTitle}>Agent enrollment</h3>
 	<p class={enrollIntro}>
-		Use the following command to enroll a remote agent for this location. It carries a
-		single-use token and central's identity — nothing to edit.
+		Run this install command on the remote node to enroll its agent with this location. It already
+		holds a single-use token and this server's identity, so run it as is.
 	</p>
 	<div class={cmdBox}>
 		<code>{ticket.install_command}</code>
@@ -180,9 +180,9 @@
 
 <ConfirmDialog
 	bind:open={askRevoke}
-	title="Revoke agent?"
-	message="The agent's credential is invalidated immediately and the location goes offline."
-	confirmLabel="Revoke"
+	title="Revoke this agent?"
+	message="Its credential stops working and its tunnel closes now. The location shows Not enrolled until you enroll a new agent."
+	confirmLabel="Revoke agent"
 	danger
 	busy={revoking}
 	onconfirm={confirmRevoke}

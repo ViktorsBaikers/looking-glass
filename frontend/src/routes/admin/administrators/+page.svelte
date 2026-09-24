@@ -182,7 +182,7 @@
 	<header class={pageHeader}>
 		<div>
 			<h1 class={pageTitle}>Administrators</h1>
-			<p class={pageSub}>Manage equal peers and your own password. One-time links disappear when closed.</p>
+			<p class={pageSub}>Every administrator has the same access. Activation links are shown once, so copy them before closing.</p>
 		</div>
 	</header>
 
@@ -207,7 +207,7 @@
 				</div>
 				<Button type="submit" loading={creating} disabled={newUsername.length === 0}>
 					<Add aria-hidden="true" />
-					Create pending
+					Create activation link
 				</Button>
 			</form>
 		</CardContent>
@@ -219,9 +219,9 @@
 			<span class={accountCount}>{countLabel}</span>
 		</div>
 		{#if phase === 'loading'}
-			<p class={sectionDesc}>Loading…</p>
+			<p class={sectionDesc}>Loading administrators…</p>
 		{:else if phase === 'error'}
-			<p class={sectionDesc}>Could not load administrators.</p>
+			<p class={sectionDesc}>Administrators could not be loaded. Refresh the page to try again.</p>
 		{:else}
 			<ul class={peerList}>
 				{#each admins as admin (admin.id)}

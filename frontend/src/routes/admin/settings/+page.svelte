@@ -44,6 +44,9 @@
 	const dirty = $derived(saved !== null && form !== null && isDirty(saved, form));
 	const hasLogo = $derived(!!form?.logo_url && form.logo_url.trim() !== '');
 	const hasTerms = $derived(!!form?.terms_url && form.terms_url.trim() !== '');
+	const defaultThemeLabel = $derived(
+		THEME_ITEMS.find((item) => item.value === form?.default_theme)?.label ?? form?.default_theme
+	);
 	const message = $derived(
 		form && form.custom_block && form.custom_block.trim() !== ''
 			? form.custom_block
@@ -84,10 +87,10 @@
 				</div>
 				<p class={s.previewMessage}>{message}</p>
 				<p class={s.previewMeta}>
-					<span class={s.previewScheme}>{dark ? 'Dark theme' : 'Light theme'}</span> ·
-					<span>{hasLogo ? 'Custom logo' : 'Default mark'}</span> ·
-					<span>{hasTerms ? 'Terms link' : 'No terms link'}</span> ·
-					<span>Default: {form.default_theme}</span>
+					<span class={s.previewScheme}>{dark ? 'Dark theme' : 'Light theme'}</span> ⋅
+					<span>{hasLogo ? 'Custom logo' : 'Default mark'}</span> ⋅
+					<span>{hasTerms ? 'Terms link' : 'No terms link'}</span> ⋅
+					<span>Default: {defaultThemeLabel}</span>
 				</p>
 			</div>
 		</div>
@@ -112,7 +115,7 @@
 		<div>
 			<h1 class={adminTitle}>Settings</h1>
 			<p class={adminLede}>
-				Preview branding and appearance, then publish them with the limits every run must follow.
+				Branding, the default theme, and the limits every run must follow. The preview shows changes before you save.
 			</p>
 		</div>
 	</header>
@@ -164,19 +167,39 @@
 				<CardHeader><CardTitle class={s.sectionTitle}>Execution limits</CardTitle></CardHeader>
 				<CardContent>
 					<div class={s.limitsGrid}>
-						<Field label="Global concurrency cap" for="max-concurrent">
+						<Field
+							label="Global concurrency cap"
+							for="max-concurrent"
+							info="The most runs that can execute at the same time. When every slot is taken, a new run is refused as busy until one finishes."
+						>
 							<Input id="max-concurrent" type="number" min={1} bind:value={form.exec_max_concurrent} />
 						</Field>
-						<Field label="Per-run timeout (seconds)" for="timeout">
+						<Field
+							label="Per-run timeout (seconds)"
+							for="timeout"
+							info="The longest one run may take. A run still going after this many seconds is stopped, and the visitor is told it timed out."
+						>
 							<Input id="timeout" type="number" min={1} bind:value={form.exec_timeout_secs} />
 						</Field>
-						<Field label="Output cap (KiB)" for="output">
+						<Field
+							label="Output cap (KiB)"
+							for="output"
+							info="The most output one run may produce, in KiB. A run that goes past it is stopped, and the visitor is told the output was too large."
+						>
 							<Input id="output" type="number" min={1} bind:value={form.exec_max_output_kib} />
 						</Field>
-						<Field label="Rate limit (runs)" for="rate-max">
+						<Field
+							label="Rate limit (runs)"
+							for="rate-max"
+							info="How many runs one visitor, by IP address, may start within each rate window. Further attempts are refused until the window resets. Speed test uploads count too."
+						>
 							<Input id="rate-max" type="number" min={1} bind:value={form.exec_rate_max} />
 						</Field>
-						<Field label="Rate window (seconds)" for="rate-window">
+						<Field
+							label="Rate window (seconds)"
+							for="rate-window"
+							info="The period, in seconds, the rate limit is counted over. With a limit of 20 and a window of 60, each visitor can start 20 runs per minute."
+						>
 							<Input id="rate-window" type="number" min={1} bind:value={form.exec_rate_window_secs} />
 						</Field>
 					</div>

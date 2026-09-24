@@ -26,7 +26,8 @@
 		methodsSave,
 		loadingRow,
 		errorText,
-		spinIcon
+		spinIcon,
+		tdMono
 	} from './editor-styles.js';
 	import {
 		getLocation,
@@ -74,8 +75,8 @@
 		{ id: 'settings', label: 'Settings' },
 		{ id: 'methods', label: 'Methods' },
 		{ id: 'test-ips', label: 'Test IPs' },
-		{ id: 'iperf', label: 'iperf' },
-		{ id: 'speedtest', label: 'Speedtest' },
+		{ id: 'iperf', label: 'iperf endpoints' },
+		{ id: 'speedtest', label: 'Test files' },
 		{ id: 'enrollment', label: 'Enrollment' }
 	];
 
@@ -240,7 +241,7 @@
 					size="lg">{STATE_LABEL[state]}</StatusBadge
 				>
 				<span>{detail.kind === 'remote' ? 'Remote node' : 'Local node'}</span>
-				{#if detail.asn}<span>AS{detail.asn}</span>{/if}
+				{#if detail.asn}<span class={tdMono}>AS{detail.asn}</span>{/if}
 			</p>
 		</div>
 	</header>
@@ -300,12 +301,10 @@
 			</form>
 		{:else if active === 'methods'}
 			<form onsubmit={(event) => save(event, 'Methods saved.')} novalidate>
-				<h3 class={panelTitle}>Diagnostic Methods</h3>
-				<p class={methodsIntro}>
-					A method that is not enabled here cannot be run at this location.
-				</p>
+				<h3 class={panelTitle}>Offered methods</h3>
+				<p class={methodsIntro}>Visitors can run only the methods offered at this location.</p>
 				<div class={familyGroup}>
-					<h4 class={familyHead}>IPv4 Tools</h4>
+					<h4 class={familyHead}>IPv4 methods</h4>
 					<div class={methodsGrid}>
 						{#each families.v4 as method (method)}
 							<CheckboxCard
@@ -318,7 +317,7 @@
 					</div>
 				</div>
 				<div class={familyGroup}>
-					<h4 class={familyHead}>IPv6 Tools</h4>
+					<h4 class={familyHead}>IPv6 methods</h4>
 					<div class={methodsGrid}>
 						{#each families.v6 as method (method)}
 							<CheckboxCard
@@ -341,10 +340,10 @@
 			</form>
 		{:else if active === 'test-ips'}
 			<CrudSection
-				title="Test IP addresses"
-				description="Configure target IP addresses for diagnostic testing from this location."
-				addLabel="Add IP"
-				itemLabel="IP"
+				title="Test IPs"
+				description="Addresses visitors can test toward. They're listed with this location on the public page."
+				addLabel="Add test IP"
+				itemLabel="test IP"
 				items={detail.test_ips}
 				columns={ipColumns}
 				rowName={(ip) => ip.label ?? ip.address}
@@ -362,10 +361,10 @@
 			/>
 		{:else if active === 'iperf'}
 			<CrudSection
-				title="Known iperf3 Endpoints"
-				description="Endpoints visitors can point their own iperf3 client at."
-				addLabel="Add endpoint"
-				itemLabel="endpoint"
+				title="iperf endpoints"
+				description="Servers visitors can point their own iperf3 client at. Looking Glass shows the commands; it never runs them."
+				addLabel="Add iperf endpoint"
+				itemLabel="iperf endpoint"
 				items={detail.iperf}
 				columns={iperfColumns}
 				rowName={(ep) => ep.label}
@@ -376,16 +375,16 @@
 					{ key: 'host', label: 'Host', mono: true, placeholder: 'iperf.example.net' },
 					{ key: 'port', label: 'Port', type: 'number', mono: true, placeholder: '5201' },
 					{
-						key: 'cmd_incoming',
-						label: 'Incoming command',
-						mono: true,
-						placeholder: 'iperf3 -c host -R'
-					},
-					{
 						key: 'cmd_outgoing',
-						label: 'Outgoing command',
+						label: 'Standard command',
 						mono: true,
 						placeholder: 'iperf3 -c host'
+					},
+					{
+						key: 'cmd_incoming',
+						label: 'Reverse command',
+						mono: true,
+						placeholder: 'iperf3 -c host -R'
 					}
 				]}
 				create={(draft) => createIperf(locationId, draft as unknown as IperfInput)}
@@ -396,9 +395,9 @@
 		{:else if active === 'speedtest'}
 			<CrudSection
 				title="Test files"
-				description="Files the browser Speed test streams and the download links serve."
-				addLabel="Add file"
-				itemLabel="file"
+				description="Files the browser speed test streams and visitors can download."
+				addLabel="Add test file"
+				itemLabel="test file"
 				items={detail.files}
 				columns={fileColumns}
 				rowName={(file) => file.label}

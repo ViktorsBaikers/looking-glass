@@ -68,11 +68,33 @@ typography:
     fontSize: "12px"
     fontWeight: 500
     lineHeight: "16px"
+  key:
+    fontFamily: "Overpass Variable, Overpass, system-ui, sans-serif"
+    fontSize: "12px"
+    fontWeight: 700
+    lineHeight: "16px"
+  item:
+    fontFamily: "Overpass Variable, Overpass, system-ui, sans-serif"
+    fontSize: "16px"
+    fontWeight: 800
+    lineHeight: "22px"
+    letterSpacing: "-0.01em"
+  fact:
+    fontFamily: "Overpass Variable, Overpass, system-ui, sans-serif"
+    fontSize: "16px"
+    fontWeight: 600
+    lineHeight: "22px"
   code:
     fontFamily: "Overpass Mono Variable, Overpass Mono, ui-monospace, monospace"
     fontSize: "13px"
     fontWeight: 400
     lineHeight: "20px"
+    fontFeature: "tnum"
+  data:
+    fontFamily: "Overpass Mono Variable, Overpass Mono, ui-monospace, monospace"
+    fontSize: "14px"
+    fontWeight: 400
+    lineHeight: "22px"
     fontFeature: "tnum"
   numeral:
     fontFamily: "Overpass Variable, Overpass, system-ui, sans-serif"
@@ -205,13 +227,19 @@ A restrained neutral ground carrying a full palette of transit-line colours that
 ### Hierarchy
 
 - **Display** (800, 40px/44px, -0.03em): page h1 at md+. It becomes **Display-sm** (800, 28px/32px) on small screens and in the auth terminus.
-- **Title** (700, 20px/26px): section h2 (Output, Speed Tests, card titles, dialog titles).
+- **Title** (700, 20px/26px): section h2 (Output, Speed tests, card titles, dialog titles).
 - **Body** (400, 16px/24px): prose and ledes, capped near 60ch.
 - **Body-sm** (400, 14px/20px): descriptions, notes, table text.
 - **Label** (600, 13px/16px, sentence case): field labels, metric labels.
-- **Caption** (500–700, 12px/16px): fact labels, column heads, legends, tags.
-- **Code** (Overpass Mono 400, 13px/20px, tabular): console output, IPs, commands, tokens.
-- **Numeral** (700, 28px/32px, tabular): run metrics. Speed readouts go to 40px/800.
+- **Item** (800, 16px/22px, -0.01em): a named thing in a list or card (Location rows, peers, the iperf endpoints and Speed test card heads, the route origin). The header brand uses it at 14px below md.
+- **Fact** (600, 16px/22px): a sans fact value (status, place, facility).
+- **Key** (700, 12px/16px): the name half of a fact, column heads, nav group heads, tags.
+- **Caption** (500, 12px/16px): metadata under a value (metric notes, "Added" dates).
+- **Code** (Overpass Mono 400, 13px/20px, tabular): console output and dense tables.
+- **Data** (Overpass Mono 400, 14px/22px, tabular): inline addresses, ASNs, commands outside the console. ASNs are always mono, including the Location tabs and the editor head.
+- **Numeral** (700, 28px/32px, tabular): run metrics. Speed readouts use Display with tabular figures.
+
+The scale is 12 · 13 · 14 · 16 · 20 · 28 · 40; nothing else ships except roundel codes, which size to their disc. Controls (inputs, selects) set 16px text so iOS never zooms on focus. Separators use `⋅` (U+22C5): Overpass draws U+00B7 with zero advance, which collapses the space after it.
 
 ### Named Rules
 
@@ -222,7 +250,8 @@ A restrained neutral ground carrying a full palette of transit-line colours that
 ## Layout
 
 - Public page: max 1280px, 32px gutters (16px mobile), 48px section rhythm.
-  - Order: title, a compact `routes` tab row of Location roundels, the selected Location's band (6px line along the top, command row, station facts grid), Output, run metrics, Speed Tests.
+  - Order: title, a compact `routes` tab row of Location roundels, the selected Location's band (6px line along the top, command row, station facts grid), Output, run metrics, Speed tests.
+  - The command is one line (Method ≤200px · Target · Run) only at md. On phones and at lg, where it sits beside the facts, Method, Target and Run stack, so Target always gets the full column. Target holds the longest values (IPv6, hostnames).
 - Admin: 220px sidebar at md+, a menu drawer below md, content max 1040px.
   - Each page opens with `adminPageHead`: h1 and lede left, the single primary action right, a 3px ink rule beneath.
 - Lists are ruled rows inside one panel with fixed column tracks, so every row aligns under a caption head row. Below lg, rows stack and each cell shows its own caption.
@@ -270,7 +299,7 @@ The map is flat. Depth comes from tone: paper, then panel, then sunk inset. Hair
 
 ### Inputs / Fields
 
-- **Style:** panel fill, 1px strong-rule border, 2px radius, 40px tall, 15px text. Labels are 13px/600 ink, above the control.
+- **Style:** panel fill, 1px strong-rule border, 2px radius, 40px tall, 16px text (sans, or mono for data fields). Labels are 13px/600 ink, above the control.
 - **Focus:** the border goes ink plus a 1px inset ink ring. **Error:** danger border and ring, with danger text below (role=alert). **Disabled:** sunk fill.
 
 ### Navigation

@@ -10,7 +10,7 @@ async function selectMethod(page: Page, label: string) {
 
 async function run(page: Page, target: string) {
 	await page.getByLabel('Target').fill(target);
-	await page.getByRole('button', { name: 'Run Diagnostic' }).click();
+	await page.getByRole('button', { name: 'Run diagnostic' }).click();
 }
 
 test.describe('diagnostic runs', () => {
@@ -36,7 +36,7 @@ test.describe('diagnostic runs', () => {
 		await expect(page.getByRole('log')).toContainText('64 bytes from 1.1.1.1: icmp_seq=1');
 		await expect(page.getByRole('status')).toHaveText('Completed');
 		await expect(page.getByText('Frankfurt ~ ping')).toBeVisible();
-		await expect(page.getByRole('button', { name: 'Run Diagnostic' })).toBeEnabled();
+		await expect(page.getByRole('button', { name: 'Run diagnostic' })).toBeEnabled();
 
 		// Metric cards derived from the finished output.
 		const metrics = metricsGroup(page);
@@ -62,7 +62,7 @@ test.describe('diagnostic runs', () => {
 		await expect(page.getByText('Average round-trip time across all replies.')).toBeVisible();
 	});
 
-	test('Run Diagnostic morphs to Cancel and cancelling ends the run', async ({ page }) => {
+	test('Run diagnostic morphs to Cancel and cancelling ends the run', async ({ page }) => {
 		await run(page, 'slow.test');
 		const cancel = page.getByRole('button', { name: 'Cancel' });
 		await expect(cancel).toBeVisible();
@@ -71,7 +71,7 @@ test.describe('diagnostic runs', () => {
 		await cancel.click();
 		await expect(page.getByRole('status')).toHaveText('Canceled');
 		await expect(page.getByRole('log')).toContainText('Run canceled.');
-		await expect(page.getByRole('button', { name: 'Run Diagnostic' })).toBeEnabled();
+		await expect(page.getByRole('button', { name: 'Run diagnostic' })).toBeEnabled();
 		// No metric cards for a run that never finished.
 		await expect(metricsGroup(page)).toHaveCount(0);
 	});

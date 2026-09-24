@@ -30,7 +30,7 @@ export const peersHead = css({
 	marginBottom: '12px'
 });
 
-export const accountCount = css({ textStyle: 'caption', fontWeight: 700, color: 'ink-muted' });
+export const accountCount = css({ textStyle: 'key', color: 'ink-muted' });
 
 /** The roster: one ruled row per peer. */
 export const peerList = css({
@@ -57,7 +57,7 @@ export const peerMain = css({ display: 'flex', flexDirection: 'column', gap: '2p
 
 export const peerNameRow = css({ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' });
 
-export const peerName = css({ fontSize: '16px', lineHeight: '22px', fontWeight: 800, color: 'ink' });
+export const peerName = css({ textStyle: 'item', color: 'ink' });
 
 export const peerAdded = css({ textStyle: 'caption', color: 'ink-muted', fontVariantNumeric: 'tabular-nums' });
 

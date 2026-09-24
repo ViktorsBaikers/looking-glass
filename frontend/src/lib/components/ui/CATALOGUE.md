@@ -77,10 +77,14 @@ inside it `var(--line)` / `var(--line-ink)` resolve per theme. Roundel text is
 
 - Radii: `none` 0 (panels, cards, dialogs), `sm` 2 (controls), `md` 3, `full`.
 - Shadow: `popup` (menus/dialogs/toasts) only.
-- Animations: `spin`, `fade-in`, `content-in`, `station-in`, `here-pulse`.
-- Text styles: `display` 40/44·800, `display-sm` 28/32·800, `title` 20/26·700,
-  `body` 16/24, `body-sm` 14/20, `label` 13/16·600, `caption` 12/16·500,
-  `code` mono 13/20 tabular, `numeral` 28/32·700 tabular.
+- Animations: `spin`, `fade-in` / `fade-out`, `pop-in` / `pop-out` (dialogs, selects, tooltips; scale from 0.96, popovers use `var(--transform-origin)`), `drawer-in` / `drawer-out`, `check-in`, `station-in`, `here-pulse` (a ring on a `::after`, transform + opacity only). Exits are faster than entries; Ark waits for `_closed` animations before unmounting. Animate only `transform` and `opacity`; a tooltip opened while another is open (`data-instant`) skips its animation.
+- Hover: `_hover` only applies on devices with a fine pointer that can hover (`@media (hover: hover) and (pointer: fine)`, set in `panda.config.ts` conditions), so taps never leave a hover colour stuck.
+- Text styles (scale 12·13·14·16·20·28·40): `display` 40/44·800, `display-sm` 28/32·800,
+  `title` 20/26·700, `item` 16/22·800 (row/card names), `fact` 16/22·600 (fact values),
+  `body` 16/24, `body-sm` 14/20, `label` 13/16·600, `key` 12/16·700 (fact keys, column
+  heads, tags), `caption` 12/16·500 (metadata), `code` mono 13/20 tabular (console),
+  `data` mono 14/22 tabular (inline IPs, ASNs, commands), `numeral` 28/32·700 tabular.
+  Controls are 16px. Separators: `⋅` (U+22C5), never `·` (zero-width in Overpass).
 - Spacing: 4px grid — 4·8·12·16·20·24·32·40·48.
 
 ### Layout patterns
@@ -155,7 +159,8 @@ Same props as Input (`bind:value`, `invalid`, `mono`) + native `<textarea>` attr
 ### Field — `$lib/components/ui/field.svelte` (default)
 
 Vertical label → control → message stack. `label`, `for`, `error` (role=alert, wins)
-or `hint`; the control is `children`.
+or `hint`; the control is `children`. `info` puts an info icon after the label whose
+tooltip explains the field (hover or keyboard focus; screen readers get "About {label}").
 
 ```svelte
 <Field label="Geographic label" for="geo" error={geoError}>

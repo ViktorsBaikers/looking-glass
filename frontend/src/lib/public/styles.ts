@@ -36,18 +36,21 @@ export const band = css({
 	// Wide screens: the command on the left, the Location's facts beside it.
 	lg: { display: 'grid', gridTemplateColumns: 'minmax(0, 5fr) minmax(0, 7fr)' }
 });
+// One command line (method · target · Run) only where it fits: md. On phones and
+// beside the facts (lg) the fields stack so Target, the longest value, gets the width.
 export const panel = css({
 	display: 'grid',
-	gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 3fr)',
-	gap: '12px 10px',
+	gridTemplateColumns: 'minmax(0, 1fr)',
+	gap: '12px',
 	padding: '16px',
 	alignItems: 'start',
 	md: {
-		gridTemplateColumns: 'minmax(180px, 240px) minmax(0, 1fr) auto',
+		// 200px holds the longest method ("Traceroute (IPv6)"); the rest goes to Target.
+		gridTemplateColumns: 'minmax(180px, 200px) minmax(0, 1fr) auto',
 		gap: '12px',
 		padding: '24px'
 	},
-	lg: { gridTemplateColumns: 'minmax(150px, 190px) minmax(0, 1fr)', alignContent: 'start', gap: '16px 12px' }
+	lg: { gridTemplateColumns: 'minmax(0, 1fr)', alignContent: 'start', gap: '16px' }
 });
 // Sits level with the inputs (label 16px + 6px gap above them).
 export const runButton = css({
@@ -92,13 +95,11 @@ export const statusRow = css({
 	flexDirection: 'column',
 	gap: '4px',
 	minWidth: '0',
-	'& > span:first-child': { textStyle: 'caption', fontWeight: 700, color: 'ink-muted' }
+	'& > span:first-child': { textStyle: 'key', color: 'ink-muted' }
 });
-export const statusValue = css({ fontSize: '15px', lineHeight: '22px', fontWeight: 600, color: 'ink', minWidth: '0' });
+export const statusValue = css({ textStyle: 'fact', color: 'ink', minWidth: '0' });
 export const statusMono = css({
-	fontFamily: 'mono',
-	fontSize: '14px',
-	lineHeight: '22px',
+	textStyle: 'data',
 	color: 'ink',
 	minWidth: '0',
 	overflowWrap: 'anywhere'
@@ -143,9 +144,7 @@ export const geoValue = css({
 	display: 'flex',
 	alignItems: 'center',
 	gap: '6px',
-	fontSize: '15px',
-	lineHeight: '22px',
-	fontWeight: 600,
+	textStyle: 'fact',
 	color: 'ink',
 	minWidth: '0'
 });
@@ -302,8 +301,7 @@ export const lineError = css({ color: 'danger', fontWeight: 600 });
 export const lineMeta = css({ color: 'ink-muted' });
 export const lineHint = css({
 	fontFamily: 'sans',
-	fontSize: '15px',
-	lineHeight: '22px',
+	textStyle: 'body',
 	color: 'ink-muted',
 	margin: '0',
 	maxWidth: '52ch'
@@ -330,9 +328,7 @@ export const mtrTable = css({
 export const mtrTh = css({
 	padding: '0 12px 10px',
 	fontFamily: 'sans',
-	fontSize: '12px',
-	lineHeight: '16px',
-	fontWeight: 700,
+	textStyle: 'key',
 	color: 'ink-muted',
 	textAlign: 'left',
 	borderBottomWidth: '1px',
@@ -430,11 +426,23 @@ export const originRoundel = css({
 	fontWeight: 800,
 	letterSpacing: '0.02em'
 });
-export const originName = css({ fontFamily: 'sans', fontSize: '15px', fontWeight: 800, color: 'ink' });
-export const originNote = css({ fontFamily: 'sans', fontSize: '13px', color: 'ink-muted', marginLeft: '8px' });
+export const originName = css({ fontFamily: 'sans', textStyle: 'item', color: 'ink' });
+export const originNote = css({ fontFamily: 'sans', textStyle: 'caption', color: 'ink-muted', marginLeft: '8px' });
 export const stationLossy = css({ borderColor: 'warn', background: 'warn-soft' });
 export const stationSilentMark = css({ width: '12px', height: '12px', borderWidth: '3px', borderColor: 'ink-faint', background: 'sunk' });
-export const stationLive = css({ animation: 'here-pulse' });
+export const stationLive = css({
+	_after: {
+		content: '""',
+		position: 'absolute',
+		inset: '-4px',
+		borderRadius: 'full',
+		borderWidth: '3px',
+		borderStyle: 'solid',
+		borderColor: 'var(--line)',
+		pointerEvents: 'none',
+		animation: 'here-pulse'
+	}
+});
 
 // ----- run metrics -----
 export const metricsGrid = css({
@@ -512,8 +520,8 @@ export const cardTitleRow = css({
 	flexWrap: 'wrap',
 	minHeight: '32px'
 });
-export const iperfTitle = css({ fontSize: '16px', lineHeight: '22px', fontWeight: 800, color: 'ink' });
-export const speedCardTitle = css({ fontSize: '16px', lineHeight: '22px', fontWeight: 800, color: 'ink' });
+export const iperfTitle = css({ textStyle: 'item', color: 'ink' });
+export const speedCardTitle = css({ textStyle: 'item', color: 'ink' });
 export const endpointBlock = css({
 	display: 'flex',
 	flexDirection: 'column',
@@ -531,7 +539,7 @@ export const endpointName = css({
 });
 export const endpointHost = css({ fontFamily: 'mono', fontSize: '13px', color: 'ink-muted' });
 export const cmdGroup = css({ display: 'flex', flexDirection: 'column', gap: '6px' });
-export const cmdLabel = css({ textStyle: 'caption', fontWeight: 700, color: 'ink-muted' });
+export const cmdLabel = css({ textStyle: 'key', color: 'ink-muted' });
 export const cmdRow = css({
 	display: 'flex',
 	alignItems: 'center',
@@ -541,9 +549,7 @@ export const cmdRow = css({
 	padding: '4px 4px 4px 12px'
 });
 export const cmdCode = css({
-	fontFamily: 'mono',
-	fontSize: '14px',
-	lineHeight: '22px',
+	textStyle: 'data',
 	color: 'ink',
 	flex: '1',
 	minWidth: '0',
@@ -566,35 +572,33 @@ export const readoutLabel = css({
 });
 export const readoutValueRow = css({ display: 'flex', alignItems: 'baseline', gap: '6px' });
 export const readoutValue = css({
-	fontSize: '40px',
-	lineHeight: '44px',
-	fontWeight: 800,
-	letterSpacing: '-0.03em',
+	textStyle: 'display',
 	fontVariantNumeric: 'tabular-nums',
 	color: 'ink'
 });
 export const readoutUnit = css({ fontSize: '14px', fontWeight: 600, color: 'ink-muted' });
 export const barTrack = css({
+	position: 'relative',
 	width: '100%',
 	background: 'sunk',
 	height: '6px',
-	display: 'flex',
-	overflow: 'hidden'
+	overflow: 'hidden',
+	// Live: follow the per-frame samples closely. Finished: ease into the
+	// proportional download/upload split.
+	'&[data-settled=true] > div': { transitionDuration: '300ms', transitionTimingFunction: 'in-out' }
 });
-export const barDownload = css({
-	background: 'var(--line)',
-	height: '100%',
-	transitionProperty: 'width',
-	transitionDuration: '240ms',
-	transitionTimingFunction: 'out'
-});
-export const barUpload = css({
-	background: 'ink',
-	height: '100%',
-	transitionProperty: 'width',
-	transitionDuration: '240ms',
-	transitionTimingFunction: 'out'
-});
+// Both segments span the track and are scaled from the left edge (compositor
+// only, no layout); upload is shifted by download's share of the track.
+const barSegment = {
+	position: 'absolute',
+	inset: '0',
+	transformOrigin: 'left',
+	transitionProperty: 'transform',
+	transitionDuration: '100ms',
+	transitionTimingFunction: 'linear'
+} as const;
+export const barDownload = css({ ...barSegment, background: 'var(--line)' });
+export const barUpload = css({ ...barSegment, background: 'ink' });
 export const noFilesNote = css({ textStyle: 'body-sm', color: 'ink-muted' });
 export const fileLinks = css({
 	display: 'flex',

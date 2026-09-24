@@ -8,8 +8,8 @@ const TAB_LABELS: Record<string, string> = {
 	settings: 'Settings',
 	methods: 'Methods',
 	'test-ips': 'Test IPs',
-	iperf: 'iperf',
-	speedtest: 'Speedtest',
+	iperf: 'iperf endpoints',
+	speedtest: 'Test files',
 	enrollment: 'Enrollment'
 };
 
@@ -109,8 +109,8 @@ test('test IPs table creates, edits and deletes rows', async ({ page }) => {
 	// Seeded rows are visible in the table.
 	await expect(page.getByRole('cell', { name: '192.0.2.21', exact: true })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Add IP' }).click();
-	const dialog = page.getByRole('dialog', { name: 'Add IP' });
+	await page.getByRole('button', { name: 'Add test IP' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Add test IP' });
 	await dialog.getByLabel('Name').fill('Edge anycast');
 	await dialog.getByLabel('IP address').fill('2001:db8::77');
 	await dialog.getByLabel('Type').click();
@@ -123,14 +123,14 @@ test('test IPs table creates, edits and deletes rows', async ({ page }) => {
 	await expect(newRow.getByRole('cell', { name: 'IPv6', exact: true })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Edit Edge anycast' }).click();
-	const editDialog = page.getByRole('dialog', { name: 'Edit IP' });
+	const editDialog = page.getByRole('dialog', { name: 'Edit test IP' });
 	await editDialog.getByLabel('IP address').fill('2001:db8::7');
 	await editDialog.getByRole('button', { name: 'Save' }).click();
 	await expect(editDialog).toHaveCount(0);
 	await expect(page.getByRole('cell', { name: '2001:db8::7', exact: true })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Delete Edge anycast' }).click();
-	await page.getByRole('dialog', { name: 'Delete IP?' }).getByRole('button', { name: 'Delete' }).click();
+	await page.getByRole('dialog', { name: 'Delete test IP?' }).getByRole('button', { name: 'Delete' }).click();
 	await expect(page.getByText('Test IP deleted.')).toBeVisible();
 	await expect(page.getByRole('cell', { name: '2001:db8::7', exact: true })).toHaveCount(0);
 });
@@ -141,13 +141,13 @@ test('iperf table creates, edits and deletes endpoints', async ({ page }) => {
 
 	await expect(page.getByRole('cell', { name: '192.0.2.21', exact: true })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Add endpoint' }).click();
-	const dialog = page.getByRole('dialog', { name: 'Add endpoint' });
+	await page.getByRole('button', { name: 'Add iperf endpoint' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Add iperf endpoint' });
 	await dialog.getByLabel('Name').fill('Backup server');
 	await dialog.getByLabel('Host').fill('203.0.113.9');
 	await dialog.getByLabel('Port').fill('5202');
-	await dialog.getByLabel('Incoming command').fill('iperf3 -c 203.0.113.9 -R');
-	await dialog.getByLabel('Outgoing command').fill('iperf3 -c 203.0.113.9');
+	await dialog.getByLabel('Reverse command').fill('iperf3 -c 203.0.113.9 -R');
+	await dialog.getByLabel('Standard command').fill('iperf3 -c 203.0.113.9');
 	await dialog.getByRole('button', { name: 'Save' }).click();
 	await expect(dialog).toHaveCount(0);
 	await expect(page.getByText('iperf endpoint saved.')).toBeVisible();
@@ -155,7 +155,7 @@ test('iperf table creates, edits and deletes endpoints', async ({ page }) => {
 	await expect(page.getByRole('cell', { name: '5202', exact: true })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Edit Backup server' }).click();
-	const editDialog = page.getByRole('dialog', { name: 'Edit endpoint' });
+	const editDialog = page.getByRole('dialog', { name: 'Edit iperf endpoint' });
 	await editDialog.getByLabel('Port').fill('5203');
 	await editDialog.getByRole('button', { name: 'Save' }).click();
 	await expect(editDialog).toHaveCount(0);
@@ -163,7 +163,7 @@ test('iperf table creates, edits and deletes endpoints', async ({ page }) => {
 
 	await page.getByRole('button', { name: 'Delete Backup server' }).click();
 	await page
-		.getByRole('dialog', { name: 'Delete endpoint?' })
+		.getByRole('dialog', { name: 'Delete iperf endpoint?' })
 		.getByRole('button', { name: 'Delete' })
 		.click();
 	await expect(page.getByText('iperf endpoint deleted.')).toBeVisible();
@@ -176,8 +176,8 @@ test('speedtest table creates, edits and deletes test files', async ({ page }) =
 
 	await expect(page.getByRole('cell', { name: '100 MB test file', exact: true })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Add file' }).click();
-	const dialog = page.getByRole('dialog', { name: 'Add file' });
+	await page.getByRole('button', { name: 'Add test file' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Add test file' });
 	await dialog.getByLabel('Label').fill('1 GB test file');
 	await dialog.getByLabel('Declared size').fill('1 GB');
 	await dialog.getByLabel('Source on node').fill('/files/1gb.bin');
@@ -188,7 +188,7 @@ test('speedtest table creates, edits and deletes test files', async ({ page }) =
 	await expect(page.getByRole('cell', { name: '/files/1gb.bin', exact: true })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Edit 1 GB test file' }).click();
-	const editDialog = page.getByRole('dialog', { name: 'Edit file' });
+	const editDialog = page.getByRole('dialog', { name: 'Edit test file' });
 	await editDialog.getByLabel('Declared size').fill('2 GB');
 	await editDialog.getByRole('button', { name: 'Save' }).click();
 	await expect(editDialog).toHaveCount(0);
@@ -196,7 +196,7 @@ test('speedtest table creates, edits and deletes test files', async ({ page }) =
 
 	await page.getByRole('button', { name: 'Delete 1 GB test file' }).click();
 	await page
-		.getByRole('dialog', { name: 'Delete file?' })
+		.getByRole('dialog', { name: 'Delete test file?' })
 		.getByRole('button', { name: 'Delete' })
 		.click();
 	await expect(page.getByText('Test file deleted.')).toBeVisible();
@@ -231,10 +231,10 @@ test('enrollment tab reports a connected agent and revokes it', async ({ page })
 
 	await page.getByRole('button', { name: 'Revoke agent' }).click();
 	await page
-		.getByRole('dialog', { name: 'Revoke agent?' })
-		.getByRole('button', { name: 'Revoke' })
+		.getByRole('dialog', { name: 'Revoke this agent?' })
+		.getByRole('button', { name: 'Revoke agent' })
 		.click();
-	await expect(page.getByText('Agent revoked.')).toBeVisible();
+	await expect(page.getByText("Revoked Vienna's agent.")).toBeVisible();
 	await expect(page.getByText(/Waiting for the agent to connect/)).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Revoke agent' })).toHaveCount(0);
 });
@@ -243,8 +243,8 @@ test('test IP save rejects an address that does not match the declared family', 
 	await signIn(page, `editor-ip-family-${crypto.randomUUID()}`);
 	await page.goto(editorUrl('fra', 'test-ips'));
 
-	await page.getByRole('button', { name: 'Add IP' }).click();
-	const dialog = page.getByRole('dialog', { name: 'Add IP' });
+	await page.getByRole('button', { name: 'Add test IP' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Add test IP' });
 	await dialog.getByLabel('Name').fill('Mismatched');
 	await dialog.getByLabel('IP address').fill('203.0.113.7');
 	await dialog.getByLabel('Type').click();
