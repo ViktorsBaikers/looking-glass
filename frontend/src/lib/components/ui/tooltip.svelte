@@ -16,7 +16,10 @@
 	const s = tooltip();
 </script>
 
-<Tooltip.Root {disabled}>
+<!-- Tabbing to an off-screen trigger scrolls it into view; with the default
+     closeOnScroll that scroll closes the tooltip the instant focus opened it,
+     so keyboard users never saw it. Positioning follows the trigger anyway. -->
+<Tooltip.Root {disabled} closeOnScroll={false}>
 	<Tooltip.Trigger class={s.trigger}>{@render children()}</Tooltip.Trigger>
 	<Portal>
 		<Tooltip.Positioner class={s.positioner}>

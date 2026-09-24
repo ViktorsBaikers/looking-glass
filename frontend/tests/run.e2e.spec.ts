@@ -62,6 +62,22 @@ test.describe('diagnostic runs', () => {
 		await expect(page.getByText('Average round-trip time across all replies.')).toBeVisible();
 	});
 
+	// Keyboard users reach the same explanations. Tabbing to a trigger below
+	// the fold scrolls it into view, and that scroll once closed the tooltip
+	// the instant focus opened it.
+	test('metric info tooltips open on keyboard focus', async ({ page }) => {
+		await run(page, '1.1.1.1');
+		await expect(page.getByRole('status')).toHaveText('Completed');
+		const about = page.getByRole('button', { name: 'About Latency' });
+		await page.getByRole('button', { name: 'Copy output' }).focus();
+		for (let i = 0; i < 12 && !(await about.evaluate((el) => el === document.activeElement)); i++) {
+			await page.keyboard.press('Tab');
+		}
+		await expect(about).toBeFocused();
+		await expect(about).toHaveAttribute('data-state', 'open');
+		await expect(page.getByRole('tooltip')).toHaveText('Average round-trip time across all replies.');
+	});
+
 	test('Run diagnostic morphs to Cancel and cancelling ends the run', async ({ page }) => {
 		await run(page, 'slow.test');
 		const cancel = page.getByRole('button', { name: 'Cancel' });

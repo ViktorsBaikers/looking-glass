@@ -42,10 +42,25 @@
 	} = $props();
 
 	const s = $derived(tabs({ variant }));
+
+	// Narrow screens scroll the list sideways; a deep-linked or keyboard-selected
+	// tab must not sit off-screen. Horizontal only, so the page never jumps.
+	let list = $state<HTMLElement | null>(null);
+	$effect(() => {
+		const trigger = [...(list?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])].find(
+			(el) => el.dataset.value === active
+		);
+		if (!list || !trigger) return;
+		const bounds = list.getBoundingClientRect();
+		const box = trigger.getBoundingClientRect();
+		if (box.left < bounds.left || box.right > bounds.right) {
+			list.scrollLeft += box.left - bounds.left - (bounds.width - box.width) / 2;
+		}
+	});
 </script>
 
 <ArkTabs.Root bind:value={active} lazyMount unmountOnExit class={cx(s.root, className)}>
-	<ArkTabs.List class={s.list} aria-label={label}>
+	<ArkTabs.List bind:ref={list} class={s.list} aria-label={label}>
 		{#each items as tab (tab.id)}
 			<ArkTabs.Trigger
 				class={s.trigger}

@@ -13,7 +13,7 @@ export const authPage = css({
 	alignItems: 'center',
 	justifyContent: 'center',
 	width: '100%',
-	minHeight: '100vh',
+	minHeight: '100dvh',
 	padding: '48px 24px',
 	overflowX: 'hidden',
 	md: { justifyContent: 'flex-start', paddingLeft: 'max(96px, calc(34vw - 224px))' }

@@ -52,6 +52,26 @@ test.describe('diagnostics page', () => {
 		await expect(page.getByRole('tabpanel')).toHaveCount(1);
 	});
 
+	// The listbox opens attached to its trigger, not stranded at the page's
+	// top-left: a label `id` overriding zag's trigger id once broke positioning.
+	test('method listbox opens under its trigger at the same width', async ({ page }) => {
+		const method = page.getByRole('combobox', { name: 'Method' });
+		await method.click();
+		const listbox = page.getByRole('listbox');
+		await expect(listbox).toBeVisible();
+		await expect
+			.poll(async () => {
+				const [trigger, list] = await Promise.all([method.boundingBox(), listbox.boundingBox()]);
+				if (!trigger || !list) return null;
+				return {
+					left: Math.round(list.x - trigger.x),
+					below: list.y >= trigger.y + trigger.height,
+					width: Math.round(list.width - trigger.width)
+				};
+			})
+			.toEqual({ left: 0, below: true, width: 0 });
+	});
+
 	test('method select lists only offered methods and resets on location change', async ({
 		page
 	}) => {
