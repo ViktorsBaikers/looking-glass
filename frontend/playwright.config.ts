@@ -1,20 +1,23 @@
 import { defineConfig } from '@playwright/test';
+import { APP, FIXTURE } from './tests/ports';
+
+const appPort = new URL(APP).port;
 
 export default defineConfig({
 	testDir: './tests',
-	outputDir: '/tmp/looking-glass-playwright',
+	outputDir: `/tmp/looking-glass-playwright-${appPort}`,
 	use: {
-		baseURL: 'http://127.0.0.1:4173'
+		baseURL: APP
 	},
 	webServer: [
 		{
 			command: 'node tests/fixture-server.mjs',
-			url: 'http://127.0.0.1:4173',
+			url: FIXTURE,
 			reuseExistingServer: false
 		},
 		{
-			command: 'npm run dev -- --config tests/vite-e2e.config.ts --host 127.0.0.1 --port 4174',
-			url: 'http://127.0.0.1:4174',
+			command: `npm run dev -- --config tests/vite-e2e.config.ts --host 127.0.0.1 --port ${appPort} --strictPort`,
+			url: APP,
 			reuseExistingServer: false
 		}
 	]

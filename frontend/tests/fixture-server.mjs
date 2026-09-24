@@ -1,4 +1,4 @@
-// Hermetic mock of the central HTTP API for Playwright e2e (port 4173).
+// Hermetic mock of the central HTTP API for Playwright e2e (port E2E_FIXTURE_PORT, default 4173).
 // Mirrors the endpoints the SPA consumes, seeded with the design/stitch sample
 // data. Mutable state is isolated per test through the `x-looking-glass-fixture`
 // header: each distinct header value gets its own bucket; ids starting with
@@ -12,7 +12,8 @@ const fixture = readFileSync(new URL('./fixture/index.html', import.meta.url));
 
 const now = () => Math.floor(Date.now() / 1000);
 const DAY = 24 * 3600;
-const APP_ORIGIN = 'http://127.0.0.1:4174';
+const FIXTURE_PORT = Number(process.env.E2E_FIXTURE_PORT ?? 4173);
+const APP_ORIGIN = `http://127.0.0.1:${process.env.E2E_APP_PORT ?? 4174}`;
 
 // ----- Seeded catalogue (design/stitch sample data) ----------------------------
 // Frankfurt is first: run.e2e expects the location select to default to 'fra'.
@@ -88,7 +89,7 @@ const locations = [
 		facility: 'Interxion VIE1',
 		facility_url: 'https://www.digitalrealty.com/data-centers/vienna/vie1',
 		kind: 'remote',
-		data_plane_origin: 'http://127.0.0.1:4173',
+		data_plane_origin: `http://127.0.0.1:${FIXTURE_PORT}`,
 		asn: 64500,
 		offered_methods: ['ping', 'ping6', 'mtr', 'traceroute', 'bgp'],
 		status: 'online',
@@ -568,7 +569,7 @@ createServer(async (request, response) => {
 	}
 	response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
 	response.end(fixture);
-}).listen(4173, '127.0.0.1');
+}).listen(FIXTURE_PORT, '127.0.0.1');
 
 async function readJsonBytes(request) {
 	const chunks = [];
