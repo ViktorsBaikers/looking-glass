@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/svelte';
+import { createRawSnippet } from 'svelte';
 import { afterEach, expect, it } from 'vitest';
 import Tabs from './tabs.svelte';
 
@@ -26,4 +27,24 @@ it('labels the tablist for assistive tech', () => {
 	render(Tabs, { props: { tabs: TABS, active: 'settings', label: 'Location editor sections' } });
 
 	expect(screen.getByRole('tablist', { name: 'Location editor sections' })).toBeTruthy();
+});
+
+const panel = createRawSnippet<[{ id: string; label: string }]>((tab) => ({
+	render: () => `<div>content-${tab().id}</div>`
+}));
+
+it('links the selected trigger to a rendered tabpanel', () => {
+	render(Tabs, { props: { tabs: TABS, active: 'methods', panel } });
+
+	const trigger = screen.getByRole('tab', { name: 'Methods' });
+	const tabpanel = screen.getByRole('tabpanel', { name: 'Methods' });
+	expect(trigger.getAttribute('aria-controls')).toBe(tabpanel.id);
+	expect(tabpanel.getAttribute('aria-labelledby')).toBe(trigger.id);
+	expect(tabpanel.textContent).toContain('content-methods');
+});
+
+it('renders no panels when the caller passes no panel snippet', () => {
+	render(Tabs, { props: { tabs: TABS, active: 'methods' } });
+
+	expect(screen.queryByRole('tabpanel')).toBeNull();
 });

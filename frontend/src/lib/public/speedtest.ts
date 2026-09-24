@@ -47,6 +47,14 @@ export function mbps(bytes: number, elapsedMs: number): number {
 	return Math.round((bytes * 8) / (elapsedMs / 1000) / 1e6);
 }
 
+/// Split progress-bar widths (percent of the whole track) for a live run:
+/// `progress` sweeps 0–50 while downloading and 50–100 while uploading, and
+/// each phase's fill stays inside its own half of the track.
+export function barWidths(progress: number): { download: number; upload: number } {
+	const clamped = Math.min(100, Math.max(0, progress));
+	return { download: Math.min(clamped, 50), upload: Math.max(clamped - 50, 0) };
+}
+
 export interface SpeedSample {
 	phase: 'download' | 'upload';
 	downloadMbps: number;
@@ -58,10 +66,20 @@ export interface SpeedSample {
 export interface SpeedResult {
 	downloadMbps: number;
 	uploadMbps: number;
+	/// True when the test-file download was refused (a 404 or other
+	/// non-200/206): no rate was measured and the UI shows a failure instead
+	/// of bogus numbers.
+	failed: boolean;
 }
 
-// 2 MB per request — comfortably under the sink's 25 MB per-request cap.
-const UPLOAD_CHUNK = 2 * 1024 * 1024;
+// Every upload POST counts against central's shared per-client run rate limiter
+// (20 per 60 s by default), so the phase sends as few requests as it can:
+// chunks just under the sinks' 25 MB per-request cap, at most four of them.
+// ponytail: 4 × 24 MiB caps the measurable upload near ~80 Mbps over the 10 s
+// phase and spends at most 4 of the 20-call run allowance; revisit only if the
+// sink cap or the limiter budget grows.
+const UPLOAD_CHUNK = 24 * 1024 * 1024;
+const UPLOAD_MAX_REQUESTS = 4;
 
 function uploadChunk(): ArrayBuffer {
 	const buffer = new ArrayBuffer(UPLOAD_CHUNK);
@@ -73,17 +91,45 @@ function uploadChunk(): ArrayBuffer {
 	return buffer;
 }
 
+/// POST a buffered body with byte-level send progress. `fetch` cannot report
+/// upload progress for a buffered body, and streamed request bodies need
+/// HTTP/2 in Chrome and are unsupported in Firefox. Resolves the HTTP status;
+/// rejects on abort or network failure.
+function postWithProgress(
+	url: string,
+	body: ArrayBuffer,
+	signal: AbortSignal,
+	onProgress: (sent: number) => void
+): Promise<number> {
+	const { promise, resolve, reject } = Promise.withResolvers<number>();
+	if (signal.aborted) {
+		reject(new Error('aborted'));
+		return promise;
+	}
+	const xhr = new XMLHttpRequest();
+	xhr.open('POST', url);
+	xhr.upload.onprogress = (event) => onProgress(event.loaded);
+	xhr.onload = () => resolve(xhr.status);
+	xhr.onerror = xhr.onabort = () => reject(new Error('upload failed'));
+	signal.addEventListener('abort', () => xhr.abort(), { once: true });
+	xhr.send(body);
+	return promise;
+}
+
 async function measureDownload(
 	location: LocationDetail,
 	durationMs: number,
 	onSample: (sample: SpeedSample) => void,
-	current: SpeedResult
-): Promise<number> {
+	current: SpeedResult,
+	signal?: AbortSignal
+): Promise<number | null> {
 	const file = largestTestFile(location.files);
 	if (!file) return 0;
 
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), durationMs);
+	const onAbort = () => controller.abort();
+	signal?.addEventListener('abort', onAbort);
 	const startedAt = performance.now();
 	let bytes = 0;
 	let value = 0;
@@ -92,6 +138,10 @@ async function measureDownload(
 			headers: { range: 'bytes=0-' },
 			signal: controller.signal
 		});
+		// A missing test file answers 404 (and other refusals are possible);
+		// counting an error body as throughput would report a rate that never
+		// happened — refuse anything but a served (200) or ranged (206) body.
+		if (response.status !== 200 && response.status !== 206) return null;
 		const reader = response.body?.getReader();
 		if (!reader) return 0;
 		for (;;) {
@@ -111,6 +161,7 @@ async function measureDownload(
 		// throughput was measured so far.
 	} finally {
 		clearTimeout(timer);
+		signal?.removeEventListener('abort', onAbort);
 	}
 	return value;
 }
@@ -119,48 +170,86 @@ async function measureUpload(
 	url: string,
 	durationMs: number,
 	onSample: (sample: SpeedSample) => void,
-	current: SpeedResult
+	current: SpeedResult,
+	signal?: AbortSignal
 ): Promise<number> {
 	const chunk = uploadChunk();
+	// One deadline for the whole phase: it aborts whichever POST is in flight
+	// when the time is up, instead of leaving a stalled sink pending forever.
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), durationMs);
+	const onAbort = () => controller.abort();
+	signal?.addEventListener('abort', onAbort);
 	const startedAt = performance.now();
-	let bytes = 0;
-	let value = 0;
-	while (performance.now() - startedAt < durationMs) {
-		try {
-			const response = await fetch(url, { method: 'POST', body: chunk });
-			if (!response.ok) break;
-		} catch {
-			break;
-		}
-		bytes += chunk.byteLength;
-		value = mbps(bytes, performance.now() - startedAt);
+	let bytes = 0; // committed by completed requests
+	let sent = 0; // sent so far by the in-flight request
+	let aborted = false;
+	const sample = () => {
 		onSample({
 			phase: 'upload',
 			downloadMbps: current.downloadMbps,
-			uploadMbps: value,
-			progress: Math.min(
-				100,
-				50 + ((performance.now() - startedAt) / durationMs) * 50
-			)
+			uploadMbps: mbps(bytes + sent, performance.now() - startedAt),
+			progress: Math.min(100, 50 + ((performance.now() - startedAt) / durationMs) * 50)
 		});
+	};
+	try {
+		for (let request = 0; request < UPLOAD_MAX_REQUESTS; request++) {
+			sent = 0;
+			try {
+				const status = await postWithProgress(url, chunk, controller.signal, (loaded) => {
+					sent = loaded;
+					sample();
+				});
+				// A 429 (the shared run limiter) or any other refusal ends the
+				// phase gracefully, keeping what was measured so far.
+				if (status < 200 || status >= 300) break;
+			} catch {
+				// Deadline or visitor cancellation mid-request; a plain network
+				// failure did not actually ship the counted bytes.
+				aborted = controller.signal.aborted;
+				break;
+			}
+			bytes += sent;
+			sample();
+		}
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener('abort', onAbort);
 	}
-	return value;
+	// Bytes pushed before a deadline abort still went over the wire.
+	if (aborted) bytes += sent;
+	return mbps(bytes, Math.max(performance.now() - startedAt, 1));
 }
 
 /// Run the full download-then-upload measurement. `onSample` receives live
 /// Mbps readings for the progress UI. Upload is skipped (reported as 0) when
-/// the location has no reachable sink URL.
+/// the location has no reachable sink URL or `signal` was aborted. Pass
+/// `signal` to cancel the whole run (location switch, unmount); stale samples
+/// stop as soon as it fires.
 export async function runSpeedTest(
 	location: LocationDetail,
 	onSample: (sample: SpeedSample) => void,
-	durationMs = 10_000
+	durationMs = 10_000,
+	signal?: AbortSignal
 ): Promise<SpeedResult> {
-	const result: SpeedResult = { downloadMbps: 0, uploadMbps: 0 };
-	result.downloadMbps = await measureDownload(location, durationMs, onSample, result);
-	const uploadUrl = speedtestUploadUrl(location);
-	if (uploadUrl) {
-		result.uploadMbps = await measureUpload(uploadUrl, durationMs, onSample, result);
+	const result: SpeedResult = { downloadMbps: 0, uploadMbps: 0, failed: false };
+	const download = await measureDownload(location, durationMs, onSample, result, signal);
+	if (download === null) {
+		result.failed = true;
+		return result;
 	}
-	onSample({ phase: 'upload', ...result, progress: 100 });
+	result.downloadMbps = download;
+	const uploadUrl = speedtestUploadUrl(location);
+	if (uploadUrl && !signal?.aborted) {
+		result.uploadMbps = await measureUpload(uploadUrl, durationMs, onSample, result, signal);
+	}
+	if (!signal?.aborted) {
+		onSample({
+			phase: 'upload',
+			downloadMbps: result.downloadMbps,
+			uploadMbps: result.uploadMbps,
+			progress: 100
+		});
+	}
 	return result;
 }

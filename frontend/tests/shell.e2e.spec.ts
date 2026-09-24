@@ -42,6 +42,15 @@ test('shell.e2e redirects unauthenticated admin pages to sign-in', async ({ page
 	}
 });
 
+test('shell.e2e sends a revoked session to sign-in on the next admin navigation', async ({ page }) => {
+	await signIn(page);
+	await expect(page.getByRole('heading', { name: 'Locations' })).toBeVisible();
+	// End the session behind the page's back (expiry, removal by a peer).
+	await page.evaluate(() => fetch('/api/auth/logout', { method: 'POST' }));
+	await page.getByRole('link', { name: 'Settings' }).click();
+	await page.waitForURL(`${APP}/login`);
+});
+
 test('shell.e2e remembers the chosen theme across reloads', async ({ page }) => {
 	await page.goto(`${APP}/`);
 	const html = page.locator('html');

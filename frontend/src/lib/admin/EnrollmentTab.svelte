@@ -51,10 +51,16 @@
 	let askRevoke = $state(false);
 	let requestGeneration = 0;
 
-	// Mint a ticket when the tab first renders; tick the countdown while shown.
+	// Mint a ticket exactly once when the tab first renders (one-shot: the
+	// Regenerate button is the only other path to `generate`, so a click can
+	// never double-POST); tick the countdown while shown.
+	let generated = false;
 	$effect(() => {
 		if (kind !== 'remote') return;
-		if (phase === 'loading' && !ticket) void generate();
+		if (!generated) {
+			generated = true;
+			void generate();
+		}
 		const id = setInterval(() => (now = Date.now()), 1000);
 		return () => clearInterval(id);
 	});
@@ -89,9 +95,7 @@
 	}
 
 	function regenerate() {
-		requestGeneration += 1;
 		ticket = null;
-		phase = 'loading';
 		void generate();
 	}
 

@@ -1,6 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { Dialog, Portal } from '@ark-ui/svelte';
 	import type { Component } from 'svelte';
@@ -43,14 +42,25 @@
 	let gate: 'checking' | 'ready' = $state('checking');
 	let drawerOpen = $state(false);
 
-	onMount(async () => {
+	// Fail-closed gate: runs on mount and again on every admin route change
+	// (SvelteKit keeps this layout mounted across sidebar navigation), so an
+	// expired or revoked session is bounced to sign-in on the next move.
+	// Query-only navigations (the editor's ?tab= deep links) keep the gate.
+	afterNavigate((navigation) => {
+		if (navigation.type !== 'enter' && navigation.from?.url.pathname === navigation.to?.url.pathname) {
+			return;
+		}
+		void revalidate();
+	});
+
+	async function revalidate() {
 		const me = await getJson<{ id: number; username: string }>('/api/admin/me');
 		if (me.ok) {
 			gate = 'ready';
 		} else {
 			goto('/login');
 		}
-	});
+	}
 
 	async function logout() {
 		await postJson('/api/auth/logout', {});

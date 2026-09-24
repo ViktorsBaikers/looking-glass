@@ -140,6 +140,8 @@
 							mono
 							placeholder={targetPlaceholder(method)}
 							disabled={controller.active}
+							invalid={targetError !== ''}
+							aria-describedby={targetError ? 'target-error' : undefined}
 						/>
 					</Field>
 				</div>

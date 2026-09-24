@@ -29,7 +29,7 @@
 	{/if}
 	{@render children()}
 	{#if error}
-		<p class={s.error} role="alert">{error}</p>
+		<p class={s.error} role="alert" id={htmlFor ? `${htmlFor}-error` : undefined}>{error}</p>
 	{:else if hint}
 		<p class={s.hint}>{hint}</p>
 	{/if}

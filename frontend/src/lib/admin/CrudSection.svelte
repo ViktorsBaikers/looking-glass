@@ -144,6 +144,7 @@
 			onchanged();
 		} else {
 			formError = result.message;
+			toast.error(result.message);
 		}
 	}
 
