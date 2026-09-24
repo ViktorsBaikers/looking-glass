@@ -22,9 +22,13 @@ const TTL = /\bttl=(\d+)\b/i;
 const TRACEROUTE_HOP = /^\s*\d+\s+\S/;
 
 function pingMetrics(lines: string[]): Metric[] {
-	const rtt = lines.map((line) => RTT.exec(line)).find((match) => match);
+	// The statistics line arrives even when every probe timed out ("4 packets
+	// transmitted, 0 received, 100% packet loss" with no rtt line), so packet
+	// loss is derived on its own; latency/jitter need replies' rtt line and
+	// TTL a reply line.
 	const loss = lines.map((line) => LOSS.exec(line)).find((match) => match);
-	if (!rtt || !loss) return [];
+	if (!loss) return [];
+	const rtt = lines.map((line) => RTT.exec(line)).find((match) => match);
 
 	const ttl = lines
 		.map((line) => TTL.exec(line))
@@ -33,29 +37,32 @@ function pingMetrics(lines: string[]): Metric[] {
 
 	const transmitted = Number(loss[1]);
 	const received = Number(loss[2]);
-	const metrics: Metric[] = [
-		{
+	const metrics: Metric[] = [];
+	if (rtt) {
+		metrics.push({
 			label: 'Latency',
 			value: rtt[2],
 			unit: 'ms',
 			caption: 'avg',
 			tooltip: 'Average round-trip time across all replies.'
-		},
-		{
-			label: 'Packet loss',
-			value: String(Math.round(((transmitted - received) / Math.max(transmitted, 1)) * 100)),
-			unit: '%',
-			caption: `${transmitted - received}/${transmitted}`,
-			tooltip: 'Packets lost versus packets sent.'
-		},
-		{
+		});
+	}
+	metrics.push({
+		label: 'Packet loss',
+		value: String(Math.round(((transmitted - received) / Math.max(transmitted, 1)) * 100)),
+		unit: '%',
+		caption: `${transmitted - received}/${transmitted}`,
+		tooltip: 'Packets lost versus packets sent.'
+	});
+	if (rtt) {
+		metrics.push({
 			label: 'Jitter',
 			value: rtt[4],
 			unit: 'ms',
 			caption: 'mdev',
 			tooltip: 'Mean deviation of the round-trip times — how much latency varies.'
-		}
-	];
+		});
+	}
 	if (ttl) {
 		metrics.push({
 			label: 'TTL',

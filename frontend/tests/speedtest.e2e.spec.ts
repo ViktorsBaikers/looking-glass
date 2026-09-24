@@ -1,4 +1,4 @@
-import { APP } from './ports';
+import { APP, FIXTURE } from './ports';
 import { expect, test } from '@playwright/test';
 
 test.describe('speed tests section', () => {
@@ -27,18 +27,21 @@ test.describe('speed tests section', () => {
 	test('Start Speed Test measures download then upload', async ({ page }) => {
 		test.setTimeout(60_000);
 
-		const uploadRequest = page.waitForRequest(
-			(request) =>
-				request.url().includes('/api/locations/fra/speedtest/upload') && request.method() === 'POST'
-		);
+		// Hold the first upload response so the transient busy state is observable
+		// even though the local fixture answers almost instantly.
+		const { promise: released, resolve: release } = Promise.withResolvers<void>();
+		await page.route('**/api/locations/fra/speedtest/upload', async (route) => {
+			await released;
+			await route.continue();
+		});
 		await page.getByRole('button', { name: 'Start Speed Test' }).click();
 		await expect(page.getByRole('button', { name: 'Testing…' })).toBeDisabled();
 
 		const progress = page.getByRole('progressbar', { name: 'Speed test progress' });
 		await expect(progress).toBeVisible();
 
-		// The upload phase proves the download phase completed against the local sink.
-		await uploadRequest;
+		// Reaching the upload sink proves the download phase completed.
+		release();
 
 		// Runs to completion: live readouts settle and the button returns.
 		await expect(page.getByRole('button', { name: 'Start Speed Test' })).toBeEnabled({
@@ -48,6 +51,27 @@ test.describe('speed tests section', () => {
 		const results = page.getByRole('group', { name: 'Speed test results' });
 		await expect(results).toContainText(/Download\s*\d+\s*Mbps/);
 		await expect(results).toContainText(/Upload\s*\d+\s*Mbps/);
+	});
+
+	test('Start Speed Test measures a remote node through its cross-origin data plane', async ({
+		page
+	}) => {
+		test.setTimeout(60_000);
+		await page.getByRole('tab', { name: 'Vienna (AS64500)' }).click();
+
+		const uploadResponse = page.waitForResponse(
+			(response) =>
+				response.url() === `${FIXTURE}/speedtest/upload` && response.request().method() === 'POST'
+		);
+		await page.getByRole('button', { name: 'Start Speed Test' }).click();
+		expect((await uploadResponse).ok()).toBe(true);
+
+		await expect(page.getByRole('button', { name: 'Start Speed Test' })).toBeEnabled({
+			timeout: 25_000
+		});
+		await expect(page.getByRole('alert')).toHaveCount(0);
+		const results = page.getByRole('group', { name: 'Speed test results' });
+		await expect(results).toContainText(/Upload\s*[1-9]\d*\s*Mbps/);
 	});
 
 	test('Speed test is disabled with no test files configured', async ({ page }) => {

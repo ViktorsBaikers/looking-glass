@@ -52,6 +52,20 @@ describe('metricsFor ping', () => {
 		expect(metricsFor('ping', PING.slice(0, 4))).toEqual([]);
 	});
 
+	it('renders packet loss alone when every probe timed out (no rtt line)', () => {
+		const dead = [
+			'$ ping -c 4 192.0.2.99',
+			'PING 192.0.2.99 (192.0.2.99) 56(84) bytes of data.',
+			'',
+			'--- 192.0.2.99 ping statistics ---',
+			'4 packets transmitted, 0 received, 100% packet loss, time 3005ms'
+		];
+		const metrics = metricsFor('ping', dead);
+		expect(metrics.map((metric) => [metric.label, metric.value, metric.unit, metric.caption])).toEqual([
+			['Packet loss', '100', '%', '4/4']
+		]);
+	});
+
 	it('treats ping6 like ping', () => {
 		expect(metricsFor('ping6', PING).map((metric) => metric.label)).toEqual([
 			'Latency',

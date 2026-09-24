@@ -155,6 +155,7 @@
 			await goto(`/admin/locations/${result.data.id}?tab=${tab}`);
 		} else {
 			createError = result.message;
+			toast.error(result.message);
 		}
 	}
 

@@ -64,3 +64,13 @@ test('settings.e2e changes the default theme through the select and persists it'
 	await expect(page.getByRole('combobox')).toHaveText('Dark');
 	await expect(page.getByText('No unsaved changes.')).toBeVisible();
 });
+
+test('settings.e2e toasts the server refusal and keeps the change unsaved', async ({ page }) => {
+	await signIn(page, `settings-refused-${crypto.randomUUID()}`);
+	await page.goto(`${APP}/admin/settings`);
+
+	await page.getByLabel('Logo URL (optional)').fill('http://example.test/logo.svg');
+	await page.getByRole('button', { name: 'Save settings' }).click();
+	await expect(page.getByText('Logo and terms URLs must use https.')).toBeVisible();
+	await expect(page.getByText('Unsaved changes.')).toBeVisible();
+});

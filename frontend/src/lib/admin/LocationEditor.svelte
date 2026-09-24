@@ -148,9 +148,15 @@
 		>;
 	}
 
+	let loadGeneration = 0;
+
 	async function load(id: string) {
+		const generation = ++loadGeneration;
 		phase = 'loading';
 		const result = await getLocation(id);
+		// A newer load started (route id changed mid-fetch): drop the stale result
+		// so it cannot overwrite the editor now bound to the new id.
+		if (generation !== loadGeneration) return;
 		if (!result.ok) {
 			phase = 'error';
 			return;
@@ -201,6 +207,7 @@
 			await load(locationId);
 		} else {
 			formError = result.message;
+			toast.error(result.message);
 		}
 	}
 </script>
@@ -223,10 +230,11 @@
 		<p class={pageSub}>{detail.kind} node · {detail.status}</p>
 	</header>
 
-	<Tabs {tabs} bind:active label="Location sections" />
-
-	<div class={panelCard}>
-		{#if active === 'settings'}
+	<Tabs {tabs} bind:active label="Location sections" contentClass={panelCard}>
+		{#snippet panel()}
+		{#if !detail}
+			<!-- unreachable: the outer branch guarantees detail -->
+		{:else if active === 'settings'}
 			<form class={formStack} onsubmit={(event) => save(event, 'Location saved.')} novalidate>
 				<Field label="Display name" for="loc-name">
 					<Input id="loc-name" bind:value={form.name} required />
@@ -400,5 +408,6 @@
 				onchanged={reload}
 			/>
 		{/if}
-	</div>
+		{/snippet}
+	</Tabs>
 {/if}

@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { isIP } from 'node:net';
 
 const fixture = readFileSync(new URL('./fixture/index.html', import.meta.url));
 
@@ -333,10 +334,23 @@ const SUB_RESOURCES = {
 	'test-ips': {
 		key: 'test_ips',
 		prefix: 'ip',
-		validate: (body) =>
-			(body.family === 'v4' || body.family === 'v6') &&
-			typeof body.address === 'string' &&
-			body.address.length > 0,
+		// Mirrors central's TestIpInput garde rules + check_address: an address
+		// must be a real IP of the declared family, else the coded 422 message.
+		validate: (body) => {
+			if (body.family !== 'v4' && body.family !== 'v6') return 'A required field is missing or invalid.';
+			if (typeof body.address !== 'string' || body.address.length < 1 || body.address.length > 45) {
+				return 'address: invalid length: expected 1 <= length <= 45';
+			}
+			if (body.label != null && (typeof body.label !== 'string' || [...body.label].length > 100)) {
+				return 'label: invalid length: expected length <= 100';
+			}
+			const parsedFamily = isIP(body.address);
+			if (parsedFamily === 0) return 'Enter a valid IP address.';
+			if (parsedFamily !== (body.family === 'v4' ? 4 : 6)) {
+				return 'The address does not match the selected family.';
+			}
+			return null;
+		},
 		apply: (body) => ({
 			family: body.family,
 			address: body.address,
@@ -351,7 +365,9 @@ const SUB_RESOURCES = {
 			body.label.length > 0 &&
 			typeof body.host === 'string' &&
 			body.host.length > 0 &&
-			typeof body.port === 'number',
+			typeof body.port === 'number'
+				? null
+				: 'A required field is missing or invalid.',
 		apply: (body) => ({
 			label: body.label,
 			host: body.host,
@@ -369,7 +385,9 @@ const SUB_RESOURCES = {
 			typeof body.declared_size === 'string' &&
 			body.declared_size.length > 0 &&
 			typeof body.source_ref === 'string' &&
-			body.source_ref.length > 0,
+			body.source_ref.length > 0
+				? null
+				: 'A required field is missing or invalid.',
 		apply: (body) => ({
 			label: body.label,
 			declared_size: body.declared_size,
@@ -466,6 +484,21 @@ createServer(async (request, response) => {
 		const known = location?.files.some((file) => file.id === fileId);
 		if (!known) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
 		return serveBytes(request, response);
+	}
+	// The agent data plane (/files/*, /speedtest/upload) is fetched cross-origin
+	// by the console, so it answers preflights and exposes the range headers
+	// like the real agent's CorsLayer.
+	const dataPlane = path.startsWith('/files/') || path === '/speedtest/upload';
+	if (dataPlane) {
+		response.setHeader('access-control-allow-origin', '*');
+		response.setHeader('access-control-expose-headers', 'content-length, content-range, accept-ranges');
+		if (method === 'OPTIONS') {
+			response.writeHead(200, {
+				'access-control-allow-methods': 'GET, HEAD, POST, OPTIONS',
+				'access-control-allow-headers': request.headers['access-control-request-headers'] ?? '*'
+			});
+			return response.end();
+		}
 	}
 	if (path.startsWith('/files/')) return serveBytes(request, response);
 
@@ -598,12 +631,12 @@ createServer(async (request, response) => {
 		if (!me) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
 		if (method === 'GET') return json(response, state.settings);
 		if (method === 'PUT') {
-			const next = parseSettings(await readJson(request));
-			if (!next) {
-				return json(response, { error: 'invalid_input', message: 'Settings payload is invalid.' }, 422);
+			const parsed = parseSettings(await readJson(request));
+			if (!parsed.ok) {
+				return json(response, { error: 'invalid_input', message: parsed.message }, 422);
 			}
-			state.settings = next;
-			return json(response, next);
+			state.settings = parsed.settings;
+			return json(response, parsed.settings);
 		}
 	}
 
@@ -771,8 +804,9 @@ createServer(async (request, response) => {
 			const owner = locations.find((candidate) => candidate.id === created[1]);
 			if (!owner) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
 			const body = await readJson(request);
-			if (!spec.validate(body)) {
-				return json(response, { error: 'invalid_input', message: 'A required field is missing or invalid.' }, 422);
+			const invalid = spec.validate(body);
+			if (invalid) {
+				return json(response, { error: 'invalid_input', message: invalid }, 422);
 			}
 			const record = { id: `${spec.prefix}-${randomUUID()}`, location_id: owner.id, ...spec.apply(body) };
 			owner[spec.key].push(record);
@@ -793,8 +827,9 @@ createServer(async (request, response) => {
 			if (!record) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
 			if (method === 'PUT') {
 				const body = await readJson(request);
-				if (!spec.validate(body)) {
-					return json(response, { error: 'invalid_input', message: 'A required field is missing or invalid.' }, 422);
+				const invalid = spec.validate(body);
+				if (invalid) {
+					return json(response, { error: 'invalid_input', message: invalid }, 422);
 				}
 				Object.assign(record, spec.apply(body));
 				return json(response, record);
@@ -866,16 +901,35 @@ async function readJsonBytes(request) {
 }
 
 /// Mirrors central's GlobalSettings validation closely enough for e2e: rejects
-/// payloads the real server would 422.
+/// payloads the real server would 422, with the central message.
+function isHttpsUrl(value) {
+	if (typeof value !== 'string') return false;
+	try {
+		const url = new URL(value);
+		return url.protocol === 'https:' && url.hostname !== '';
+	} catch {
+		return false;
+	}
+}
+
+/// Mirrors central's is_optional_https_url: null passes; otherwise a string
+/// within max chars that parses as an https URL with an authority.
+function optionalHttpsUrl(value, max) {
+	return value === null || ([...String(value ?? '')].length <= max && isHttpsUrl(value));
+}
+
 function parseSettings(body) {
-	if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+	const invalid = { ok: false, message: 'Settings payload is invalid.' };
+	if (!body || typeof body !== 'object' || Array.isArray(body)) return invalid;
 	const positiveInt = (value) => Number.isInteger(value) && value >= 1;
 	const optionalString = (value, max) =>
 		value === null || (typeof value === 'string' && value.length <= max);
-	if (typeof body.site_title !== 'string' || body.site_title.length < 1 || body.site_title.length > 100) return null;
-	if (body.default_theme !== 'system' && body.default_theme !== 'light' && body.default_theme !== 'dark') return null;
-	if (!optionalString(body.logo_url, 500) || !optionalString(body.terms_url, 300)) return null;
-	if (!optionalString(body.custom_block, 5000)) return null;
+	if (typeof body.site_title !== 'string' || body.site_title.length < 1 || body.site_title.length > 100) return invalid;
+	if (body.default_theme !== 'system' && body.default_theme !== 'light' && body.default_theme !== 'dark') return invalid;
+	if (!optionalHttpsUrl(body.logo_url, 500) || !optionalHttpsUrl(body.terms_url, 300)) {
+		return { ok: false, message: 'Logo and terms URLs must use https.' };
+	}
+	if (!optionalString(body.custom_block, 5000)) return invalid;
 	if (
 		!positiveInt(body.exec_max_concurrent) ||
 		!positiveInt(body.exec_timeout_secs) ||
@@ -883,18 +937,21 @@ function parseSettings(body) {
 		!positiveInt(body.exec_rate_max) ||
 		!positiveInt(body.exec_rate_window_secs)
 	) {
-		return null;
+		return invalid;
 	}
 	return {
-		site_title: body.site_title,
-		logo_url: body.logo_url,
-		default_theme: body.default_theme,
-		terms_url: body.terms_url,
-		custom_block: body.custom_block,
-		exec_max_concurrent: body.exec_max_concurrent,
-		exec_timeout_secs: body.exec_timeout_secs,
-		exec_max_output_kib: body.exec_max_output_kib,
-		exec_rate_max: body.exec_rate_max,
-		exec_rate_window_secs: body.exec_rate_window_secs
+		ok: true,
+		settings: {
+			site_title: body.site_title,
+			logo_url: body.logo_url,
+			default_theme: body.default_theme,
+			terms_url: body.terms_url,
+			custom_block: body.custom_block,
+			exec_max_concurrent: body.exec_max_concurrent,
+			exec_timeout_secs: body.exec_timeout_secs,
+			exec_max_output_kib: body.exec_max_output_kib,
+			exec_rate_max: body.exec_rate_max,
+			exec_rate_window_secs: body.exec_rate_window_secs
+		}
 	};
 }

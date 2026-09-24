@@ -5,7 +5,7 @@
 	import CopyButton from '$lib/components/ui/copy-button.svelte';
 	import { cx } from 'styled-system/css';
 	import { downloadUrl } from './api.js';
-	import { runSpeedTest } from './speedtest.js';
+	import { barWidths, runSpeedTest } from './speedtest.js';
 	import {
 		speedSection,
 		speedTitle,
@@ -30,6 +30,7 @@
 		barDownload,
 		barUpload,
 		noFilesNote,
+		panelError,
 		fileLinks,
 		fileLink,
 		fileSize,
@@ -41,50 +42,79 @@
 
 	let running = $state(false);
 	let measured = $state(false);
+	let failed = $state(false);
 	let downloadMbps = $state(0);
 	let uploadMbps = $state(0);
 	let progress = $state(0);
 
 	const hasFiles = $derived(location.files.length > 0);
 
-	// Measurements belong to one location; reset when the visitor switches tabs.
+	// Measurements belong to one location; switching tabs (or unmounting)
+	// cancels the in-flight test and resets the readouts. `runId` fences stale
+	// progress callbacks from a cancelled run out of the fresh state.
+	let runId = 0;
+	let abort: AbortController | null = null;
+
+	function cancelRun() {
+		runId++;
+		abort?.abort();
+		abort = null;
+	}
+
 	$effect(() => {
 		if (location.id) {
 			running = false;
 			measured = false;
+			failed = false;
 			downloadMbps = 0;
 			uploadMbps = 0;
 			progress = 0;
 		}
+		return cancelRun;
 	});
 
 	async function start() {
+		const controller = new AbortController();
+		abort = controller;
+		const id = ++runId;
 		running = true;
+		failed = false;
 		try {
-			await runSpeedTest(location, (sample) => {
-				downloadMbps = sample.downloadMbps;
-				uploadMbps = sample.uploadMbps;
-				progress = sample.progress;
-			});
-			measured = true;
-			progress = 100;
+			const result = await runSpeedTest(
+				location,
+				(sample) => {
+					if (id !== runId) return;
+					downloadMbps = sample.downloadMbps;
+					uploadMbps = sample.uploadMbps;
+					progress = sample.progress;
+				},
+				undefined,
+				controller.signal
+			);
+			if (id !== runId) return;
+			failed = result.failed;
+			measured = !result.failed;
+			if (!result.failed) progress = 100;
 		} finally {
-			running = false;
+			if (id === runId) {
+				running = false;
+				if (abort === controller) abort = null;
+			}
 		}
 	}
 
 	// Finished runs split the bar proportionally to the two measured speeds;
-	// while running each phase fills its own half.
-	const downloadWidth = $derived(
-		measured && downloadMbps + uploadMbps > 0
+	// while running each phase fills its own half (download 0–50% of the
+	// track, upload 50–100%).
+	const doneSplit = $derived(
+		downloadMbps + uploadMbps > 0
 			? Math.round((downloadMbps / (downloadMbps + uploadMbps)) * 100)
-			: Math.min(progress, 50) * 2 * (measured ? 0 : 1)
+			: 0
 	);
-	const uploadWidth = $derived(
-		measured && downloadMbps + uploadMbps > 0
-			? 100 - downloadWidth
-			: Math.max(progress - 50, 0) * 2 * (measured ? 0 : 1)
-	);
+	const doneUploadSplit = $derived(doneSplit > 0 ? 100 - doneSplit : 0);
+	const liveWidths = $derived(barWidths(progress));
+	const downloadWidth = $derived(measured ? doneSplit : liveWidths.download);
+	const uploadWidth = $derived(measured ? doneUploadSplit : liveWidths.upload);
 </script>
 
 <section class={speedSection} aria-label="Speed Tests">
@@ -135,6 +165,10 @@
 
 			{#if !hasFiles}
 				<p class={noFilesNote}>No test files configured</p>
+			{/if}
+
+			{#if failed}
+				<p class={panelError} role="alert">Speed test failed — the test file could not be downloaded.</p>
 			{/if}
 
 			<div class={readouts} role="group" aria-label="Speed test results">
