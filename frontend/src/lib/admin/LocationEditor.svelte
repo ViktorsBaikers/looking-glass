@@ -1,12 +1,12 @@
 <script lang="ts">
-	import ArrowLeft from '@lucide/svelte/icons/arrow-left';
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+	import ArrowLeft from '~icons/material-symbols/arrow-back';
+	import LoaderCircle from '~icons/material-symbols/progress-activity';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import Tabs from '$lib/components/ui/tabs.svelte';
 	import CrudSection from './CrudSection.svelte';
-	import { toaster } from '$lib/toast.svelte.js';
+	import { toast } from '$lib/toast.svelte.js';
 	import { OFFERED_METHODS } from './types.js';
 	import type { LocationDetail, OfferedMethod } from './types.js';
 	import {
@@ -96,7 +96,7 @@
 		const result = await updateLocation(locationId, form);
 		savingLocation = false;
 		if (result.ok) {
-			toaster.success('Location saved.');
+			toast.success('Location saved.');
 			await load(locationId);
 		} else {
 			locationError = result.message;
@@ -105,7 +105,7 @@
 	}
 
 	const reload = () => {
-		toaster.success('Saved.');
+		toast.success('Saved.');
 		void load(locationId);
 	};
 </script>

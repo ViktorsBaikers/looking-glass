@@ -1,17 +1,17 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
-	import Plus from '@lucide/svelte/icons/plus';
-	import Pencil from '@lucide/svelte/icons/pencil';
-	import Trash2 from '@lucide/svelte/icons/trash-2';
-	import Unplug from '@lucide/svelte/icons/unplug';
+	import LoaderCircle from '~icons/material-symbols/progress-activity';
+	import Plus from '~icons/material-symbols/add';
+	import Pencil from '~icons/material-symbols/edit';
+	import Trash2 from '~icons/material-symbols/delete';
+	import Unplug from '~icons/material-symbols/link-off';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import Dialog from '$lib/components/ui/dialog.svelte';
 	import LocationEditor from '$lib/admin/LocationEditor.svelte';
 	import EnrollDialog from '$lib/admin/EnrollDialog.svelte';
-	import { toaster } from '$lib/toast.svelte.js';
+	import { toast } from '$lib/toast.svelte.js';
 	import {
 		listLocations,
 		createLocation,
@@ -93,7 +93,7 @@
 		creating = false;
 		if (result.ok) {
 			showCreate = false;
-			toaster.success('Location created.');
+			toast.success('Location created.');
 			await load();
 			// A remote location needs an agent — show its enrollment command before
 			// dropping into the editor. A local node runs on the built-in node, so it
@@ -130,7 +130,7 @@
 			if (result.ok) {
 				showDelete = false;
 				pendingDelete = null;
-				toaster.success(`Deleted ${location.name} and everything under it.`);
+				toast.success(`Deleted ${location.name} and everything under it.`);
 				await load();
 			} else {
 				deleteError = result.message;
@@ -151,7 +151,7 @@
 			if (result.ok) {
 				showRevoke = false;
 				pendingRevoke = null;
-				toaster.success(`Revoked ${location.name}'s agent.`);
+				toast.success(`Revoked ${location.name}'s agent.`);
 				await load();
 			} else {
 				revokeError = result.message;
@@ -202,7 +202,7 @@
 		{:else if phase === 'error'}
 			<div class="rounded-md border border-destructive/40 px-4 py-6 text-sm text-destructive" role="alert">
 				<p>Locations could not be loaded.</p>
-				<Button variant="outline" size="sm" class="mt-3" onclick={load}>Try again</Button>
+				<Button variant="secondary" size="sm" class="mt-3" onclick={load}>Try again</Button>
 			</div>
 		{:else if locations.length === 0}
 			<div class="rounded-md border border-dashed border-border px-4 py-12 text-center">
@@ -245,7 +245,7 @@
 							{#if location.kind === 'remote'}
 								<Button
 									size="sm"
-									variant="outline"
+									variant="secondary"
 									onclick={() => askRevoke(location)}
 								>
 									<Unplug class="size-4" aria-hidden="true" />
@@ -254,7 +254,7 @@
 							{/if}
 							<Button
 								size="sm"
-								variant="outline"
+								variant="secondary"
 								onclick={() => (editingId = location.id)}
 							>
 								<Pencil class="size-4" aria-hidden="true" />
@@ -341,7 +341,7 @@
 		<Button type="button" variant="ghost" onclick={() => (showDelete = false)} disabled={deleting}>
 			Cancel
 		</Button>
-		<Button type="button" variant="destructive" onclick={confirmDelete} disabled={deleting}>
+		<Button type="button" variant="danger" onclick={confirmDelete} disabled={deleting}>
 			{deleting ? 'Deleting…' : 'Delete location'}
 		</Button>
 		</div>
@@ -362,7 +362,7 @@
 		<Button type="button" variant="ghost" onclick={() => (showRevoke = false)} disabled={revoking}>
 			Cancel
 		</Button>
-		<Button type="button" variant="destructive" onclick={confirmRevoke} disabled={revoking}>
+		<Button type="button" variant="danger" onclick={confirmRevoke} disabled={revoking}>
 			{revoking ? 'Revoking…' : 'Revoke agent'}
 		</Button>
 		</div>

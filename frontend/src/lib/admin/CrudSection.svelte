@@ -4,9 +4,9 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import Dialog from '$lib/components/ui/dialog.svelte';
-	import Pencil from '@lucide/svelte/icons/pencil';
-	import Trash2 from '@lucide/svelte/icons/trash-2';
-	import Plus from '@lucide/svelte/icons/plus';
+	import Pencil from '~icons/material-symbols/edit';
+	import Trash2 from '~icons/material-symbols/delete';
+	import Plus from '~icons/material-symbols/add';
 
 	interface FieldDef {
 		key: string;
@@ -125,7 +125,7 @@
 <section class="space-y-4">
 	<div class="flex items-center justify-between">
 		<h3 class="text-sm font-semibold text-muted-foreground">{title}</h3>
-		<Button size="sm" variant="outline" onclick={startAdd}>
+		<Button size="sm" variant="secondary" onclick={startAdd}>
 			<Plus class="size-4" aria-hidden="true" />
 			{addLabel}
 		</Button>
@@ -211,7 +211,7 @@
 			<Button type="button" variant="ghost" onclick={() => (showDelete = false)} disabled={deleting}>
 				Cancel
 			</Button>
-			<Button type="button" variant="destructive" onclick={confirmDelete} disabled={deleting}>
+			<Button type="button" variant="danger" onclick={confirmDelete} disabled={deleting}>
 				{deleting ? 'Deleting…' : 'Delete'}
 			</Button>
 		</div>

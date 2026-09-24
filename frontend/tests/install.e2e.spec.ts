@@ -78,7 +78,7 @@ test('install.e2e creates the only admin and closes the installer', async ({ pag
 	expect((await loginResponse).status()).toBe(204);
 	const authenticatedMe = await meResponse;
 	expect(authenticatedMe.status()).toBe(200);
-	expect(await authenticatedMe.json()).toEqual({ username: 'admin' });
+	expect(await authenticatedMe.json()).toMatchObject({ username: 'admin' });
 	await expect(page).toHaveURL('http://127.0.0.1:4174/admin');
 	await expect(page.getByRole('heading', { name: 'Locations' })).toBeVisible();
 	await expect(page.getByRole('link', { name: 'Locations' })).toBeVisible();

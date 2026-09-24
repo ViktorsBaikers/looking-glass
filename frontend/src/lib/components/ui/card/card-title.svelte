@@ -1,10 +1,17 @@
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
-	import { cn } from '$lib/utils.js';
+	import type { Snippet } from 'svelte';
+	import { cx } from 'styled-system/css';
+	import { card } from 'styled-system/recipes';
 
-	let { class: className, children, ...rest }: HTMLAttributes<HTMLHeadingElement> = $props();
+	let {
+		class: className,
+		children,
+		...rest
+	}: Omit<HTMLAttributes<HTMLHeadingElement>, 'class'> & { class?: string; children?: Snippet } =
+		$props();
 </script>
 
-<h1 class={cn('text-lg font-semibold leading-none tracking-tight', className)} {...rest}>
+<h2 class={cx(card().title, className)} {...rest}>
 	{@render children?.()}
-</h1>
+</h2>

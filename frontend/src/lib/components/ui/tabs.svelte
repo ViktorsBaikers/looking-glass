@@ -1,36 +1,33 @@
 <script lang="ts">
-	import { cn } from '$lib/utils.js';
+	import { Tabs as ArkTabs } from '@ark-ui/svelte';
+	import { cx } from 'styled-system/css';
+	import { tabs } from 'styled-system/recipes';
 
+	/**
+	 * Controlled tab list (Ark Tabs machine → arrow-key navigation + ARIA for
+	 * free). Panels are rendered by the page keyed off `active`; this component
+	 * owns only the tablist. `active` is bindable so a page can drive it from a
+	 * URL query parameter.
+	 */
 	let {
-		tabs,
-		active = $bindable()
+		tabs: items,
+		active = $bindable(),
+		label = 'Sections',
+		class: className
 	}: {
 		tabs: { id: string; label: string }[];
 		active: string;
+		label?: string;
+		class?: string;
 	} = $props();
+
+	const s = tabs();
 </script>
 
-<div
-	role="tablist"
-	class="flex flex-wrap gap-1 border-b border-border"
-	aria-label="Location editor sections"
->
-	{#each tabs as tab (tab.id)}
-		<button
-			type="button"
-			role="tab"
-			id="tab-{tab.id}"
-			aria-selected={active === tab.id}
-			aria-controls="panel-{tab.id}"
-			class={cn(
-				'-mb-px min-h-11 border-b-2 px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-				active === tab.id
-					? 'border-primary text-foreground'
-					: 'border-transparent text-muted-foreground hover:text-foreground'
-			)}
-			onclick={() => (active = tab.id)}
-		>
-			{tab.label}
-		</button>
-	{/each}
-</div>
+<ArkTabs.Root bind:value={active} class={cx(s.root, className)}>
+	<ArkTabs.List class={s.list} aria-label={label}>
+		{#each items as tab (tab.id)}
+			<ArkTabs.Trigger class={s.trigger} value={tab.id}>{tab.label}</ArkTabs.Trigger>
+		{/each}
+	</ArkTabs.List>
+</ArkTabs.Root>

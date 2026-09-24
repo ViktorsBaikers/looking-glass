@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+	import LoaderCircle from '~icons/material-symbols/progress-activity';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
@@ -155,7 +155,7 @@
 							<LoaderCircle class="size-4 animate-spin" aria-hidden="true" />
 							{controller.status === 'connecting' ? 'Connecting' : 'Running'}
 						</span>
-						<Button type="submit" variant="destructive" class="flex-1 sm:flex-none">Cancel</Button>
+						<Button type="submit" variant="danger" class="flex-1 sm:flex-none">Cancel</Button>
 					</div>
 				{:else}
 					<Button type="submit" class="w-full sm:w-auto" disabled={!canRun}>

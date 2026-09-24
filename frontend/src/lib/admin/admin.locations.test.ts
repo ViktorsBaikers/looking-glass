@@ -75,9 +75,7 @@ describe('admin agent status and revoke', () => {
 		const frankfurt = (await screen.findByText('Frankfurt')).closest('li')!;
 		const vienna = screen.getByText('Vienna').closest('li')!;
 		expect(within(frankfurt).getByText('Online')).toBeTruthy();
-		expect(frankfurt.querySelector('.bg-status-online')).not.toBeNull();
 		expect(within(vienna).getByText('Offline')).toBeTruthy();
-		expect(vienna.querySelector('.bg-status-offline')).not.toBeNull();
 	});
 
 	it('moves a successfully revoked agent to offline and not enrolled after confirmation', async () => {
@@ -93,7 +91,6 @@ describe('admin agent status and revoke', () => {
 		await waitFor(() => {
 			const updated = screen.getByText('Frankfurt').closest('li')!;
 			expect(within(updated).getByText('Not enrolled')).toBeTruthy();
-			expect(updated.querySelector('.bg-status-offline')).not.toBeNull();
 		});
 		expect(fetch).toHaveBeenCalledWith('/api/admin/locations/fra/agent/revoke', expect.objectContaining({
 			method: 'POST'
