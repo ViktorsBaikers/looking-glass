@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-24T00:00:00Z",
+  "title": "Design System: Looking Glass",
+  "extensions": {
+    "colorMeta": {
+      "ink": { "role": "primary", "displayName": "Map Ink", "canonical": "light-dark(#16171a, #ecece6)" },
+      "map-paper": { "role": "neutral", "displayName": "Map Paper", "canonical": "light-dark(#f3f3f0, #111214)" },
+      "map-panel": { "role": "neutral", "displayName": "Panel White", "canonical": "light-dark(#ffffff, #18191c)" },
+      "map-sunk": { "role": "neutral", "displayName": "Sunk Grey", "canonical": "light-dark(#ebebe7, #0b0c0d)" },
+      "ink-muted": { "role": "neutral", "displayName": "Muted Ink", "canonical": "light-dark(#595c63, #a2a5ab)" },
+      "rule": { "role": "neutral", "displayName": "Rule", "canonical": "light-dark(#dcdcd6, #2a2c30)" },
+      "signal-ok": { "role": "tertiary", "displayName": "Signal Green", "canonical": "light-dark(#1d7a4a, #52c98b)" },
+      "signal-warn": { "role": "tertiary", "displayName": "Signal Amber", "canonical": "light-dark(#9a5200, #f5b453)" },
+      "signal-danger": { "role": "tertiary", "displayName": "Signal Red", "canonical": "light-dark(#b3261e, #ff8a80)" },
+      "line-red": { "role": "secondary", "displayName": "Line Red", "canonical": "light-dark(#c8102e, #ff6b6b)" },
+      "line-blue": { "role": "secondary", "displayName": "Line Blue", "canonical": "light-dark(#0b5cad, #5ea8ff)" },
+      "line-green": { "role": "secondary", "displayName": "Line Green", "canonical": "light-dark(#00783a, #45cf85)" },
+      "line-ochre": { "role": "secondary", "displayName": "Line Ochre", "canonical": "light-dark(#8a6500, #f5c842)" },
+      "line-violet": { "role": "secondary", "displayName": "Line Violet", "canonical": "light-dark(#6b3fa0, #b48cff)" },
+      "line-teal": { "role": "secondary", "displayName": "Line Teal", "canonical": "light-dark(#00747a, #35c6cb)" },
+      "line-orange": { "role": "secondary", "displayName": "Line Orange", "canonical": "light-dark(#b34a0c, #ff9147)" },
+      "line-magenta": { "role": "secondary", "displayName": "Line Magenta", "canonical": "light-dark(#b0006d, #ff66b8)" },
+      "line-brown": { "role": "secondary", "displayName": "Line Brown", "canonical": "light-dark(#7a4a1e, #d19a5f)" }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page h1 at md+." },
+      "title": { "displayName": "Title", "purpose": "Section h2, card and dialog titles." },
+      "code": { "displayName": "Code", "purpose": "Tool output and data only." },
+      "numeral": { "displayName": "Numeral", "purpose": "Run metrics, tabular." }
+    },
+    "shadows": [
+      { "name": "popup", "value": "0 1px 2px rgba(10,11,13,0.08), 0 12px 32px -8px rgba(10,11,13,0.28)", "purpose": "Floating layers only: menus, tooltips, dialogs, toasts, drawer." }
+    ],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "All state transitions and entrances." },
+      { "name": "station-in", "value": "320ms ease-out, translateY(-4px) to 0", "purpose": "Route-view hop rows arriving; mtr staggers 60ms." },
+      { "name": "here-pulse", "value": "1.4s infinite halo in the line colour", "purpose": "Newest hop while a traceroute streams." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" },
+      { "name": "xl", "value": "1280px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Solid ink, one per view.",
+      "html": "<button class=\"ds-btn\">Run Diagnostic</button>",
+      "css": ".ds-btn { background: #16171a; color: #fff; font: 700 14px/16px Overpass, sans-serif; height: 40px; padding: 0 16px; border: 0; border-radius: 2px; } .ds-btn:hover { background: #33353b; } .ds-btn:focus-visible { outline: 2px solid #16171a; outline-offset: 2px; }"
+    },
+    {
+      "name": "Location Roundel",
+      "kind": "custom",
+      "refersTo": "roundel",
+      "description": "A Location's identity: its line colour and code.",
+      "html": "<span class=\"ds-roundel\">FRA</span>",
+      "css": ".ds-roundel { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: #b34a0c; color: #fff; font: 800 10px Overpass, sans-serif; letter-spacing: .02em; }"
+    },
+    {
+      "name": "Status Signal",
+      "kind": "chip",
+      "refersTo": "status-badge",
+      "description": "A 16x4 line segment: solid online, dotted offline, dashed not enrolled.",
+      "html": "<span class=\"ds-status\"><i></i>Online</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; gap: 8px; font: 600 13px Overpass, sans-serif; color: #16171a; } .ds-status i { width: 16px; border-top: 4px solid #1d7a4a; }"
+    },
+    {
+      "name": "Route Station",
+      "kind": "custom",
+      "refersTo": "route-view",
+      "description": "A hop drawn as a station on the run Location's 6px line.",
+      "html": "<span class=\"ds-station\"><b></b></span>",
+      "css": ".ds-station { position: relative; display: inline-block; width: 40px; height: 40px; } .ds-station::before { content: ''; position: absolute; left: 17px; top: 0; bottom: 0; width: 6px; background: #b34a0c; } .ds-station b { position: absolute; left: 13px; top: 13px; width: 14px; height: 14px; box-sizing: border-box; border: 3px solid #16171a; border-radius: 50%; background: #fff; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Backbone Map",
+    "overview": "Carriers draw their networks as transit diagrams; Looking Glass takes that grammar literally. Each Location is a coloured line with a roundel code, each hop a station, each status a way of drawing the line. Chrome is neutral paper and ink so any operator brand sits on it; colour belongs to network data only.",
+    "keyCharacteristics": [
+      "Neutral map paper / charcoal night map, ink chrome",
+      "Location line colours are the only saturated colour",
+      "Square panels, hairlines, 2px controls, round roundels and stations",
+      "Overpass for reading, Overpass Mono for data",
+      "Route view: hops as stations on the run's line"
+    ],
+    "rules": [
+      { "name": "The Line Owns the Colour Rule", "body": "Saturated colour appears only on Location data. Buttons, links, navigation and focus are ink.", "section": "colors" },
+      { "name": "The light-dark() Rule", "body": "Every semantic token is one light-dark() value; flip a subtree with .dark / .light.", "section": "colors" },
+      { "name": "The Mono Means Data Rule", "body": "Mono only for tool output, addresses, commands, ports, ASNs, tokens.", "section": "typography" },
+      { "name": "The Flat Map Rule", "body": "At-rest surfaces never cast a shadow; no glow.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do lead any Location display with its roundel via data-line + lineStyle(id)",
+      "Do use ruled rows inside one panel for collections",
+      "Do keep raw tool output intact beside any visualisation",
+      "Do keep one primary ink action per view"
+    ],
+    "donts": [
+      "Don't use neon-on-black, CRT, glow or traffic-light window dots",
+      "Don't use gradients, glass or soft rounded card grids",
+      "Don't colour chrome with a line or signal colour",
+      "Don't add uppercase tracked labels, eyebrows or monospace labels",
+      "Don't cast shadows from at-rest surfaces"
+    ]
+  }
+}
