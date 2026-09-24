@@ -82,3 +82,36 @@ async fn unmatched_non_api_path_serves_the_spa_shell() {
         "client-side routes must fall through to index.html"
     );
 }
+
+// Fingerprinted assets are cached for good and compressed; the shell and any
+// miss (a chunk from a previous deploy) must revalidate, never be pinned.
+#[tokio::test]
+async fn spa_assets_are_compressed_and_cached_by_kind() {
+    let shell = request("/", app()).await;
+    assert_eq!(shell.headers()["cache-control"], "no-cache");
+    let html = body_string(shell).await;
+    let asset = html
+        .split('"')
+        .find(|part| part.starts_with("/_app/immutable/") && part.ends_with(".js"))
+        .expect("the shell links a fingerprinted script")
+        .to_string();
+
+    let response = app()
+        .oneshot(
+            Request::builder()
+                .uri(&asset)
+                .header("accept-encoding", "gzip")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.headers()["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+    assert_eq!(response.headers()["content-encoding"], "gzip");
+
+    let stale = request("/_app/immutable/chunks/gone.js", app()).await;
+    assert_eq!(stale.headers()["cache-control"], "no-cache");
+}
