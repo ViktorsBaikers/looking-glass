@@ -75,9 +75,9 @@ export interface SpeedResult {
 // Every upload POST counts against central's shared per-client run rate limiter
 // (20 per 60 s by default), so the phase sends as few requests as it can:
 // chunks just under the sinks' 25 MB per-request cap, at most four of them.
-// ponytail: 4 × 24 MiB caps the measurable upload near ~80 Mbps over the 10 s
-// phase and spends at most 4 of the 20-call run allowance; revisit only if the
-// sink cap or the limiter budget grows.
+// ponytail: at most ~100 MB per phase, so links above ~80 Mbps finish before
+// the 10 s deadline and are measured over a shorter window; spends at most 4
+// of the 20-call run allowance. Revisit if the sink cap or limiter budget grows.
 const UPLOAD_CHUNK = 24 * 1024 * 1024;
 const UPLOAD_MAX_REQUESTS = 4;
 
