@@ -69,6 +69,8 @@ export const pageNote = css({
 	borderTopStyle: 'solid',
 	borderTopColor: 'rule'
 });
+/** A note with its recovery action inline (load failure → Try again). */
+export const pageNoteRow = css({ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '12px' });
 
 // ----- station facts (StatusPanel) -----
 export const statusList = css({

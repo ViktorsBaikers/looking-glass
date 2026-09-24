@@ -14,6 +14,7 @@
 	import { cx } from 'styled-system/css';
 	import {
 		shell,
+		skipLink,
 		header,
 		headerInner,
 		brand,
@@ -48,6 +49,20 @@
 	const isAdminRoute = $derived(path === '/admin' || path.startsWith('/admin/'));
 	const isDiagnostics = $derived(path === '/');
 	const showHeader = $derived(!isAuthRoute);
+	// Tab and history titles name the page, so admins juggling tabs can tell them apart.
+	const SECTIONS: [string, string][] = [
+		['/admin/locations/', 'Location'],
+		['/admin/administrators', 'Administrators'],
+		['/admin/settings', 'Settings'],
+		['/admin', 'Locations'],
+		['/login', 'Sign in'],
+		['/install', 'Set up'],
+		['/activate', 'Activate account']
+	];
+	const section = $derived(SECTIONS.find(([prefix]) => path.startsWith(prefix))?.[1]);
+	$effect(() => {
+		document.title = section ? `${section} · ${siteTitle}` : siteTitle;
+	});
 	const showFooter = $derived(!isAuthRoute && !isAdminRoute && !!(termsUrl || customBlock));
 
 	// Re-check the session after every navigation so the Administration link
@@ -66,7 +81,6 @@
 			logoUrl = settings.logo_url;
 			termsUrl = settings.terms_url;
 			customBlock = settings.custom_block;
-			document.title = settings.site_title;
 			theme.applyDefault(settings.default_theme);
 		}
 	});
@@ -75,6 +89,7 @@
 
 <div class={shell}>
 	{#if showHeader}
+		<a href="#main" class={skipLink}>Skip to content</a>
 		<header class={header}>
 			<div class={headerInner}>
 				<a href="/" class={brand}>
@@ -106,7 +121,7 @@
 		</header>
 	{/if}
 
-	<main class={main}>
+	<main class={main} id="main" tabindex="-1">
 		{@render children?.()}
 	</main>
 

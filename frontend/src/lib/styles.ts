@@ -18,7 +18,22 @@ export const srOnly = css({
 });
 
 // ----- public shell (routes/+layout.svelte) -----
-export const shell = css({ display: 'flex', flexDirection: 'column', minHeight: '100vh' });
+// dvh, not vh: on mobile, 100vh includes the collapsing browser bar.
+export const shell = css({ display: 'flex', flexDirection: 'column', minHeight: '100dvh' });
+/** Hidden until focused: the first Tab stop jumps past the header to the page. */
+export const skipLink = css({
+	position: 'absolute',
+	left: '12px',
+	top: '8px',
+	zIndex: 70,
+	padding: '8px 12px',
+	background: 'ink',
+	color: 'on-ink',
+	textStyle: 'label',
+	borderRadius: 'sm',
+	transform: 'translateY(-200%)',
+	_focusVisible: { transform: 'none', outline: '2px solid {colors.ink}', outlineOffset: '2px' }
+});
 export const header = css({
 	position: 'sticky',
 	top: '0',
@@ -144,7 +159,7 @@ export const sidebar = css({
 		flexDirection: 'column',
 		width: '220px',
 		flexShrink: 0,
-		height: 'calc(100vh - 56px)',
+		height: 'calc(100dvh - 56px)',
 		overflowY: 'auto',
 		padding: '40px 24px 24px 32px'
 	}
@@ -275,6 +290,8 @@ export const drawerPositioner = css({
 	zIndex: 50
 });
 export const drawerContent = css({
+	// Anchors the close button; without it the X lands on the viewport's corner.
+	position: 'relative',
 	display: 'flex',
 	flexDirection: 'column',
 	width: '280px',
@@ -395,3 +412,69 @@ export const confirmActions = css({
 	gap: '8px',
 	marginTop: '28px'
 });
+
+// ----- error page (routes/+error.svelte) -----
+// The line runs out: the Looking Glass ring, solid ink, then a dotted
+// no-service segment ending at an empty station named after the missing path.
+export const errorPage = css({
+	maxWidth: '1280px',
+	width: '100%',
+	marginInline: 'auto',
+	display: 'flex',
+	flexDirection: 'column',
+	gap: '40px',
+	padding: '48px 16px 80px',
+	md: { padding: '96px 32px 144px', gap: '48px' }
+});
+export const lostMap = css({
+	display: 'grid',
+	gridTemplateColumns: 'auto minmax(48px, 2fr) minmax(48px, 3fr) auto',
+	alignItems: 'center',
+	rowGap: '12px',
+	width: '100%',
+	maxWidth: '560px'
+});
+export const lostOrigin = css({
+	width: '24px',
+	height: '24px',
+	borderRadius: 'full',
+	borderWidth: '5px',
+	borderStyle: 'solid',
+	borderColor: 'ink',
+	background: 'paper'
+});
+export const lostTrack = css({ height: '6px', background: 'ink' });
+export const lostGap = css({
+	height: '0',
+	marginInline: '6px',
+	borderTopWidth: '6px',
+	borderTopStyle: 'dotted',
+	borderTopColor: 'rule-strong'
+});
+export const lostStop = css({
+	width: '24px',
+	height: '24px',
+	borderRadius: 'full',
+	borderWidth: '3px',
+	borderStyle: 'dashed',
+	borderColor: 'ink-muted'
+});
+export const lostFrom = css({ gridRow: '2', gridColumn: '1 / 3', justifySelf: 'start', textStyle: 'key', color: 'ink' });
+export const lostTo = css({
+	gridRow: '2',
+	gridColumn: '3 / 5',
+	justifySelf: 'end',
+	maxWidth: '100%',
+	overflow: 'hidden',
+	textOverflow: 'ellipsis',
+	whiteSpace: 'nowrap',
+	fontFamily: 'mono',
+	fontSize: '13px',
+	lineHeight: '16px',
+	color: 'ink-muted'
+});
+export const errorText = css({ display: 'flex', flexDirection: 'column', gap: '12px' });
+export const errorTitle = css({ textStyle: 'display-sm', color: 'ink', md: { textStyle: 'display' } });
+export const errorLede = css({ textStyle: 'body', color: 'ink-muted', maxWidth: '52ch' });
+export const errorPath = css({ textStyle: 'data', color: 'ink', overflowWrap: 'anywhere' });
+export const errorActions = css({ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px' });

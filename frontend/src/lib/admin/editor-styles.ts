@@ -158,19 +158,27 @@ export const methodsGrid = css({
 
 // ----- enrollment -----
 export const enrollIntro = css({ textStyle: 'body', color: 'ink-muted', marginBottom: '20px', maxWidth: '64ch' });
+// The whole command stays readable (admins should see what they run as root)
+// and the copy button sits beside it, never over the text.
 export const cmdBox = css({
-	position: 'relative',
+	display: 'flex',
+	alignItems: 'flex-start',
+	gap: '8px',
 	background: 'sunk',
-	padding: '16px',
-	paddingRight: '56px',
+	padding: '12px 8px 12px 16px',
 	fontFamily: 'mono',
 	fontSize: '13px',
 	lineHeight: '21px',
 	color: 'ink',
-	overflowX: 'auto',
-	whiteSpace: 'pre'
+	'& > code': {
+		flex: '1',
+		minWidth: '0',
+		paddingBlock: '4px',
+		whiteSpace: 'pre-wrap',
+		overflowWrap: 'anywhere'
+	}
 });
-export const cmdCopy = css({ position: 'absolute', top: '8px', right: '8px' });
+export const cmdCopy = css({ flexShrink: 0 });
 export const enrollRow = css({
 	display: 'flex',
 	alignItems: 'center',

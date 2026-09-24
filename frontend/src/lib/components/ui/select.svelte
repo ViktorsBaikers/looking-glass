@@ -47,10 +47,15 @@
 	);
 </script>
 
+<!-- The label's `for` id goes to the machine via `ids`, never straight onto the
+     trigger: zag finds the trigger by the id it knows, and a bare override
+     leaves the listbox unpositioned at the page's top-left. -->
 <Select.Root
 	{collection}
 	{disabled}
 	{name}
+	ids={id ? { trigger: id } : undefined}
+	positioning={{ sameWidth: true, gutter: 4 }}
 	value={value === '' ? [] : [value]}
 	onValueChange={(e) => (value = e.value[0] ?? '')}
 	class={cx(s.root, className)}
@@ -58,7 +63,6 @@
 	<Select.Control>
 		<Select.Trigger
 			class={cx(s.trigger, invalid ? invalidStyle : '')}
-			{id}
 			aria-label={ariaLabel}
 			aria-invalid={invalid || undefined}
 		>

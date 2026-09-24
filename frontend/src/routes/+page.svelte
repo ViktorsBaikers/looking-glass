@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { cx } from 'styled-system/css';
 	import Tabs from '$lib/components/ui/tabs.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -25,6 +26,7 @@
 		runButton,
 		panelNote,
 		pageNote,
+		pageNoteRow,
 		resultsSection
 	} from '$lib/public/styles.js';
 	import type { LocationDetail } from '$lib/admin/types.js';
@@ -79,7 +81,8 @@
 		}
 	});
 
-	onMount(async () => {
+	async function load() {
+		phase = 'loading';
 		const [catalogue, ip] = await Promise.all([fetchLocations(), fetchVisitorIp()]);
 		detectedIp = ip;
 		if (catalogue.ok) {
@@ -89,6 +92,10 @@
 		} else {
 			phase = 'error';
 		}
+	}
+
+	onMount(async () => {
+		await load();
 		measureLatency().then((ms) => (latencyMs = ms));
 	});
 
@@ -125,7 +132,10 @@
 	</header>
 
 	{#if phase === 'error'}
-		<p class={pageNote} role="alert">Couldn't load locations. Refresh the page to try again.</p>
+		<div class={cx(pageNote, pageNoteRow)} role="alert">
+			Couldn't load locations.
+			<Button variant="secondary" size="sm" onclick={load}>Try again</Button>
+		</div>
 	{:else if phase === 'loading'}
 		<p class={pageNote}>Loading locations…</p>
 	{:else if !hasLocations}
