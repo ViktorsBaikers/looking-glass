@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{
+    handler::Handler,
     http::{header, StatusCode, Uri},
     middleware::from_fn_with_state,
     response::{IntoResponse, Response},
@@ -12,6 +13,7 @@ use axum::{
 use rust_embed::{EmbeddedFile, RustEmbed};
 use tower::ServiceBuilder;
 use tower_http::{
+    compression::CompressionLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     trace::TraceLayer,
 };
@@ -264,7 +266,9 @@ fn api_routes(state: AppState) -> Router {
 pub fn with_routes(features: Router) -> Router {
     features
         .route("/health", get(health))
-        .fallback(serve_spa)
+        // Compression wraps only the SPA: Test file downloads must reach the
+        // browser byte-for-byte or the Speed test would measure compression.
+        .fallback(serve_spa.layer(CompressionLayer::new()))
         .layer(
             ServiceBuilder::new()
                 .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
@@ -306,10 +310,21 @@ async fn serve_spa(uri: Uri) -> Response {
     }
 }
 
+/// Vite fingerprints everything under `_app/immutable/`, so those bytes never
+/// change at a URL and can be cached for good. Everything else — the shell and
+/// any miss that fell back to it — must revalidate so a new deploy is picked up.
 fn embedded_response(path: &str, file: EmbeddedFile) -> Response {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
+    let cache = if path.starts_with("_app/immutable/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
     (
-        [(header::CONTENT_TYPE, mime.as_ref())],
+        [
+            (header::CONTENT_TYPE, mime.as_ref()),
+            (header::CACHE_CONTROL, cache),
+        ],
         file.data.into_owned(),
     )
         .into_response()
