@@ -201,9 +201,20 @@ export default defineConfig({
 						success: { background: 'primary/10', color: 'primary', borderColor: 'primary/30' },
 						warning: { background: 'warning/10', color: 'warning', borderColor: 'warning/30' },
 						danger: { background: 'error/10', color: 'error', borderColor: 'error/30' }
+					},
+					// `lg` is the Locations card state pill: sentence case, label-md.
+					size: {
+						sm: {},
+						lg: {
+							gap: '8px',
+							padding: '8px 16px',
+							textStyle: 'label-md',
+							textTransform: 'none',
+							fontWeight: 600
+						}
 					}
 				},
-				defaultVariants: { tone: 'neutral' }
+				defaultVariants: { tone: 'neutral', size: 'sm' }
 			},
 			input: {
 				className: 'input',

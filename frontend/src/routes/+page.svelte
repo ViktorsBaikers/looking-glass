@@ -18,7 +18,8 @@
 		page,
 		pageTitle,
 		pageSubtitle,
-		panel,
+		panel as controlPanel,
+		locationPanel,
 		panelLeft,
 		inputsGrid,
 		panelRight,
@@ -119,9 +120,9 @@
 	{:else if !hasLocations}
 		<p class={panelNote}>No locations online yet.</p>
 	{:else}
-		<Tabs tabs={locationTabs} bind:active={selectedId} label="Location" />
-
-		<form class={panel} onsubmit={onsubmit}>
+		<Tabs tabs={locationTabs} bind:active={selectedId} label="Location" contentClass={locationPanel}>
+			{#snippet panel()}
+		<form class={controlPanel} onsubmit={onsubmit}>
 			<div class={panelLeft}>
 				<div class={inputsGrid}>
 					<Field label="Method" for="method">
@@ -159,6 +160,8 @@
 				</Button>
 			</div>
 		</form>
+			{/snippet}
+		</Tabs>
 	{/if}
 
 	<div class={resultsSection}>

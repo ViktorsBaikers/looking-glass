@@ -44,6 +44,14 @@ test.describe('diagnostics page', () => {
 		await expect(statusPanel(page).getByText('AS64502')).toBeVisible();
 	});
 
+	test("exposes the selected location's controls as its linked tab panel", async ({ page }) => {
+		await page.getByRole('tab', { name: 'Vienna (AS64500)' }).click();
+		const panel = page.getByRole('tabpanel', { name: 'Vienna (AS64500)' });
+		await expect(panel.getByRole('combobox', { name: 'Method' })).toBeVisible();
+		await expect(panel.getByRole('button', { name: 'Run Diagnostic' })).toBeVisible();
+		await expect(page.getByRole('tabpanel')).toHaveCount(1);
+	});
+
 	test('method select lists only offered methods and resets on location change', async ({
 		page
 	}) => {
