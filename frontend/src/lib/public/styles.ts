@@ -1,149 +1,173 @@
-// One-off atomic styles for the public diagnostics page (issues #4/#5).
+// One-off atomic styles for the public diagnostics page.
 // Panda cannot extract css() from .svelte templates, so every one-off class
 // string for this feature lives here. Recipes (button/select/tabs/tooltip/…)
 // are pre-generated and called directly in components.
+//
+// Elements that draw a Location's line carry `data-line` + `lineStyle(id)`
+// (lib/lines.ts); `var(--line)` resolves to that Location's colour per theme.
 import { css } from 'styled-system/css';
 
 // ----- page frame -----
 export const page = css({
-	maxWidth: '1200px',
+	maxWidth: '1280px',
 	marginInline: 'auto',
 	display: 'flex',
 	flexDirection: 'column',
-	gap: '32px',
+	gap: '24px',
 	width: '100%',
 	minWidth: '0',
-	padding: '16px',
-	md: { padding: '32px' }
+	padding: '20px 16px 64px',
+	md: { padding: '48px 32px 96px', gap: '48px' }
 });
-/** The selected Location's tab panel keeps the page's 32px rhythm below the tabs. */
-export const locationPanel = css({ paddingTop: '32px' });
-export const pageTitle = css({
-	textStyle: 'headline-mobile',
-	color: 'on-surface',
-	marginBottom: '8px',
-	md: { textStyle: 'headline-lg' }
-});
-export const pageSubtitle = css({ textStyle: 'body-lg', color: 'on-surface-variant' });
+export const pageHead = css({ display: 'flex', flexDirection: 'column', gap: '8px' });
+export const pageTitle = css({ textStyle: 'display-sm', color: 'ink', md: { textStyle: 'display' } });
+export const pageSubtitle = css({ textStyle: 'body', color: 'ink-muted', maxWidth: '60ch' });
+export const locations = css({ display: 'flex', flexDirection: 'column', gap: '0' });
 
-// ----- control panel -----
-export const panel = css({
-	background: 'surface-container',
+// ----- the selected Location's band: its line, the command row, the facts -----
+export const band = css({
+	background: 'panel',
 	borderWidth: '1px',
 	borderStyle: 'solid',
-	borderColor: 'outline-variant',
-	borderRadius: 'xl',
-	overflow: 'hidden',
-	display: 'flex',
-	flexDirection: 'column',
-	md: { flexDirection: 'row' }
+	borderColor: 'rule',
+	borderTopWidth: '0',
+	boxShadow: 'inset 0 6px 0 var(--line)',
+	paddingTop: '6px',
+	// Wide screens: the command on the left, the Location's facts beside it.
+	lg: { display: 'grid', gridTemplateColumns: 'minmax(0, 5fr) minmax(0, 7fr)' }
 });
-export const panelLeft = css({
-	flex: '1',
-	minWidth: '0',
-	padding: '24px',
-	display: 'flex',
-	flexDirection: 'column',
-	gap: '16px'
-});
-export const inputsGrid = css({
+export const panel = css({
 	display: 'grid',
-	gap: '16px',
-	md: { gridTemplateColumns: '1fr 1fr' }
+	gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 3fr)',
+	gap: '12px 10px',
+	padding: '16px',
+	alignItems: 'start',
+	md: {
+		gridTemplateColumns: 'minmax(180px, 240px) minmax(0, 1fr) auto',
+		gap: '12px',
+		padding: '24px'
+	},
+	lg: { gridTemplateColumns: 'minmax(150px, 190px) minmax(0, 1fr)', alignContent: 'start', gap: '16px 12px' }
 });
-export const panelRight = css({
-	background: 'surface-container-high',
+// Sits level with the inputs (label 16px + 6px gap above them).
+export const runButton = css({
+	gridColumn: '1 / -1',
+	width: '100%',
+	md: { gridColumn: 'auto', width: 'auto', minWidth: '168px', marginTop: '22px' },
+	lg: { gridColumn: '1 / -1', width: '100%', marginTop: '4px' }
+});
+export const panelNote = css({ textStyle: 'body-sm', color: 'ink-muted', gridColumn: '1 / -1' });
+export const panelError = css({ textStyle: 'body-sm', color: 'danger' });
+export const pageNote = css({
+	textStyle: 'body',
+	color: 'ink-muted',
+	padding: '32px 0',
 	borderTopWidth: '1px',
 	borderTopStyle: 'solid',
-	borderColor: 'outline-variant',
-	padding: '24px',
-	display: 'flex',
-	flexDirection: 'column',
-	gap: '16px',
-	width: '100%',
-	md: {
-		width: '340px',
-		flexShrink: '0',
+	borderTopColor: 'rule'
+});
+
+// ----- station facts (StatusPanel) -----
+export const statusList = css({
+	display: 'grid',
+	gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+	gap: '12px 20px',
+	padding: '14px 16px 16px',
+	borderTopWidth: '1px',
+	borderTopStyle: 'solid',
+	borderTopColor: 'rule',
+	md: { padding: '20px 24px 24px', gap: '20px 24px' },
+	lg: {
+		gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+		alignContent: 'start',
+		padding: '24px',
 		borderTopWidth: '0',
 		borderLeftWidth: '1px',
-		borderLeftStyle: 'solid'
+		borderLeftStyle: 'solid',
+		borderLeftColor: 'rule'
 	}
 });
-export const runButton = css({ width: '100%', textStyle: 'headline-sm', marginTop: 'auto' });
-export const panelNote = css({ textStyle: 'body-sm', color: 'on-surface-variant' });
-export const panelError = css({ textStyle: 'body-sm', color: 'error' });
-
-// ----- status panel (right column rows) -----
-export const statusList = css({ display: 'flex', flexDirection: 'column', gap: '10px' });
 export const statusRow = css({
 	display: 'flex',
-	alignItems: 'center',
-	justifyContent: 'space-between',
-	gap: '8px',
-	textStyle: 'body-md',
-	color: 'on-surface-variant',
-	minWidth: '0'
+	flexDirection: 'column',
+	gap: '4px',
+	minWidth: '0',
+	'& > span:first-child': { textStyle: 'caption', fontWeight: 700, color: 'ink-muted' }
 });
-export const statusValue = css({ color: 'on-surface', minWidth: '0' });
+export const statusValue = css({ fontSize: '15px', lineHeight: '22px', fontWeight: 600, color: 'ink', minWidth: '0' });
 export const statusMono = css({
-	textStyle: 'mono-data',
-	color: 'on-surface',
+	fontFamily: 'mono',
+	fontSize: '14px',
+	lineHeight: '22px',
+	color: 'ink',
 	minWidth: '0',
 	overflowWrap: 'anywhere'
 });
 export const statusValueRow = css({
 	display: 'flex',
 	alignItems: 'center',
-	gap: '4px',
-	minWidth: '0'
+	gap: '6px',
+	minHeight: '32px',
+	minWidth: '0',
+	marginBlock: '-5px'
 });
 export const statusDotOnline = css({
-	width: '8px',
-	height: '8px',
-	borderRadius: 'full',
-	background: 'primary-container',
-	boxShadow: 'glow',
+	display: 'inline-block',
+	width: '16px',
+	height: '0',
+	borderTopWidth: '4px',
+	borderTopStyle: 'solid',
+	borderTopColor: 'ok',
 	flexShrink: '0'
 });
 export const statusDotOffline = css({
-	width: '8px',
-	height: '8px',
-	borderRadius: 'full',
-	background: 'error',
+	display: 'inline-block',
+	width: '16px',
+	height: '0',
+	borderTopWidth: '4px',
+	borderTopStyle: 'dotted',
+	borderTopColor: 'danger',
 	flexShrink: '0'
 });
 export const iconLink = css({
 	display: 'inline-flex',
 	alignItems: 'center',
-	color: 'on-surface-variant',
+	color: 'ink-muted',
 	flexShrink: '0',
-	_hover: { color: 'primary' },
-	'& svg': { width: '16px', height: '16px' }
+	borderRadius: 'sm',
+	_hover: { color: 'ink' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' },
+	'& svg': { width: '15px', height: '15px' }
 });
 export const geoValue = css({
 	display: 'flex',
 	alignItems: 'center',
-	gap: '4px',
-	color: 'on-surface',
+	gap: '6px',
+	fontSize: '15px',
+	lineHeight: '22px',
+	fontWeight: 600,
+	color: 'ink',
 	minWidth: '0'
 });
+export const moreIps = css({ gridColumn: '1 / -1', marginTop: '-8px' });
 export const moreIpList = css({
-	display: 'flex',
-	flexDirection: 'column',
-	gap: '8px',
+	display: 'grid',
+	gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+	gap: '4px 24px',
 	paddingTop: '8px'
 });
 export const moreIpRow = css({
 	display: 'flex',
 	alignItems: 'center',
-	justifyContent: 'space-between',
-	gap: '8px',
-	textStyle: 'body-sm'
+	gap: '10px',
+	textStyle: 'body-sm',
+	'& > span:first-child': { flex: '0 1 auto' }
 });
-export const moreIpMeta = css({ color: 'on-surface-variant' });
+export const moreIpMeta = css({ color: 'ink-muted', flex: '1', minWidth: '0' });
+export const moreToggle = css({ marginLeft: '-12px' });
 
-// ----- live console -----
-export const resultsSection = css({ display: 'flex', flexDirection: 'column', gap: '16px' });
+// ----- output (Console) -----
+export const resultsSection = css({ display: 'flex', flexDirection: 'column', gap: '16px', scrollMarginTop: '72px' });
 export const consoleHeader = css({
 	display: 'flex',
 	alignItems: 'center',
@@ -151,252 +175,450 @@ export const consoleHeader = css({
 	gap: '12px',
 	flexWrap: 'wrap'
 });
-export const consoleHeaderLeft = css({ display: 'flex', alignItems: 'center', gap: '12px' });
-export const consoleHeading = css({ textStyle: 'headline-sm', color: 'on-surface' });
+export const consoleHeaderLeft = css({ display: 'flex', alignItems: 'baseline', gap: '14px' });
+export const consoleHeaderRight = css({ display: 'flex', alignItems: 'center', gap: '8px' });
+export const consoleHeading = css({ textStyle: 'title', color: 'ink' });
 export const chip = css({
 	display: 'inline-flex',
 	alignItems: 'center',
-	gap: '6px',
-	background: 'surface-container-high',
-	borderWidth: '1px',
-	borderStyle: 'solid',
-	borderColor: 'outline-variant',
-	borderRadius: 'full',
-	padding: '4px 10px'
+	gap: '8px',
+	fontSize: '13px',
+	lineHeight: '16px',
+	fontWeight: 700,
+	color: 'ink'
 });
-export const chipText = css({ textStyle: 'label-sm', color: 'on-surface-variant' });
-export const chipDot = css({ width: '6px', height: '6px', borderRadius: 'full', flexShrink: '0' });
+export const chipText = css({});
+export const chipDot = css({
+	display: 'inline-block',
+	width: '16px',
+	height: '0',
+	borderTopWidth: '4px',
+	borderTopStyle: 'solid',
+	flexShrink: '0'
+});
 export const chipDotTone = {
-	connecting: css({ background: 'warning' }),
-	streaming: css({ background: 'primary' }),
-	done: css({ background: 'primary-container' }),
-	error: css({ background: 'error' }),
-	canceled: css({ background: 'outline' })
+	connecting: css({ borderTopStyle: 'dashed', borderTopColor: 'ink-faint' }),
+	streaming: css({ borderTopColor: 'var(--line)', animation: 'fade-in 700ms ease-in-out infinite alternate' }),
+	done: css({ borderTopColor: 'ok' }),
+	error: css({ borderTopStyle: 'dotted', borderTopColor: 'danger' }),
+	canceled: css({ borderTopStyle: 'dashed', borderTopColor: 'ink-faint' })
 } as const;
 export const copyOutputIcon = css({ '& svg': { width: '16px', height: '16px' } });
 
-export const terminal = css({
-	background: 'surface-container-lowest',
+/** Route | Raw switch, shown when the output has a route view. */
+export const viewSwitch = css({
+	display: 'inline-flex',
 	borderWidth: '1px',
 	borderStyle: 'solid',
-	borderColor: 'outline-variant',
-	borderRadius: 'xl',
-	overflow: 'hidden',
+	borderColor: 'rule-strong',
+	borderRadius: 'sm',
+	padding: '2px',
+	gap: '2px'
+});
+export const viewOption = css({
+	minHeight: '26px',
+	padding: '0 10px',
+	fontSize: '13px',
+	fontWeight: 700,
+	color: 'ink-muted',
+	background: 'transparent',
+	border: 'none',
+	borderRadius: '1px',
+	cursor: 'pointer',
+	_hover: { color: 'ink' },
+	'&[aria-pressed=true]': { background: 'ink', color: 'on-ink' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' }
+});
+
+export const terminal = css({
+	background: 'sunk',
+	borderWidth: '1px',
+	borderStyle: 'solid',
+	borderColor: 'rule',
 	display: 'flex',
-	flexDirection: 'column'
+	flexDirection: 'column',
+	minWidth: '0'
 });
 export const titlebar = css({
-	background: 'surface-container',
-	borderBottomWidth: '1px',
-	borderBottomStyle: 'solid',
-	borderColor: 'outline-variant',
-	padding: '6px 12px',
 	display: 'flex',
 	alignItems: 'center',
-	gap: '6px'
+	gap: '10px',
+	minHeight: '44px',
+	padding: '8px 16px',
+	background: 'panel',
+	borderBottomWidth: '1px',
+	borderBottomStyle: 'solid',
+	borderBottomColor: 'rule'
 });
-export const trafficDot = css({ width: '10px', height: '10px', borderRadius: 'full', flexShrink: '0' });
-export const trafficRed = css({ background: 'error' });
-export const trafficYellow = css({ background: 'warning' });
-export const trafficGreen = css({ background: 'primary-container' });
+/** Roundel for the run's Location in the output title bar. */
+export const roundel = css({
+	display: 'inline-flex',
+	alignItems: 'center',
+	justifyContent: 'center',
+	width: '24px',
+	height: '24px',
+	borderRadius: 'full',
+	background: 'var(--line)',
+	color: 'var(--line-ink)',
+	fontSize: '9px',
+	fontWeight: 800,
+	letterSpacing: '0.02em',
+	flexShrink: '0'
+});
+export const roundelIdle = css({
+	width: '14px',
+	height: '14px',
+	borderRadius: 'full',
+	borderWidth: '3px',
+	borderStyle: 'solid',
+	borderColor: 'rule-strong',
+	flexShrink: '0'
+});
 export const titlebarText = css({
-	textStyle: 'label-sm',
-	color: 'on-surface-variant',
-	marginLeft: '8px',
+	fontFamily: 'mono',
+	fontSize: '13px',
+	lineHeight: '20px',
+	color: 'ink',
 	overflow: 'hidden',
 	textOverflow: 'ellipsis',
 	whiteSpace: 'nowrap'
 });
 export const terminalBody = css({
-	padding: '16px',
-	textStyle: 'mono-data',
-	color: 'on-surface',
-	height: '300px',
+	padding: '16px 20px 20px',
+	textStyle: 'code',
+	color: 'ink',
+	minHeight: '200px',
+	maxHeight: '560px',
 	overflowY: 'auto',
 	overflowX: 'auto',
 	whiteSpace: 'pre-wrap',
-	overflowWrap: 'break-word'
+	overflowWrap: 'break-word',
+	md: { minHeight: '240px' }
 });
 export const linePlain = css({ margin: '0' });
-// Syntax colouring: dark values match the design 1:1; light values are the
-// readable token equivalents on the light console background.
-export const lineBytes = css({ color: 'primary', _dark: { color: 'primary-fixed' } });
-export const lineTime = css({ color: 'tertiary', _dark: { color: 'primary-container' } });
-export const lineError = css({ color: 'error' });
-export const lineMeta = css({ color: 'on-surface-variant' });
-export const lineHint = css({ color: 'on-surface-variant', margin: '0' });
-export const cursor = css({ color: 'primary', margin: '0' });
-
-// ----- mtr hop table -----
-export const tableWrap = css({
-	borderRadius: 'lg',
-	borderWidth: '1px',
-	borderStyle: 'solid',
-	borderColor: 'outline-variant',
-	overflowX: 'auto',
-	marginTop: '8px'
+export const lineBytes = css({ color: 'ink-muted' });
+export const lineTime = css({ color: 'var(--line)', fontWeight: 700 });
+export const lineError = css({ color: 'danger', fontWeight: 600 });
+export const lineMeta = css({ color: 'ink-muted' });
+export const lineHint = css({
+	fontFamily: 'sans',
+	fontSize: '15px',
+	lineHeight: '22px',
+	color: 'ink-muted',
+	margin: '0',
+	maxWidth: '52ch'
 });
-export const mtrTable = css({ width: '100%', borderCollapse: 'collapse', minWidth: '560px' });
-export const mtrTh = css({
-	padding: '8px 12px',
-	textStyle: 'label-sm',
-	color: 'on-surface-variant',
-	background: 'surface-container',
-	textAlign: 'left',
+export const cursor = css({
+	display: 'inline-block',
+	width: '8px',
+	height: '16px',
+	marginTop: '2px',
+	background: 'var(--line)',
+	animation: 'fade-in 600ms steps(2) infinite alternate'
+});
+export const metaGap = css({ marginTop: '12px' });
+
+// ----- route view (MtrTable / TraceTable): hops as stations on the line -----
+export const tableWrap = css({ overflowX: 'auto', marginInline: '-12px' });
+export const mtrTable = css({
+	width: '100%',
+	minWidth: '520px',
+	borderCollapse: 'separate',
+	borderSpacing: '0',
 	whiteSpace: 'nowrap'
 });
-export const mtrThNum = css({ textAlign: 'right' });
-export const mtrTd = css({
-	padding: '6px 12px',
-	textStyle: 'body-sm',
-	color: 'on-surface',
+export const mtrTh = css({
+	padding: '0 12px 10px',
+	fontFamily: 'sans',
+	fontSize: '12px',
+	lineHeight: '16px',
+	fontWeight: 700,
+	color: 'ink-muted',
+	textAlign: 'left',
 	borderBottomWidth: '1px',
 	borderBottomStyle: 'solid',
-	borderColor: 'surface-bright',
-	textAlign: 'right',
-	fontVariantNumeric: 'tabular-nums',
-	whiteSpace: 'nowrap'
+	borderBottomColor: 'rule'
 });
-export const mtrTdHop = css({ color: 'on-surface-variant', textAlign: 'left' });
-export const mtrTdHost = css({
-	textAlign: 'left',
+export const mtrThNum = css({ textAlign: 'right' });
+export const routeRow = css({
+	animation: 'station-in',
+	'& > td': { transitionProperty: 'background', transitionDuration: '120ms' },
+	_hover: { '& > td': { background: 'panel' } }
+});
+export const mtrTd = css({
+	padding: '13px 16px',
 	fontFamily: 'mono',
-	color: 'primary',
-	_dark: { color: 'primary-fixed-dim' }
+	fontSize: '13px',
+	lineHeight: '18px',
+	color: 'ink-muted',
+	fontVariantNumeric: 'tabular-nums'
 });
+export const mtrTdNum = css({ textAlign: 'right' });
+export const mtrTdHop = css({ color: 'ink-faint', textAlign: 'right', paddingRight: '4px' });
+export const mtrTdHost = css({ width: '100%', color: 'ink', fontWeight: 600, fontSize: '14px' });
+/** Timetable grammar: the host runs into a dotted leader toward its times. */
+export const hostLeader = css({
+	display: 'flex',
+	alignItems: 'baseline',
+	gap: '12px',
+	_after: {
+		content: '""',
+		flex: '1',
+		minWidth: '24px',
+		borderBottomWidth: '2px',
+		borderBottomStyle: 'dotted',
+		borderBottomColor: 'rule-strong'
+	}
+});
+export const mtrTdStrong = css({ color: 'ink', fontWeight: 700 });
+export const mtrTdLoss = css({ color: 'warn', fontWeight: 700 });
+export const traceAddr = css({ color: 'ink-muted', fontWeight: 400, marginLeft: '8px' });
 
-// ----- metric cards -----
+/** The line through a hop, and its station marker. */
+export const stationCell = css({
+	position: 'relative',
+	width: '56px',
+	minWidth: '56px',
+	padding: '0',
+	_before: {
+		content: '""',
+		position: 'absolute',
+		left: '50%',
+		top: '0',
+		bottom: '0',
+		width: '8px',
+		marginLeft: '-4px',
+		background: 'var(--line)'
+	},
+	'tr:first-child > &': { _before: { top: '50%' } },
+	'tr:last-child > &': { _before: { bottom: '50%' } },
+	'tr:only-child > &': { _before: { display: 'none' } }
+});
+/** A hop that answered no probe: the line runs dashed, no station stops here. */
+export const stationSilent = css({
+	_before: { background: 'transparent', borderLeftWidth: '8px', borderLeftStyle: 'dotted', borderLeftColor: 'var(--line)' }
+});
+export const station = css({
+	position: 'relative',
+	zIndex: 1,
+	display: 'block',
+	width: '18px',
+	height: '18px',
+	margin: '0 auto',
+	borderRadius: 'full',
+	background: 'panel',
+	borderWidth: '4px',
+	borderStyle: 'solid',
+	borderColor: 'ink'
+});
+export const stationEnd = css({ width: '26px', height: '26px', borderWidth: '6px' });
+/** The route's origin: the run's Location roundel heads the line. */
+export const originRoundel = css({
+	position: 'relative',
+	zIndex: 1,
+	display: 'flex',
+	alignItems: 'center',
+	justifyContent: 'center',
+	width: '32px',
+	height: '32px',
+	margin: '0 auto',
+	borderRadius: 'full',
+	background: 'var(--line)',
+	color: 'var(--line-ink)',
+	fontFamily: 'sans',
+	fontSize: '10px',
+	fontWeight: 800,
+	letterSpacing: '0.02em'
+});
+export const originName = css({ fontFamily: 'sans', fontSize: '15px', fontWeight: 800, color: 'ink' });
+export const originNote = css({ fontFamily: 'sans', fontSize: '13px', color: 'ink-muted', marginLeft: '8px' });
+export const stationLossy = css({ borderColor: 'warn', background: 'warn-soft' });
+export const stationSilentMark = css({ width: '12px', height: '12px', borderWidth: '3px', borderColor: 'ink-faint', background: 'sunk' });
+export const stationLive = css({ animation: 'here-pulse' });
+
+// ----- run metrics -----
 export const metricsGrid = css({
 	display: 'grid',
-	gridTemplateColumns: '1fr 1fr',
-	gap: '16px',
-	md: { gridTemplateColumns: 'repeat(4, 1fr)', gap: '24px' }
-});
-export const metricCard = css({
-	background: 'surface-container',
+	gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+	background: 'panel',
 	borderWidth: '1px',
 	borderStyle: 'solid',
-	borderColor: 'outline-variant',
-	borderRadius: 'xl',
-	padding: '16px',
+	borderColor: 'rule',
+	md: { gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }
+});
+export const metricCard = css({
+	padding: '16px 20px 18px',
 	display: 'flex',
 	flexDirection: 'column',
-	gap: '4px',
-	minWidth: '0'
+	gap: '6px',
+	minWidth: '0',
+	borderColor: 'rule',
+	borderLeftWidth: '1px',
+	borderLeftStyle: 'solid',
+	'&:nth-child(2n+1)': { borderLeftWidth: '0' },
+	'&:nth-child(n+3)': { borderTopWidth: '1px', borderTopStyle: 'solid' },
+	md: {
+		'&:nth-child(2n+1)': { borderLeftWidth: '1px' },
+		'&:nth-child(4n+1)': { borderLeftWidth: '0' },
+		'&:nth-child(n+3)': { borderTopWidth: '0' },
+		'&:nth-child(n+5)': { borderTopWidth: '1px' }
+	}
 });
 export const metricLabelRow = css({
 	display: 'flex',
 	alignItems: 'center',
 	gap: '6px',
-	textStyle: 'label-md',
-	color: 'on-surface-variant',
-	marginBottom: '4px'
+	textStyle: 'label',
+	color: 'ink-muted'
 });
 export const metricInfo = css({
 	display: 'inline-flex',
 	alignItems: 'center',
-	color: 'on-surface-variant',
+	color: 'ink-faint',
 	cursor: 'help',
-	'& svg': { width: '14px', height: '14px' }
+	'& svg': { width: '15px', height: '15px' }
 });
 export const metricValueRow = css({ display: 'flex', alignItems: 'baseline', gap: '6px' });
-export const metricValue = css({ textStyle: 'headline-mobile', color: 'on-surface' });
-export const metricUnit = css({ textStyle: 'body-md', color: 'on-surface-variant' });
-export const metricCaption = css({ textStyle: 'label-sm', color: 'on-surface-variant' });
+export const metricValue = css({ textStyle: 'numeral', color: 'ink' });
+export const metricUnit = css({ fontSize: '14px', fontWeight: 600, color: 'ink-muted' });
+export const metricCaption = css({ textStyle: 'caption', color: 'ink-muted' });
 
-// ----- speed tests section -----
+// ----- speed tests -----
 export const speedSection = css({ display: 'flex', flexDirection: 'column', gap: '16px' });
-export const speedTitle = css({ textStyle: 'headline-sm', color: 'on-surface' });
+export const speedTitle = css({ textStyle: 'title', color: 'ink' });
 export const speedGrid = css({
 	display: 'grid',
 	gridTemplateColumns: '1fr',
 	gap: '16px',
-	md: { gridTemplateColumns: '1fr 1fr' }
+	lg: { gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '24px' }
 });
 export const speedCard = css({
-	background: 'surface-container',
+	background: 'panel',
 	borderWidth: '1px',
 	borderStyle: 'solid',
-	borderColor: 'outline-variant',
-	borderRadius: 'xl',
-	padding: '16px',
+	borderColor: 'rule',
+	padding: '20px',
 	display: 'flex',
 	flexDirection: 'column',
-	gap: '12px',
-	minWidth: '0'
+	gap: '16px',
+	minWidth: '0',
+	md: { padding: '24px' }
 });
 export const cardTitleRow = css({
 	display: 'flex',
 	alignItems: 'center',
 	justifyContent: 'space-between',
-	gap: '8px',
-	flexWrap: 'wrap'
+	gap: '12px',
+	flexWrap: 'wrap',
+	minHeight: '32px'
 });
-export const iperfTitle = css({ textStyle: 'headline-sm', color: 'on-surface' });
-export const speedCardTitle = css({ textStyle: 'body-lg', fontWeight: '600', color: 'on-surface' });
-export const endpointBlock = css({ display: 'flex', flexDirection: 'column', gap: '12px' });
+export const iperfTitle = css({ fontSize: '16px', lineHeight: '22px', fontWeight: 800, color: 'ink' });
+export const speedCardTitle = css({ fontSize: '16px', lineHeight: '22px', fontWeight: 800, color: 'ink' });
+export const endpointBlock = css({
+	display: 'flex',
+	flexDirection: 'column',
+	gap: '12px',
+	'& + &': { paddingTop: '16px', borderTopWidth: '1px', borderTopStyle: 'solid', borderTopColor: 'rule' }
+});
 export const endpointName = css({
 	display: 'flex',
 	alignItems: 'baseline',
 	justifyContent: 'space-between',
 	gap: '8px',
-	textStyle: 'label-md',
-	color: 'on-surface'
+	fontSize: '14px',
+	fontWeight: 700,
+	color: 'ink'
 });
-export const endpointHost = css({ textStyle: 'mono-data', color: 'on-surface-variant' });
-export const cmdGroup = css({ display: 'flex', flexDirection: 'column', gap: '4px' });
-export const cmdLabel = css({ textStyle: 'label-sm', color: 'on-surface-variant' });
+export const endpointHost = css({ fontFamily: 'mono', fontSize: '13px', color: 'ink-muted' });
+export const cmdGroup = css({ display: 'flex', flexDirection: 'column', gap: '6px' });
+export const cmdLabel = css({ textStyle: 'caption', fontWeight: 700, color: 'ink-muted' });
 export const cmdRow = css({
 	display: 'flex',
 	alignItems: 'center',
 	justifyContent: 'space-between',
 	gap: '8px',
-	background: 'surface-container-high',
-	borderWidth: '1px',
-	borderStyle: 'solid',
-	borderColor: 'outline-variant',
-	borderRadius: 'md',
-	padding: '8px 12px'
+	background: 'sunk',
+	padding: '4px 4px 4px 12px'
 });
 export const cmdCode = css({
-	textStyle: 'mono-data',
-	color: 'on-surface',
+	fontFamily: 'mono',
+	fontSize: '14px',
+	lineHeight: '22px',
+	color: 'ink',
 	flex: '1',
 	minWidth: '0',
 	overflowX: 'auto',
 	whiteSpace: 'nowrap'
 });
 export const readouts = css({
-	display: 'flex',
-	justifyContent: 'space-between',
-	gap: '16px',
-	marginTop: '8px'
+	display: 'grid',
+	gridTemplateColumns: '1fr 1fr',
+	gap: '16px'
 });
 export const readoutLabel = css({
 	display: 'flex',
 	alignItems: 'center',
-	gap: '4px',
-	textStyle: 'label-sm',
-	color: 'on-surface-variant',
+	gap: '6px',
+	textStyle: 'label',
+	color: 'ink-muted',
 	marginBottom: '4px',
-	'& svg': { width: '14px', height: '14px' }
+	'& svg': { width: '16px', height: '16px' }
 });
 export const readoutValueRow = css({ display: 'flex', alignItems: 'baseline', gap: '6px' });
-export const readoutValue = css({ textStyle: 'headline-mobile', color: 'on-surface' });
-export const readoutUnit = css({ textStyle: 'body-md', color: 'on-surface-variant' });
+export const readoutValue = css({
+	fontSize: '40px',
+	lineHeight: '44px',
+	fontWeight: 800,
+	letterSpacing: '-0.03em',
+	fontVariantNumeric: 'tabular-nums',
+	color: 'ink'
+});
+export const readoutUnit = css({ fontSize: '14px', fontWeight: 600, color: 'ink-muted' });
 export const barTrack = css({
 	width: '100%',
-	background: 'surface-variant',
-	borderRadius: 'full',
+	background: 'sunk',
 	height: '6px',
 	display: 'flex',
-	overflow: 'hidden',
-	marginTop: '8px'
+	overflow: 'hidden'
 });
-export const barDownload = css({ background: 'primary', height: '100%' });
-export const barUpload = css({ background: 'tertiary', height: '100%' });
-export const noFilesNote = css({ textStyle: 'body-sm', color: 'on-surface-variant' });
-export const fileLinks = css({ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'stretch' });
-export const fileLink = css({ justifyContent: 'flex-start', width: '100%' });
-export const fileSize = css({ textStyle: 'label-sm', color: 'on-surface-variant', marginLeft: 'auto' });
-export const downloadIcon = css({ '& svg': { width: '16px', height: '16px' } });
+export const barDownload = css({
+	background: 'var(--line)',
+	height: '100%',
+	transitionProperty: 'width',
+	transitionDuration: '240ms',
+	transitionTimingFunction: 'out'
+});
+export const barUpload = css({
+	background: 'ink',
+	height: '100%',
+	transitionProperty: 'width',
+	transitionDuration: '240ms',
+	transitionTimingFunction: 'out'
+});
+export const noFilesNote = css({ textStyle: 'body-sm', color: 'ink-muted' });
+export const fileLinks = css({
+	display: 'flex',
+	flexDirection: 'column',
+	borderTopWidth: '1px',
+	borderTopStyle: 'solid',
+	borderTopColor: 'rule'
+});
+export const fileLink = css({
+	display: 'flex',
+	alignItems: 'center',
+	gap: '10px',
+	minHeight: '44px',
+	padding: '0 4px',
+	fontSize: '14px',
+	fontWeight: 600,
+	color: 'ink',
+	textDecoration: 'none',
+	borderBottomWidth: '1px',
+	borderBottomStyle: 'solid',
+	borderBottomColor: 'rule',
+	_hover: { background: 'sunk' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '-2px' },
+	'& svg': { width: '18px', height: '18px', color: 'ink-muted' }
+});
+export const fileSize = css({ fontFamily: 'mono', fontSize: '13px', color: 'ink-muted', marginLeft: 'auto' });
+export const downloadIcon = css({});

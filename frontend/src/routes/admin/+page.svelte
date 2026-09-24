@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { cx } from 'styled-system/css';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
@@ -9,34 +10,44 @@
 	import StatusBadge from '$lib/components/ui/status-badge.svelte';
 	import Dialog from '$lib/components/ui/dialog.svelte';
 	import ConfirmDialog from '$lib/components/ui/confirm-dialog.svelte';
-	import { confirmActions, srOnly } from '$lib/styles.js';
 	import {
-		pageHead,
-		pageTitle,
-		pageSub,
+		confirmActions,
+		srOnly,
+		adminPage,
+		adminPageHead,
+		adminTitle,
+		adminLede,
+		statusBadgeDot,
+		statusDotTone
+	} from '$lib/styles.js';
+	import { lineCode, lineStyle } from '$lib/lines.js';
+	import {
 		toolbar,
 		searchField,
 		searchWrap,
 		searchInput,
 		sortField,
-		fieldLabel,
-		stack,
-		grid,
-		card,
-		cardHead,
-		cardTitle,
+		legend,
+		legendItem,
+		list,
+		headRow,
+		row,
+		lineMark,
+		roundel,
+		stub,
+		stubState,
+		nameCell,
+		rowTitle,
 		metaRow,
-		geoChip,
-		metrics,
-		metricLabel,
-		metricValue,
-		cardFoot,
-		outlineAction,
-		trailingAction,
+		cell,
+		cellLabel,
+		actions,
+		quietDelete,
 		stateCard,
 		stateText,
 		errorCard,
 		skeleton,
+		skeletonList,
 		formStack,
 		formError
 	} from '$lib/admin/list-styles.js';
@@ -192,11 +203,11 @@
 	}
 </script>
 
-<div class={stack}>
-	<header class={pageHead}>
+<div class={adminPage}>
+	<header class={adminPageHead}>
 		<div>
-			<h1 class={pageTitle}>Locations</h1>
-			<p class={pageSub}>Find a diagnostic location, check its state, or continue its setup.</p>
+			<h1 class={adminTitle}>Locations</h1>
+			<p class={adminLede}>Find a diagnostic location, check its state, or continue its setup.</p>
 		</div>
 		<Button onclick={openCreate}>
 			<Add aria-hidden="true" />
@@ -204,89 +215,97 @@
 		</Button>
 	</header>
 
-	<section class={toolbar}>
+	<section class={toolbar} aria-label="Find locations">
 		<div class={searchField}>
-			<Label for="location-search" class={fieldLabel}>Search locations</Label>
+			<Label for="location-search" class={srOnly}>Search locations</Label>
 			<div class={searchWrap}>
 				<Search aria-hidden="true" />
 				<Input
 					id="location-search"
 					class={searchInput}
 					bind:value={query}
-					placeholder="Name, place, or status"
+					placeholder="Search by name, place, status, or ASN"
 				/>
 			</div>
 		</div>
 		<div class={sortField}>
-			<Label for="location-sort" class={fieldLabel}>Sort locations</Label>
+			<Label for="location-sort">Sort locations</Label>
 			<Select id="location-sort" items={sortItems} bind:value={sortValue} />
 		</div>
 	</section>
 
-	{#if phase === 'loading'}
-		<div class={grid} aria-hidden="true">
-			{#each { length: 4 } as _, i (i)}
-				<div class={skeleton}></div>
-			{/each}
-		</div>
-		<p class={srOnly} aria-live="polite">Loading locations…</p>
-	{:else if phase === 'error'}
-		<div class={errorCard} role="alert">
-			<p>Locations could not be loaded.</p>
-			<Button variant="secondary" onclick={load}>Try again</Button>
-		</div>
-	{:else if locations.length === 0}
-		<div class={stateCard}>
-			<p class={stateText}>No locations yet — add your first.</p>
-			<Button onclick={openCreate}>
-				<Add aria-hidden="true" />
-				Add location
-			</Button>
-		</div>
-	{:else if visible.length === 0}
-		<div class={stateCard}>
-			<p class={stateText}>No locations match “{query}”.</p>
-			<Button variant="secondary" onclick={() => (query = '')}>Clear search</Button>
-		</div>
-	{:else}
-		<ul class={grid}>
-			{#each visible as location (location.id)}
-				{@const state = locationState(location)}
-				<li>
-					<article class={card}>
-						<div class={cardHead}>
-							<div>
-								<h2 class={cardTitle}>{location.name}</h2>
-								<div class={metaRow}>
-									{#if location.geo_label}
-										<span class={geoChip}>{location.geo_label}</span>
-										<span aria-hidden="true">•</span>
-									{/if}
-									<span>{location.kind === 'remote' ? 'Remote' : 'Local'}</span>
-								</div>
-							</div>
+	<div>
+		{#if phase === 'loading'}
+			<div class={skeletonList} aria-hidden="true">
+				{#each { length: 4 } as _, i (i)}
+					<div class={skeleton}></div>
+				{/each}
+			</div>
+			<p class={srOnly} aria-live="polite">Loading locations…</p>
+		{:else if phase === 'error'}
+			<div class={errorCard} role="alert">
+				<p>Locations could not be loaded.</p>
+				<Button variant="secondary" onclick={load}>Try again</Button>
+			</div>
+		{:else if locations.length === 0}
+			<div class={stateCard}>
+				<p class={stateText}>No locations yet — add your first.</p>
+				<Button onclick={openCreate}>
+					<Add aria-hidden="true" />
+					Add location
+				</Button>
+			</div>
+		{:else if visible.length === 0}
+			<div class={stateCard}>
+				<p class={stateText}>No locations match “{query}”.</p>
+				<Button variant="secondary" onclick={() => (query = '')}>Clear search</Button>
+			</div>
+		{:else}
+			<div class={headRow} aria-hidden="true">
+				<span>Line</span>
+				<span>Location</span>
+				<span>Status</span>
+				<span>Last seen</span>
+				<span>Methods</span>
+				<span></span>
+			</div>
+			<ul class={list}>
+				{#each visible as location (location.id)}
+					{@const state = locationState(location)}
+					<li class={row} data-line style={lineStyle(location.id)}>
+						<span class={lineMark} aria-hidden="true">
+							<span class={roundel}>{lineCode(location.name)}</span>
+							<span class={cx(stub, stubState[state])}></span>
+						</span>
+						<div class={nameCell}>
+							<h2 class={rowTitle}>{location.name}</h2>
+							<p class={metaRow}>
+								{[location.geo_label, location.kind === 'remote' ? 'Remote' : 'Local']
+									.filter(Boolean)
+									.join(' · ')}
+							</p>
+						</div>
+						<div class={cell}>
+							<span class={cellLabel}>Status</span>
 							<StatusBadge tone={tone[state]} size="lg">{STATE_LABEL[state]}</StatusBadge>
 						</div>
-						<div class={metrics}>
-							<div>
-								<p class={metricLabel}>Last Seen</p>
-								<p class={metricValue}>
-									{location.kind === 'local' ? '—' : formatLastSeen(location.last_seen, nowMs)}
-								</p>
-							</div>
-							<div>
-								<p class={metricLabel}>Diagnostic Methods</p>
-								<p class={metricValue}>
-									{location.offered_methods.length} method{location.offered_methods.length === 1
-										? ''
-										: 's'} configured
-								</p>
-							</div>
+						<div class={cell}>
+							<span class={cellLabel}>Last seen</span>
+							<span>{location.kind === 'local' ? '—' : formatLastSeen(location.last_seen, nowMs)}</span>
 						</div>
-						<div class={cardFoot}>
+						<div class={cell}>
+							<span class={cellLabel}>Methods</span>
+							<span>
+								{location.offered_methods.length} method{location.offered_methods.length === 1
+									? ''
+									: 's'} configured
+							</span>
+						</div>
+						<div class={actions}>
 							{#if location.kind === 'remote'}
 								<Button
 									variant="secondary"
+									size="sm"
 									onclick={() => goto(`/admin/locations/${location.id}?tab=enrollment`)}
 								>
 									<VpnKey aria-hidden="true" />
@@ -294,8 +313,8 @@
 								</Button>
 							{/if}
 							<Button
-								variant="ghost"
-								class={outlineAction}
+								variant="secondary"
+								size="sm"
 								onclick={() => goto(`/admin/locations/${location.id}?tab=settings`)}
 							>
 								<Pencil aria-hidden="true" />
@@ -304,7 +323,7 @@
 							{#if location.kind === 'remote' && state !== 'not_enrolled'}
 								<Button
 									variant="ghost"
-									class={outlineAction}
+									size="sm"
 									onclick={() => {
 										pendingRevoke = location;
 										showRevoke = true;
@@ -317,7 +336,7 @@
 							<Button
 								variant="danger"
 								size="icon"
-								class={trailingAction}
+								class={quietDelete}
 								aria-label="Delete {location.name}"
 								onclick={() => {
 									pendingDelete = location;
@@ -327,11 +346,17 @@
 								<Trash aria-hidden="true" />
 							</Button>
 						</div>
-					</article>
-				</li>
-			{/each}
-		</ul>
-	{/if}
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</div>
+
+	<div class={legend} aria-label="Line states" role="note">
+		<span class={legendItem}><span class={cx(statusBadgeDot, statusDotTone.success)}></span>Solid line: online</span>
+		<span class={legendItem}><span class={cx(statusBadgeDot, statusDotTone.danger)}></span>Dotted line: offline</span>
+		<span class={legendItem}><span class={cx(statusBadgeDot, statusDotTone.neutral)}></span>Dashed line: not enrolled</span>
+	</div>
 </div>
 
 <Dialog bind:open={showCreate} title="Add location" description="Name it; configure it next.">

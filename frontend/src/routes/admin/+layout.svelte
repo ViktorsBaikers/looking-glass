@@ -2,7 +2,6 @@
 	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { Dialog, Portal } from '@ark-ui/svelte';
-	import type { Component } from 'svelte';
 	import { getJson, postJson } from '$lib/api.js';
 	import { cx } from 'styled-system/css';
 	import {
@@ -12,12 +11,11 @@
 		adminShell,
 		sidebar,
 		heading,
-		headingTitle,
-		headingSub,
 		navList,
 		navItem,
 		navItemActive,
 		logoutWrap,
+		logoutBtn,
 		contentCol,
 		mobileBar,
 		menuBtn,
@@ -27,9 +25,6 @@
 		drawerContent,
 		drawerClose
 	} from '$lib/styles.js';
-	import LocationOn from '~icons/material-symbols/location-on';
-	import Group from '~icons/material-symbols/group';
-	import SettingsIcon from '~icons/material-symbols/settings';
 	import Logout from '~icons/material-symbols/logout';
 	import Menu from '~icons/material-symbols/menu';
 	import Spinner from '~icons/material-symbols/progress-activity';
@@ -68,23 +63,20 @@
 	}
 
 	const path = $derived(page.url.pathname);
-	const nav: { href: string; label: string; icon: Component; active: boolean }[] = $derived([
+	const nav: { href: string; label: string; active: boolean }[] = $derived([
 		{
 			href: '/admin',
 			label: 'Locations',
-			icon: LocationOn,
 			active: path === '/admin' || path.startsWith('/admin/locations')
 		},
 		{
 			href: '/admin/administrators',
 			label: 'Administrators',
-			icon: Group,
 			active: path.startsWith('/admin/administrators')
 		},
 		{
 			href: '/admin/settings',
 			label: 'Settings',
-			icon: SettingsIcon,
 			active: path.startsWith('/admin/settings')
 		}
 	]);
@@ -99,10 +91,7 @@
 {:else}
 	<div class={adminShell}>
 		<aside class={sidebar} aria-label="Administration">
-			<div class={heading}>
-				<div class={headingTitle}>Administration</div>
-				<div class={headingSub}>Network Settings</div>
-			</div>
+			<div class={heading}>Administration</div>
 			<nav class={navList}>
 				{#each nav as item (item.href)}
 					<a
@@ -110,13 +99,12 @@
 						class={cx(navItem, item.active ? navItemActive : '')}
 						aria-current={item.active ? 'page' : undefined}
 					>
-						<item.icon aria-hidden="true" />
 						{item.label}
 					</a>
 				{/each}
 			</nav>
 			<div class={logoutWrap}>
-				<button type="button" class={navItem} onclick={logout}>
+				<button type="button" class={logoutBtn} onclick={logout}>
 					<Logout aria-hidden="true" />
 					Log out
 				</button>
@@ -133,6 +121,7 @@
 				>
 					<Menu aria-hidden="true" />
 				</button>
+				Administration
 			</div>
 			<div class={content}>
 				{@render children?.()}
@@ -149,10 +138,7 @@
 					<Dialog.CloseTrigger class={drawerClose} aria-label="Close menu">
 						<Close />
 					</Dialog.CloseTrigger>
-					<div class={heading}>
-						<div class={headingTitle}>Administration</div>
-						<div class={headingSub}>Network Settings</div>
-					</div>
+					<div class={heading}>Administration</div>
 					<nav class={navList}>
 						{#each nav as item (item.href)}
 							<a
@@ -161,7 +147,6 @@
 								aria-current={item.active ? 'page' : undefined}
 								onclick={() => (drawerOpen = false)}
 							>
-								<item.icon aria-hidden="true" />
 								{item.label}
 							</a>
 						{/each}
@@ -169,7 +154,7 @@
 					<div class={logoutWrap}>
 						<button
 							type="button"
-							class={navItem}
+							class={logoutBtn}
 							onclick={() => {
 								drawerOpen = false;
 								logout();

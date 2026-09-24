@@ -15,6 +15,7 @@
 	import {
 		authPage,
 		authCard,
+		authTitle,
 		formStack,
 		formErrorText,
 		fullWidth
@@ -50,7 +51,7 @@
 <div class={authPage}>
 	<Card class={authCard}>
 		<CardHeader>
-			<CardTitle>Sign in</CardTitle>
+			<CardTitle class={authTitle}>Sign in</CardTitle>
 			<CardDescription>Sign in to manage locations and settings.</CardDescription>
 		</CardHeader>
 		<CardContent>

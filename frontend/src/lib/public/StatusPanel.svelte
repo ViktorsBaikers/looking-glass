@@ -15,7 +15,9 @@
 		geoValue,
 		moreIpList,
 		moreIpRow,
-		moreIpMeta
+		moreIpMeta,
+		moreIps as moreWrap,
+		moreToggle
 	} from './styles.js';
 	import type { LocationDetail } from '$lib/admin/types.js';
 
@@ -110,10 +112,20 @@
 		</span>
 	</div>
 
+	<div class={statusRow}>
+		<span>Your IP</span>
+		<span class={statusMono}>{detectedIp ?? '—'}</span>
+	</div>
+
+	<div class={statusRow}>
+		<span>Latency ≈</span>
+		<span class={statusValue}>{latencyMs === null ? '—' : `${latencyMs} ms`}</span>
+	</div>
 	{#if moreIps.length > 0}
+		<div class={moreWrap}>
 		<Collapsible>
 			{#snippet trigger()}
-				<Button variant="ghost" size="sm">More test IPs</Button>
+				<Button variant="ghost" size="sm" class={moreToggle}>More test IPs</Button>
 			{/snippet}
 			<div class={moreIpList}>
 				{#each moreIps as ip (ip.id)}
@@ -125,15 +137,6 @@
 				{/each}
 			</div>
 		</Collapsible>
+		</div>
 	{/if}
-
-	<div class={statusRow}>
-		<span>Your IP</span>
-		<span class={statusMono}>{detectedIp ?? '—'}</span>
-	</div>
-
-	<div class={statusRow}>
-		<span>Latency ≈</span>
-		<span class={statusValue}>{latencyMs === null ? '—' : `${latencyMs} ms`}</span>
-	</div>
 </div>

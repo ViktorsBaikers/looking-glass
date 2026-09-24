@@ -180,8 +180,10 @@
 
 <div class={pageWrap}>
 	<header class={pageHeader}>
-		<h1 class={pageTitle}>Administrators</h1>
-		<p class={pageSub}>Manage equal peers and your own password. One-time links disappear when closed.</p>
+		<div>
+			<h1 class={pageTitle}>Administrators</h1>
+			<p class={pageSub}>Manage equal peers and your own password. One-time links disappear when closed.</p>
+		</div>
 	</header>
 
 	<Card>
