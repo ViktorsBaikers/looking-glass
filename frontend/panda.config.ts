@@ -23,7 +23,6 @@ export default defineConfig({
 			card: ['*'],
 			dialog: ['*'],
 			tabs: ['*'],
-			toggle: ['*'],
 			checkbox: ['*'],
 			tooltip: ['*'],
 			select: ['*'],
@@ -209,7 +208,7 @@ export default defineConfig({
 			input: {
 				className: 'input',
 				base: {
-					width: 'full',
+					width: '100%',
 					minHeight: '44px',
 					background: 'surface-container-high',
 					color: 'on-surface',
@@ -320,7 +319,7 @@ export default defineConfig({
 						borderColor: 'outline-variant',
 						borderRadius: 'xl',
 						padding: '24px',
-						width: 'full',
+						width: '100%',
 						maxWidth: '512px',
 						maxHeight: '90vh',
 						overflowY: 'auto',
@@ -381,39 +380,6 @@ export default defineConfig({
 						paddingTop: '24px',
 						_focusVisible: { outline: 'none' }
 					}
-				}
-			},
-			toggle: {
-				className: 'switch',
-				slots: ['root', 'control', 'thumb', 'label'],
-				base: {
-					root: { display: 'inline-flex', alignItems: 'center', gap: '12px', cursor: 'pointer' },
-					control: {
-						position: 'relative',
-						width: '44px',
-						height: '24px',
-						borderRadius: 'full',
-						background: 'surface-variant',
-						transitionProperty: 'background',
-						transitionDuration: '150ms',
-						cursor: 'pointer',
-						flexShrink: 0,
-						'&[data-state=checked]': { background: 'primary-container' },
-						_focusVisible: { outline: '2px solid {colors.primary}', outlineOffset: '2px' }
-					},
-					thumb: {
-						position: 'absolute',
-						top: '2px',
-						left: '2px',
-						width: '20px',
-						height: '20px',
-						borderRadius: 'full',
-						background: 'on-surface',
-						transitionProperty: 'transform',
-						transitionDuration: '150ms',
-						'&[data-state=checked]': { transform: 'translateX(20px)' }
-					},
-					label: { textStyle: 'body-md', color: 'on-surface' }
 				}
 			},
 			checkbox: {
@@ -484,13 +450,13 @@ export default defineConfig({
 				className: 'select',
 				slots: ['root', 'trigger', 'indicator', 'valueText', 'positioner', 'content', 'item', 'itemText', 'itemIndicator'],
 				base: {
-					root: { width: 'full', minWidth: '0' },
+					root: { width: '100%', minWidth: '0' },
 					trigger: {
 						display: 'flex',
 						alignItems: 'center',
 						justifyContent: 'space-between',
 						gap: '8px',
-						width: 'full',
+						width: '100%',
 						minHeight: '44px',
 						padding: '10px 12px',
 						background: 'surface-container-high',
@@ -518,7 +484,7 @@ export default defineConfig({
 					},
 					positioner: { zIndex: 60 },
 					content: {
-						width: 'full',
+						width: '100%',
 						background: 'surface-container-high',
 						borderWidth: '1px',
 						borderStyle: 'solid',
