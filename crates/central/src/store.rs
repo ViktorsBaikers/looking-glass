@@ -1063,21 +1063,34 @@ impl Store {
     }
 
     /// Record an agent's proof-of-life (a received tunnel heartbeat), advancing its
-    /// `last_seen` to `ts`. A read-modify-write in one transaction so it preserves
-    /// `revoked` — recording liveness can never un-revoke an agent, and `is_online`
-    /// still derives a revoked agent offline. A no-op for an unknown/absent agent.
+    /// `last_seen` to `ts`. See [`Self::touch_agents_last_seen`] for the rules.
     pub fn touch_agent_last_seen(&self, id: &str, ts: u64) -> Result<(), StoreError> {
+        self.touch_agents_last_seen(&[(id.to_string(), ts)])
+    }
+
+    /// Record proof-of-life for many agents in one transaction: every commit
+    /// fsyncs, so the tunnel coalesces a burst of heartbeats into one write here.
+    /// A read-modify-write per agent so it preserves `revoked` — recording
+    /// liveness can never un-revoke an agent, and `is_online` still derives a
+    /// revoked agent offline. Unknown/absent agents are skipped. `last_seen` only
+    /// moves forward, so a stale timestamp never rolls a fresher one back.
+    pub fn touch_agents_last_seen(&self, beats: &[(String, u64)]) -> Result<(), StoreError> {
         let txn = self.db.begin_write().map_err(backend)?;
         {
             let mut table = txn.open_table(AGENT).map_err(backend)?;
-            let current: Option<Agent> = match table.get(id).map_err(backend)? {
-                Some(guard) => Some(serde_json::from_slice(guard.value()).map_err(backend)?),
-                None => None,
-            };
-            if let Some(mut agent) = current.filter(|agent| !agent.revoked) {
-                agent.last_seen = Some(ts);
-                let encoded = serde_json::to_vec(&agent).map_err(backend)?;
-                table.insert(id, encoded.as_slice()).map_err(backend)?;
+            for (id, ts) in beats {
+                let current: Option<Agent> = match table.get(id.as_str()).map_err(backend)? {
+                    Some(guard) => Some(serde_json::from_slice(guard.value()).map_err(backend)?),
+                    None => None,
+                };
+                if let Some(mut agent) = current
+                    .filter(|agent| !agent.revoked)
+                    .filter(|agent| agent.last_seen.is_none_or(|seen| *ts > seen))
+                {
+                    agent.last_seen = Some(*ts);
+                    let encoded = serde_json::to_vec(&agent).map_err(backend)?;
+                    table.insert(id.as_str(), encoded.as_slice()).map_err(backend)?;
+                }
             }
         }
         txn.commit().map_err(backend)?;
@@ -1576,6 +1589,17 @@ mod tests {
             Some(1234),
             "active agent liveness advances"
         );
+    }
+
+    #[test]
+    fn a_stale_touch_never_rolls_last_seen_back() {
+        // Liveness writes run concurrently on the blocking pool and may commit out
+        // of order; the older one landing second must not regress last_seen.
+        let store = temp_store();
+        store.put_agent(&agent("a1", "loc", None, false)).unwrap();
+        store.touch_agent_last_seen("a1", 2000).unwrap();
+        store.touch_agent_last_seen("a1", 1999).unwrap();
+        assert_eq!(store.get_agent("a1").unwrap().unwrap().last_seen, Some(2000));
     }
 
     #[test]
