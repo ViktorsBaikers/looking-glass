@@ -1,75 +1,77 @@
-<!-- BEGIN DEVRITES CODEX -->
-## DevRites For Codex
+# AGENTS.md
 
-This project has DevRites installed for both Claude Code and Codex.
+Looking Glass: self-hosted network diagnostics console. Rust workspace (`crates/central`, `crates/agent`, `crates/shared`; axum + tokio) serving a SvelteKit SPA (`frontend/`, Svelte 5, Tailwind v4 + `tailwind-variants`).
 
-## Codex usage
+**Tradeoff:** these rules bias toward caution over speed. For trivial tasks, use judgment.
 
-- DevRites workflow skills are available to Codex from `.agents/skills`.
-- Use `$rite` or `$rite-<verb>` through Codex skills, or open `/skills` and select the matching DevRites skill.
-- If the user mentions a DevRites slash command such as `/rite spec`, `/rite-build`, or `/rite-seal`, treat that as an explicit request to use the corresponding DevRites skill.
-- DevRites runtime helpers are mirrored for Codex under `.agents/skills/devrites-lib/scripts/`.
-- Before using any DevRites workflow skill, read `.agents/devrites/rules/core.md`. Load other `.agents/devrites/rules/*.md` files when the skill or rule index asks for them. These are DevRites engineering rules, not Codex exec-policy `.rules` files.
-- Custom Codex subagents generated from the DevRites review agents live in `.codex/agents`.
-- When DevRites skill prose asks for a DevRites specialist or writer agent, use the matching Codex custom agent from `.codex/agents/devrites-*.toml` through Codex subagents. If Codex subagents are unavailable in the current surface, run the skill's documented inline fallback and say that the result was not an independent subagent review.
-- Claude Code agent hook metadata is not active in Codex. The generated Codex agents preserve read-only intent with Codex sandbox settings where possible; still follow DevRites' scope and no-mutation rules explicitly.
+## 1. Think before coding
 
-## Workflow contract
+**State assumptions. Surface confusion. Name tradeoffs.**
 
-- Keep all feature state in `.devrites/work/<slug>/` and preserve `.devrites/ACTIVE`.
-- Follow the DevRites lifecycle: spec -> define -> build -> prove -> polish -> review -> seal -> ship.
-- Claims of completion need recorded evidence in the feature workspace, not confidence alone.
-<!-- END DEVRITES CODEX -->
+- State your assumptions explicitly. If uncertain, ask.
+- Multiple interpretations → present them; let the user pick.
+- A simpler approach exists → say so. Push back when warranted.
+- Something unclear → stop, name what's confusing, ask.
 
-## Code intelligence and tool routing
+## 2. Simplicity first
 
-This repository provides both Codebase Memory MCP and Serena. Use them for
-different purposes rather than issuing duplicate queries to both.
+**Minimum code that solves the problem. Nothing speculative.**
 
-### Use Codebase Memory first for
+- Build only what was asked.
+- Inline single-use code; add an abstraction when a second caller exists.
+- Handle errors that can actually occur.
+- 200 lines that could be 50 → rewrite it.
 
-- repository architecture and subsystem discovery;
-- package, module and service relationships;
-- broad semantic search when the symbol name is unknown;
-- call-path and dependency tracing;
-- cross-service and infrastructure relationships;
-- change-impact and blast-radius analysis;
-- identifying likely files and symbols involved in a feature.
+Test: would a senior engineer call this overcomplicated? If yes, simplify.
 
-### Use Serena when language-server or symbol-level accuracy is needed
+## 3. Surgical changes
 
-- locating an exact symbol declaration or definition;
-- finding exact references to a symbol;
-- finding implementations of an interface, trait or abstract type;
-- inspecting symbol or file diagnostics;
-- understanding symbol relationships that text search cannot establish reliably;
-- performing a project-wide symbol rename;
-- validating whether deleting or changing a symbol is safe;
-- symbol-level edits and refactors.
+**Touch only what you must. Clean up only your own mess.**
 
-### Required Serena behavior
+- Match existing style, even if you'd do it differently.
+- Leave adjacent code, comments, and formatting as they are; mention unrelated dead code instead of deleting it.
+- Remove imports, variables, and functions that *your* change made unused.
 
-- At the beginning of a coding task, ensure the current repository is activated
-  as the Serena project before using Serena tools.
-- Prefer Serena over grep or repository-wide text search when the request
-  concerns exact declarations, references, implementations, diagnostics,
-  renaming or safe symbol removal.
-- Do not use Serena merely to read a small known file or make a trivial
-  line-level edit.
-- Do not duplicate a successful Codebase Memory query with Serena unless exact
-  language-server confirmation is needed.
-- Before a non-trivial cross-file refactor, use Serena to inspect references and
-  implementations.
-- After a symbol rename or structural refactor, use Serena diagnostics and then
-  run the repository's normal tests and type checks.
+Test: every changed line traces directly to the user's request.
 
-### Use native Codex tools for
+## 4. Goal-driven execution
 
-- reading known files;
-- small localized edits;
-- applying patches;
-- ordinary directory and filename inspection;
-- configuration, documentation and non-code files.
+**Define success criteria. Loop until verified.**
 
-Use the raw underlying command when exact output, a complete stack trace or
-untruncated diagnostic information is required.
+Turn tasks into verifiable goals:
+
+- "Add validation" → write tests for invalid inputs, then make them pass.
+- "Fix the bug" → write a test that reproduces it, then make it pass.
+- "Refactor X" → tests pass before and after.
+
+For multi-step work, state a brief plan:
+
+```text
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+```
+
+## Project gotchas
+
+- `central` embeds `frontend/build` via rust-embed: build the SPA before any cargo command. The `Makefile` targets enforce this; prefer `make test`, `make clippy`, `make verify` over raw cargo.
+- Frontend: `npm test` (vitest), `npm run test:e2e` (playwright), `npm run check` (svelte-check), all from `frontend/`.
+
+## Code intelligence
+
+- **Codebase Memory** for discovery: architecture, call paths, blast radius, finding symbols whose names you don't know.
+- **Serena / LSP** for exact symbol work: definitions, references, implementations, diagnostics, renames, safe deletion. Activate the repo as the Serena project first.
+- Plain read/edit for known files, config, docs, and small line edits.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues on `ViktorsBaikers/looking-glass` (via `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.

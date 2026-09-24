@@ -6,3 +6,4 @@
 .playwright
 .playwright-mcp
 .tokensave
+.omp/mcp.json
