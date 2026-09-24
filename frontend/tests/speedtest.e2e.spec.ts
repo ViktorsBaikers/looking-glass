@@ -7,11 +7,11 @@ test.describe('speed tests section', () => {
 		await expect(page.getByRole('tab', { name: 'Frankfurt (AS64501)' })).toBeVisible();
 	});
 
-	test('iperf3 Client card lists standard and reverse commands with copy', async ({ page }) => {
-		await expect(page.getByText('iperf3 Client')).toBeVisible();
-		await expect(page.getByText('Standard Test')).toBeVisible();
+	test('iperf endpoints card lists standard and reverse commands with copy', async ({ page }) => {
+		await expect(page.getByText('iperf endpoints')).toBeVisible();
+		await expect(page.getByText('Standard test')).toBeVisible();
 		await expect(page.getByText('iperf3 -c 192.0.2.21', { exact: true })).toBeVisible();
-		await expect(page.getByText('Reverse Test')).toBeVisible();
+		await expect(page.getByText('Reverse test')).toBeVisible();
 		await expect(page.getByText('iperf3 -c 192.0.2.21 -R', { exact: true })).toBeVisible();
 		await expect(page.getByRole('button', { name: 'Copy 192.0.2.21 standard command' })).toBeVisible();
 		await expect(page.getByRole('button', { name: 'Copy 192.0.2.21 reverse command' })).toBeVisible();
@@ -24,7 +24,7 @@ test.describe('speed tests section', () => {
 		await expect(small).toHaveAttribute('href', '/api/locations/fra/files/fra-file-10m/download');
 	});
 
-	test('Start Speed Test measures download then upload', async ({ page }) => {
+	test('Start speed test measures download then upload', async ({ page }) => {
 		test.setTimeout(60_000);
 
 		// Hold the first upload response so the transient busy state is observable
@@ -34,7 +34,7 @@ test.describe('speed tests section', () => {
 			await released;
 			await route.continue();
 		});
-		await page.getByRole('button', { name: 'Start Speed Test' }).click();
+		await page.getByRole('button', { name: 'Start speed test' }).click();
 		await expect(page.getByRole('button', { name: 'Testing…' })).toBeDisabled();
 
 		const progress = page.getByRole('progressbar', { name: 'Speed test progress' });
@@ -44,7 +44,7 @@ test.describe('speed tests section', () => {
 		release();
 
 		// Runs to completion: live readouts settle and the button returns.
-		await expect(page.getByRole('button', { name: 'Start Speed Test' })).toBeEnabled({
+		await expect(page.getByRole('button', { name: 'Start speed test' })).toBeEnabled({
 			timeout: 25_000
 		});
 		await expect(progress).toHaveAttribute('aria-valuenow', '100');
@@ -53,7 +53,7 @@ test.describe('speed tests section', () => {
 		await expect(results).toContainText(/Upload\s*\d+\s*Mbps/);
 	});
 
-	test('Start Speed Test measures a remote node through its cross-origin data plane', async ({
+	test('Start speed test measures a remote node through its cross-origin data plane', async ({
 		page
 	}) => {
 		test.setTimeout(60_000);
@@ -63,10 +63,10 @@ test.describe('speed tests section', () => {
 			(response) =>
 				response.url() === `${FIXTURE}/speedtest/upload` && response.request().method() === 'POST'
 		);
-		await page.getByRole('button', { name: 'Start Speed Test' }).click();
+		await page.getByRole('button', { name: 'Start speed test' }).click();
 		expect((await uploadResponse).ok()).toBe(true);
 
-		await expect(page.getByRole('button', { name: 'Start Speed Test' })).toBeEnabled({
+		await expect(page.getByRole('button', { name: 'Start speed test' })).toBeEnabled({
 			timeout: 25_000
 		});
 		await expect(page.getByRole('alert')).toHaveCount(0);
@@ -80,8 +80,8 @@ test.describe('speed tests section', () => {
 		await page.goto(`${APP}/`);
 		await expect(page.getByRole('tab', { name: 'Frankfurt (AS64501)' })).toBeVisible();
 
-		await expect(page.getByText('No test files configured')).toBeVisible();
-		await expect(page.getByRole('button', { name: 'Start Speed Test' })).toBeDisabled();
+		await expect(page.getByText('This location has no test files.')).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Start speed test' })).toBeDisabled();
 		await expect(page.getByRole('link', { name: /test file/ })).toHaveCount(0);
 	});
 });

@@ -43,7 +43,7 @@
 		method,
 		idleTitle,
 		location,
-		hint = 'Pick a location and method, enter a target, then Run Diagnostic.'
+		hint = 'Pick a location and method, enter a target, then Run diagnostic.'
 	}: {
 		controller: RunController;
 		method: string;

@@ -59,8 +59,7 @@ export const headRow = css({
 		gridTemplateColumns: columns,
 		gap: '16px',
 		padding: '12px 20px',
-		textStyle: 'caption',
-		fontWeight: 700,
+		textStyle: 'key',
 		color: 'ink-muted',
 		borderBottomWidth: '1px',
 		borderBottomStyle: 'solid',
@@ -118,10 +117,7 @@ export const stubState = {
 } as const;
 export const nameCell = css({ minWidth: '0', gridColumn: '2', lg: { gridColumn: 'auto' } });
 export const rowTitle = css({
-	fontSize: '17px',
-	lineHeight: '22px',
-	fontWeight: 800,
-	letterSpacing: '-0.01em',
+	textStyle: 'item',
 	color: 'ink'
 });
 export const metaRow = css({
@@ -147,8 +143,7 @@ export const cell = css({
 });
 /** Per-cell label: visible on narrow rows, read-only for screen readers on wide ones. */
 export const cellLabel = css({
-	textStyle: 'caption',
-	fontWeight: 700,
+	textStyle: 'key',
 	color: 'ink-muted',
 	minWidth: '84px',
 	lg: {

@@ -100,8 +100,7 @@ export const tableScroller = css({ overflowX: 'auto' });
 export const table = css({ width: '100%', textAlign: 'left', borderCollapse: 'collapse' });
 export const th = css({
 	padding: '0 12px 10px',
-	textStyle: 'caption',
-	fontWeight: 700,
+	textStyle: 'key',
 	color: 'ink-muted',
 	whiteSpace: 'nowrap',
 	borderBottomWidth: '1px',

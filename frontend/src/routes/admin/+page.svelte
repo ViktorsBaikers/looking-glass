@@ -207,7 +207,7 @@
 	<header class={adminPageHead}>
 		<div>
 			<h1 class={adminTitle}>Locations</h1>
-			<p class={adminLede}>Find a diagnostic location, check its state, or continue its setup.</p>
+			<p class={adminLede}>Find a diagnostic location, check its status, or continue its setup.</p>
 		</div>
 		<Button onclick={openCreate}>
 			<Add aria-hidden="true" />
@@ -282,7 +282,7 @@
 							<p class={metaRow}>
 								{[location.geo_label, location.kind === 'remote' ? 'Remote' : 'Local']
 									.filter(Boolean)
-									.join(' · ')}
+									.join(' ⋅ ')}
 							</p>
 						</div>
 						<div class={cell}>
@@ -298,7 +298,7 @@
 							<span>
 								{location.offered_methods.length} method{location.offered_methods.length === 1
 									? ''
-									: 's'} configured
+									: 's'} offered
 							</span>
 						</div>
 						<div class={actions}>
@@ -395,7 +395,7 @@
 <ConfirmDialog
 	bind:open={showRevoke}
 	title="Revoke this agent?"
-	message="The live tunnel is dropped and the location returns to not enrolled until a new agent enrolls."
+	message="Its credential stops working and its tunnel closes now. The location shows Not enrolled until you enroll a new agent."
 	confirmLabel="Revoke agent"
 	danger
 	busy={revoking}

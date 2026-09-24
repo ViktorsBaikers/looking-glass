@@ -5,7 +5,7 @@
 	import CopyButton from '$lib/components/ui/copy-button.svelte';
 	import { lineStyle } from '$lib/lines.js';
 	import { downloadUrl } from './api.js';
-	import { barWidths, runSpeedTest } from './speedtest.js';
+	import { barWidths, runSpeedTest, type SpeedSample } from './speedtest.js';
 	import {
 		speedSection,
 		speedTitle,
@@ -54,10 +54,28 @@
 	let runId = 0;
 	let abort: AbortController | null = null;
 
+	// Samples arrive once per network chunk (hundreds to thousands a second on
+	// a fast link); the screen only needs the latest one per frame.
+	let pending: SpeedSample | null = null;
+	let frame = 0;
+
+	function flush() {
+		cancelAnimationFrame(frame);
+		frame = 0;
+		if (!pending) return;
+		downloadMbps = pending.downloadMbps;
+		uploadMbps = pending.uploadMbps;
+		progress = pending.progress;
+		pending = null;
+	}
+
 	function cancelRun() {
 		runId++;
 		abort?.abort();
 		abort = null;
+		cancelAnimationFrame(frame);
+		frame = 0;
+		pending = null;
 	}
 
 	$effect(() => {
@@ -83,14 +101,14 @@
 				location,
 				(sample) => {
 					if (id !== runId) return;
-					downloadMbps = sample.downloadMbps;
-					uploadMbps = sample.uploadMbps;
-					progress = sample.progress;
+					pending = sample;
+					frame ||= requestAnimationFrame(flush);
 				},
 				undefined,
 				controller.signal
 			);
 			if (id !== runId) return;
+			flush();
 			failed = result.failed;
 			measured = !result.failed;
 			if (!result.failed) progress = 100;
@@ -116,13 +134,13 @@
 	const uploadWidth = $derived(measured ? doneUploadSplit : liveWidths.upload);
 </script>
 
-<section class={speedSection} aria-label="Speed Tests" data-line style={lineStyle(location.id)}>
-	<h2 class={speedTitle}>Speed Tests</h2>
+<section class={speedSection} aria-label="Speed tests" data-line style={lineStyle(location.id)}>
+	<h2 class={speedTitle}>Speed tests</h2>
 	<div class={speedGrid}>
 		{#if location.iperf.length > 0}
 			<div class={speedCard}>
 				<div class={cardTitleRow}>
-					<span class={iperfTitle}>iperf3 Client</span>
+					<span class={iperfTitle}>iperf endpoints</span>
 				</div>
 				{#each location.iperf as endpoint (endpoint.id)}
 					<div class={endpointBlock}>
@@ -131,16 +149,16 @@
 							<span class={endpointHost}>{endpoint.host}:{endpoint.port}</span>
 						</div>
 						{#each [
-							{ dir: 'Standard Test', cmd: endpoint.cmd_outgoing },
-							{ dir: 'Reverse Test', cmd: endpoint.cmd_incoming }
-						] as row (row.dir)}
+							{ dir: 'Standard test', kind: 'standard', cmd: endpoint.cmd_outgoing },
+							{ dir: 'Reverse test', kind: 'reverse', cmd: endpoint.cmd_incoming }
+						] as row (row.kind)}
 							<div class={cmdGroup}>
 								<span class={cmdLabel}>{row.dir}</span>
 								<div class={cmdRow}>
 									<code class={cmdCode}>{row.cmd}</code>
 								<CopyButton
 									text={row.cmd}
-									label={`${endpoint.host} ${row.dir === 'Standard Test' ? 'standard' : 'reverse'} command`}
+									label={`${endpoint.host} ${row.kind} command`}
 								/>
 								</div>
 							</div>
@@ -152,18 +170,18 @@
 
 		<div class={speedCard}>
 			<div class={cardTitleRow}>
-				<span class={speedCardTitle}>Speed Test</span>
+				<span class={speedCardTitle}>Speed test</span>
 				{#if hasFiles}
 					<Button variant="secondary" size="sm" disabled={running} onclick={start}>
-						{running ? 'Testing…' : 'Start Speed Test'}
+						{running ? 'Testing…' : 'Start speed test'}
 					</Button>
 				{:else}
-					<Button variant="secondary" size="sm" disabled>Start Speed Test</Button>
+					<Button variant="secondary" size="sm" disabled>Start speed test</Button>
 				{/if}
 			</div>
 
 			{#if !hasFiles}
-				<p class={noFilesNote}>No test files configured</p>
+				<p class={noFilesNote}>This location has no test files.</p>
 			{/if}
 
 			{#if failed}
@@ -188,14 +206,18 @@
 			</div>
 			<div
 				class={barTrack}
+				data-settled={measured}
 				role="progressbar"
 				aria-label="Speed test progress"
 				aria-valuemin={0}
 				aria-valuemax={100}
 				aria-valuenow={Math.round(progress)}
 			>
-				<div class={barDownload} style="width: {downloadWidth}%"></div>
-				<div class={barUpload} style="width: {uploadWidth}%"></div>
+				<div class={barDownload} style="transform: scaleX({downloadWidth / 100})"></div>
+				<div
+					class={barUpload}
+					style="transform: translateX({downloadWidth}%) scaleX({uploadWidth / 100})"
+				></div>
 			</div>
 
 			{#if hasFiles}

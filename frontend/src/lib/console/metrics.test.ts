@@ -34,7 +34,7 @@ describe('metricsFor ping', () => {
 			['Latency', '12.1', 'ms', 'avg'],
 			['Packet loss', '0', '%', '0/4'],
 			['Jitter', '0.2', 'ms', 'mdev'],
-			['TTL', '56', undefined, 'hops']
+			['TTL', '56', undefined, 'last reply']
 		]);
 		expect(metrics.every((metric) => metric.tooltip.length > 0)).toBe(true);
 	});

@@ -156,10 +156,10 @@
 							/>
 						</Field>
 						<Button type="submit" class={runButton} disabled={!controller.active && !canRun}>
-							{controller.active ? 'Cancel' : 'Run Diagnostic'}
+							{controller.active ? 'Cancel' : 'Run diagnostic'}
 						</Button>
 						{#if methodOptions.length === 0}
-							<p class={panelNote}>This location has no runnable methods enabled yet.</p>
+							<p class={panelNote}>This location doesn't offer any methods yet.</p>
 						{/if}
 					</form>
 					{#if selected}
@@ -170,17 +170,21 @@
 		</Tabs>
 	{/if}
 
-	<section class={resultsSection} aria-label="Output" bind:this={outputSection}>
-		<Console
-			{controller}
-			method={runMethod || method}
-			idleTitle={selected ? `${selected.name} ~ ${method}` : ''}
-			location={runLocation ?? selected ?? null}
-		/>
-		{#if metrics.length > 0}
-			<MetricsGrid {metrics} />
-		{/if}
-	</section>
+	<!-- Held back while locations load: rendered early, the Location panel
+	     arriving above it would shove it down the page (layout shift). -->
+	{#if phase !== 'loading'}
+		<section class={resultsSection} aria-label="Output" bind:this={outputSection}>
+			<Console
+				{controller}
+				method={runMethod || method}
+				idleTitle={selected ? `${selected.name} ~ ${method}` : ''}
+				location={runLocation ?? selected ?? null}
+			/>
+			{#if metrics.length > 0}
+				<MetricsGrid {metrics} />
+			{/if}
+		</section>
+	{/if}
 
 	{#if selected}
 		<SpeedtestBlock location={selected} />

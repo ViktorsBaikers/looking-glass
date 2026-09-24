@@ -47,7 +47,7 @@ test('administrators.e2e create pending shows the activation link once and closi
 	await signIn(page, `admins-create-${crypto.randomUUID()}`);
 
 	await page.getByLabel('Username').fill('casey');
-	await page.getByRole('button', { name: 'Create pending' }).click();
+	await page.getByRole('button', { name: 'Create activation link' }).click();
 
 	const dialog = page.getByRole('dialog');
 	await expect(dialog).toBeVisible();

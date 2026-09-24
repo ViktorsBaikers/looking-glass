@@ -118,8 +118,8 @@
 	</div>
 
 	<div class={statusRow}>
-		<span>Latency ≈</span>
-		<span class={statusValue}>{latencyMs === null ? '—' : `${latencyMs} ms`}</span>
+		<span>Your latency</span>
+		<span class={statusValue}>{latencyMs === null ? '—' : `≈ ${latencyMs} ms`}</span>
 	</div>
 	{#if moreIps.length > 0}
 		<div class={moreWrap}>
@@ -131,7 +131,7 @@
 				{#each moreIps as ip (ip.id)}
 					<div class={moreIpRow}>
 						<span class={statusMono}>{ip.address}</span>
-						<span class={moreIpMeta}>{ip.family === 'v4' ? 'IPv4' : 'IPv6'}{ip.label ? ` · ${ip.label}` : ''}</span>
+						<span class={moreIpMeta}>{ip.family === 'v4' ? 'IPv4' : 'IPv6'}{ip.label ? ` ⋅ ${ip.label}` : ''}</span>
 						<CopyButton text={ip.address} label={`test IP ${ip.address}`} />
 					</div>
 				{/each}

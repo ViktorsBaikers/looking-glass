@@ -182,7 +182,7 @@
 	</div>
 
 	{#if items.length === 0}
-		<p class={emptyWell}>Nothing here yet.</p>
+		<p class={emptyWell}>No {itemLabel}s yet.</p>
 	{:else}
 		<div class={tableScroller}>
 			<table class={table}>

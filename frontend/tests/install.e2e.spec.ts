@@ -19,7 +19,7 @@ test('install.e2e redirects a fresh public entry to the installer after its boun
 	expect(statusResponse.status()).toBe(200);
 	expect(await statusResponse.json()).toEqual({ installed: false });
 	await expect(page).toHaveURL(`${APP}/install`);
-	await expect(page.getByRole('heading', { name: 'Create the admin account' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Create the first administrator' })).toBeVisible();
 
 	const protectedRoute = await request.get(`${FIXTURE}/api/locations`, {
 		headers: { 'x-looking-glass-fixture': fixtureId }
@@ -38,7 +38,7 @@ test('install.e2e creates the only admin and closes the installer', async ({ pag
 	const statusResponse = await initialStatus;
 	expect(statusResponse.status()).toBe(200);
 	expect(await statusResponse.json()).toEqual({ installed: false });
-	await expect(page.getByRole('heading', { name: 'Create the admin account' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Create the first administrator' })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Create account' })).toBeDisabled();
 
 	await page.getByLabel('Setup token').fill('fixture-setup-token');
@@ -127,5 +127,5 @@ test('install.e2e creates the only admin and closes the installer', async ({ pag
 		expect(await response.json()).toEqual({ installed: true });
 	}
 	await expect(page).toHaveURL(`${APP}/login`);
-	await expect(page.getByRole('heading', { name: 'Create the admin account' })).toHaveCount(0);
+	await expect(page.getByRole('heading', { name: 'Create the first administrator' })).toHaveCount(0);
 });

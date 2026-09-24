@@ -23,7 +23,7 @@ test('locations.e2e lists cards with state, kind, last seen and method count', a
 	const frankfurt = card(page, 'Frankfurt');
 	await expect(frankfurt).toContainText('Online');
 	await expect(frankfurt).toContainText('Local');
-	await expect(frankfurt).toContainText('6 methods configured');
+	await expect(frankfurt).toContainText('6 methods offered');
 	const vienna = card(page, 'Vienna');
 	await expect(vienna).toContainText('Online');
 	await expect(vienna).toContainText('Remote');
@@ -31,7 +31,7 @@ test('locations.e2e lists cards with state, kind, last seen and method count', a
 	const sfo = card(page, 'San Francisco Hub');
 	await expect(sfo).toContainText('Not enrolled');
 	await expect(sfo).toContainText('Never');
-	await expect(sfo).toContainText('0 methods configured');
+	await expect(sfo).toContainText('0 methods offered');
 	// Enroll is remote-only; Revoke only for an enrolled remote.
 	await expect(sfo.getByRole('button', { name: 'Enroll' })).toBeVisible();
 	await expect(sfo.getByRole('button', { name: 'Revoke' })).toHaveCount(0);

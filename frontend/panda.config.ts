@@ -27,24 +27,46 @@ export default defineConfig({
 			toast: ['*']
 		}
 	},
+	// Hover styles only where a real pointer hovers: on touch, a tap would
+	// otherwise leave the hover colour stuck on until the next tap elsewhere.
+	conditions: {
+		extend: {
+			hover: ['@media (hover: hover) and (pointer: fine)', '&:is(:hover, [data-hover])']
+		}
+	},
 	outdir: 'styled-system',
 	theme: {
 		keyframes: {
 			spin: { to: { transform: 'rotate(360deg)' } },
 			'fade-in': { from: { opacity: 0 }, to: { opacity: 1 } },
-			'content-in': {
-				from: { opacity: 0, transform: 'translateY(6px)' },
-				to: { opacity: 1, transform: 'translateY(0)' }
+			'fade-out': { from: { opacity: 1 }, to: { opacity: 0 } },
+			// Popovers and dialogs grow from 96% of their size, never from nothing.
+			'pop-in': {
+				from: { opacity: 0, transform: 'scale(0.96)' },
+				to: { opacity: 1, transform: 'scale(1)' }
+			},
+			'pop-out': {
+				from: { opacity: 1, transform: 'scale(1)' },
+				to: { opacity: 0, transform: 'scale(0.96)' }
+			},
+			'drawer-in': { from: { transform: 'translateX(-100%)' }, to: { transform: 'translateX(0)' } },
+			'drawer-out': { from: { transform: 'translateX(0)' }, to: { transform: 'translateX(-100%)' } },
+			// Copy confirmation: the check arrives with a little weight.
+			'check-in': {
+				from: { opacity: 0, transform: 'scale(0.6)' },
+				to: { opacity: 1, transform: 'scale(1)' }
 			},
 			// A station arriving on the route: the marker drops in, the row fades up.
 			'station-in': {
 				from: { opacity: 0, transform: 'translateY(-4px)' },
 				to: { opacity: 1, transform: 'translateY(0)' }
 			},
-			// The live "you are here" marker on the newest station.
+			// The live "you are here" marker on the newest station: a ring leaves
+			// the marker and fades (transform + opacity only, so no repaint).
 			'here-pulse': {
-				'0%': { boxShadow: '0 0 0 0 var(--line-halo)' },
-				'100%': { boxShadow: '0 0 0 10px transparent' }
+				'0%': { transform: 'scale(1)', opacity: 0.9 },
+				'60%': { opacity: 0.35 },
+				'100%': { transform: 'scale(2)', opacity: 0 }
 			}
 		},
 		tokens: {
@@ -65,14 +87,21 @@ export default defineConfig({
 				}
 			},
 			easings: {
-				out: { value: 'cubic-bezier(0.16, 1, 0.3, 1)' }
+				out: { value: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+				drawer: { value: 'cubic-bezier(0.32, 0.72, 0, 1)' },
+				'in-out': { value: 'cubic-bezier(0.77, 0, 0.175, 1)' }
 			},
 			animations: {
 				spin: { value: 'spin 1s linear infinite' },
 				'fade-in': { value: 'fade-in 160ms cubic-bezier(0.16, 1, 0.3, 1)' },
-				'content-in': { value: 'content-in 200ms cubic-bezier(0.16, 1, 0.3, 1)' },
-				'station-in': { value: 'station-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both' },
-				'here-pulse': { value: 'here-pulse 1.4s cubic-bezier(0.16, 1, 0.3, 1) infinite' }
+				'fade-out': { value: 'fade-out 120ms cubic-bezier(0.16, 1, 0.3, 1) forwards' },
+				'pop-in': { value: 'pop-in 180ms cubic-bezier(0.16, 1, 0.3, 1)' },
+				'pop-out': { value: 'pop-out 140ms cubic-bezier(0.16, 1, 0.3, 1) forwards' },
+				'drawer-in': { value: 'drawer-in 300ms cubic-bezier(0.32, 0.72, 0, 1)' },
+				'drawer-out': { value: 'drawer-out 200ms cubic-bezier(0.32, 0.72, 0, 1) forwards' },
+				'check-in': { value: 'check-in 200ms cubic-bezier(0.16, 1, 0.3, 1)' },
+				'station-in': { value: 'station-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both' },
+				'here-pulse': { value: 'here-pulse 1.6s cubic-bezier(0.25, 0.1, 0.25, 1) infinite' }
 			}
 		},
 		// Light = the printed map (neutral paper, ink). Dark = the night map
@@ -100,7 +129,7 @@ export default defineConfig({
 				'danger-soft': { value: 'light-dark(#f9e3e1, #331a19)' }
 			}
 		},
-		// One strict scale: 12 · 13 · 14 · 16 · 20 · 28 · 40.
+		// One strict scale: 12 · 13 · 14 · 16 · 20 · 28 · 40. Every role below sits on it.
 		textStyles: {
 			display: {
 				value: {
@@ -120,11 +149,27 @@ export default defineConfig({
 			'body-sm': { value: { fontSize: '14px', lineHeight: '20px', fontWeight: 400 } },
 			label: { value: { fontSize: '13px', lineHeight: '16px', fontWeight: 600, letterSpacing: '0' } },
 			caption: { value: { fontSize: '12px', lineHeight: '16px', fontWeight: 500 } },
+			// The name half of a fact: fact keys, column heads, nav group heads, tags.
+			key: { value: { fontSize: '12px', lineHeight: '16px', fontWeight: 700 } },
+			// A named thing inside a list or card: row names, card heads, the brand.
+			item: { value: { fontSize: '16px', lineHeight: '22px', fontWeight: 800, letterSpacing: '-0.01em' } },
+			// A fact's value in sans (status, place, facility). Not `value`: Panda reads that key as a leaf.
+			fact: { value: { fontSize: '16px', lineHeight: '22px', fontWeight: 600 } },
 			code: {
 				value: {
 					fontFamily: 'mono',
 					fontSize: '13px',
 					lineHeight: '20px',
+					fontWeight: 400,
+					fontVariantNumeric: 'tabular-nums'
+				}
+			},
+			// Inline data outside the console: addresses, ASNs, commands.
+			data: {
+				value: {
+					fontFamily: 'mono',
+					fontSize: '14px',
+					lineHeight: '22px',
 					fontWeight: 400,
 					fontVariantNumeric: 'tabular-nums'
 				}
@@ -154,9 +199,11 @@ export default defineConfig({
 					lineHeight: '16px',
 					fontWeight: 700,
 					cursor: 'pointer',
-					transitionProperty: 'background, color, border-color',
-					transitionDuration: '120ms',
+					transitionProperty: 'background, color, border-color, transform',
+					transitionDuration: '140ms',
 					transitionTimingFunction: 'out',
+					// Press feedback on every variant: the button gives a little.
+					_active: { transform: 'scale(0.97)' },
 					borderStyle: 'solid',
 					borderWidth: '1px',
 					borderColor: 'transparent',
@@ -170,8 +217,7 @@ export default defineConfig({
 						primary: {
 							background: 'ink',
 							color: 'on-ink',
-							_hover: { background: 'ink-hover' },
-							_active: { transform: 'translateY(1px)' }
+							_hover: { background: 'ink-hover' }
 						},
 						secondary: {
 							background: 'panel',
@@ -193,7 +239,7 @@ export default defineConfig({
 					size: {
 						sm: { minHeight: '32px', padding: '0 12px', fontSize: '13px' },
 						md: { minHeight: '40px', padding: '0 16px' },
-						lg: { minHeight: '48px', padding: '0 24px', fontSize: '15px' },
+						lg: { minHeight: '48px', padding: '0 24px', fontSize: '16px' },
 						icon: { minHeight: '36px', minWidth: '36px', padding: '0' }
 					}
 				},
@@ -207,8 +253,7 @@ export default defineConfig({
 					gap: '6px',
 					borderRadius: 'sm',
 					padding: '2px 6px',
-					textStyle: 'caption',
-					fontWeight: 700,
+					textStyle: 'key',
 					whiteSpace: 'nowrap'
 				},
 				variants: {
@@ -243,7 +288,8 @@ export default defineConfig({
 					borderRadius: 'sm',
 					padding: '8px 12px',
 					fontFamily: 'sans',
-					fontSize: '15px',
+					// 16px: the body floor, and iOS zooms the page on focus below it.
+					fontSize: '16px',
 					lineHeight: '22px',
 					transitionProperty: 'border-color, box-shadow',
 					transitionDuration: '120ms',
@@ -265,7 +311,7 @@ export default defineConfig({
 							_focus: { borderColor: 'danger', boxShadow: 'inset 0 0 0 1px {colors.danger}' }
 						}
 					},
-					mono: { true: { fontFamily: 'mono', fontSize: '14px' } }
+					mono: { true: { fontFamily: 'mono' } }
 				}
 			},
 			checkboxCard: {
@@ -330,7 +376,8 @@ export default defineConfig({
 						inset: '0',
 						background: 'rgba(10, 11, 13, 0.55)',
 						zIndex: 50,
-						animation: 'fade-in'
+						_open: { animation: 'fade-in' },
+						_closed: { animation: 'fade-out' }
 					},
 					positioner: {
 						position: 'fixed',
@@ -357,7 +404,9 @@ export default defineConfig({
 						overflowY: 'auto',
 						boxShadow: 'popup',
 						outline: 'none',
-						animation: 'content-in'
+						// A modal is not anchored to its trigger: it grows from its centre.
+						_open: { animation: 'pop-in' },
+						_closed: { animation: 'pop-out' }
 					},
 					title: { textStyle: 'title', marginBottom: '6px', paddingRight: '32px' },
 					description: { textStyle: 'body-sm', color: 'ink-muted', marginBottom: '20px' },
@@ -402,7 +451,7 @@ export default defineConfig({
 						'&[aria-selected=true]': { color: 'ink' },
 						_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '-2px' }
 					},
-					meta: { fontWeight: 500, color: 'ink-muted', fontVariantNumeric: 'tabular-nums' },
+					meta: { fontFamily: 'mono', fontSize: '13px', fontWeight: 400, color: 'ink-muted' },
 					content: { _focusVisible: { outline: 'none' } }
 				},
 				variants: {
@@ -465,7 +514,7 @@ export default defineConfig({
 								gap: '10px',
 								padding: '10px 14px 12px 4px',
 								marginBottom: '-1px',
-								fontSize: '15px',
+								fontSize: '16px',
 								lineHeight: '20px',
 								fontWeight: 700,
 								borderBottomWidth: '4px',
@@ -560,7 +609,11 @@ export default defineConfig({
 						textStyle: 'body-sm',
 						maxWidth: '280px',
 						boxShadow: 'popup',
-						animation: 'fade-in'
+						transformOrigin: 'var(--transform-origin)',
+						_open: { animation: 'pop-in 130ms cubic-bezier(0.16, 1, 0.3, 1)' },
+						_closed: { animation: 'fade-out' },
+						// Moving between tooltips while one is open: no delay, no motion.
+						'&[data-instant]': { animation: 'none' }
 					},
 					arrow: {}
 				}
@@ -585,7 +638,7 @@ export default defineConfig({
 						borderColor: 'rule-strong',
 						borderRadius: 'sm',
 						fontFamily: 'sans',
-						fontSize: '15px',
+						fontSize: '16px',
 						lineHeight: '22px',
 						cursor: 'pointer',
 						transitionProperty: 'border-color, box-shadow',
@@ -616,8 +669,11 @@ export default defineConfig({
 						padding: '4px 0',
 						maxHeight: '288px',
 						overflowY: 'auto',
-						animation: 'fade-in',
-						outline: 'none'
+						outline: 'none',
+						// Grows out of the trigger it belongs to.
+						transformOrigin: 'var(--transform-origin)',
+						_open: { animation: 'pop-in 160ms cubic-bezier(0.16, 1, 0.3, 1)' },
+						_closed: { animation: 'fade-out' }
 					},
 					item: {
 						display: 'flex',
@@ -625,7 +681,7 @@ export default defineConfig({
 						justifyContent: 'space-between',
 						gap: '8px',
 						padding: '8px 12px',
-						fontSize: '15px',
+						fontSize: '16px',
 						lineHeight: '22px',
 						color: 'ink',
 						cursor: 'pointer',
@@ -655,7 +711,18 @@ export default defineConfig({
 						color: 'on-ink',
 						borderRadius: 'sm',
 						boxShadow: 'popup',
-						animation: 'content-in',
+						// Ark positions every toast absolutely and drives the stack through
+						// these variables; transitions (not keyframes) so a toast added
+						// mid-animation retargets instead of restarting.
+						translate: 'var(--x) var(--y)',
+						zIndex: 'var(--z-index)',
+						height: 'var(--height)',
+						opacity: 'var(--opacity)',
+						willChange: 'translate, opacity',
+						transitionProperty: 'translate, opacity, height',
+						transitionDuration: '360ms',
+						transitionTimingFunction: 'out',
+						_closed: { transitionDuration: '200ms' },
 						'&[data-type=error]': { background: 'danger', color: 'white' },
 						'& svg': { width: '20px', height: '20px', flexShrink: 0 }
 					},
@@ -695,13 +762,13 @@ export default defineConfig({
 		// Location lines (lib/lines.ts): the element declares both themes' colours.
 		'[data-line]': {
 			'--line': 'light-dark(var(--line-light), var(--line-dark))',
-			'--line-ink': 'light-dark(var(--line-ink-light), #111214)',
-			'--line-halo': 'color-mix(in srgb, var(--line) 45%, transparent)'
+			'--line-ink': 'light-dark(var(--line-ink-light), #111214)'
 		},
 		'*': { borderColor: 'rule' },
 		'a': { textUnderlineOffset: '3px', textDecorationThickness: '1px' },
 		'input, textarea': { caretColor: '{colors.ink}' },
 		'h1, h2, h3': { textWrap: 'balance' },
+		p: { textWrap: 'pretty' },
 		'*:focus-visible': { outlineColor: '{colors.ink}' },
 		'::-webkit-scrollbar': { width: '10px', height: '10px' },
 		'::-webkit-scrollbar-track': { background: 'transparent' },

@@ -76,9 +76,10 @@
 <div class={authPage}>
 	<Card class={authCard}>
 		<CardHeader>
-			<CardTitle class={authTitle}>Create the admin account</CardTitle>
+			<CardTitle class={authTitle}>Create the first administrator</CardTitle>
 			<CardDescription>
-				This one-time step creates the single administrator for this Looking Glass.
+				This one-time step creates the first administrator for this Looking Glass. You can add more
+				from Administrators later.
 			</CardDescription>
 		</CardHeader>
 		<CardContent>

@@ -67,7 +67,7 @@ function pingMetrics(lines: string[]): Metric[] {
 		metrics.push({
 			label: 'TTL',
 			value: ttl[1],
-			caption: 'hops',
+			caption: 'last reply',
 			tooltip: 'Time-to-live in the last reply; each routing hop decrements it by one.'
 		});
 	}
