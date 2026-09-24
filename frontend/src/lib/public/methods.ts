@@ -37,3 +37,30 @@ export function targetPlaceholder(method: string): string {
 		? 'e.g. 8.8.8.0/24 or 2001:db8::/32'
 		: 'e.g. 1.1.1.1 or example.com';
 }
+
+// A clearly non-public IPv4 literal (private/loopback/link-local ranges) is
+// refused in the browser before the run starts; anything ambiguous is left to
+// the server's SSRF validation. BGP takes route prefixes, so it is exempt.
+export function targetPreflightError(method: string, target: string): string {
+	if (BGP_METHODS.has(method)) return '';
+	return isClearlyNonPublicIpv4(target.trim())
+		? 'Enter a publicly routable IPv4 address or hostname.'
+		: '';
+}
+
+function isClearlyNonPublicIpv4(value: string): boolean {
+	const parts = value.split('.');
+	if (parts.length !== 4 || parts.some((part) => !/^(0|[1-9]\d{0,2})$/.test(part))) return false;
+
+	const octets = parts.map(Number);
+	if (octets.some((octet) => octet > 255)) return false;
+
+	const [first, second] = octets;
+	return (
+		first === 10 ||
+		first === 127 ||
+		(first === 169 && second === 254) ||
+		(first === 172 && second >= 16 && second <= 31) ||
+		(first === 192 && second === 168)
+	);
+}

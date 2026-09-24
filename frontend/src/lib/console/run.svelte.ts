@@ -2,7 +2,7 @@
 // reactive console state the UI renders. Cancel and browser-close both simply
 // close the stream — the node observes the disconnect and kills the process.
 
-export type RunStatus = 'idle' | 'connecting' | 'streaming' | 'done' | 'error';
+export type RunStatus = 'idle' | 'connecting' | 'streaming' | 'done' | 'error' | 'canceled';
 
 export type ConsoleLine = { kind: 'out' | 'error' | 'meta'; text: string };
 
@@ -18,27 +18,24 @@ const FRIENDLY_FAILURE: Record<string, string> = {
 export class RunController {
 	status = $state<RunStatus>('idle');
 	lines = $state<ConsoleLine[]>([]);
-	summary = $state('');
 	errorText = $state('');
+	/// '{Location} ~ {method}' title of the last started run (Live Console bar).
+	runTitle = $state('');
 
 	#source: EventSource | null = null;
-	#methodLabel = '';
-	#target = '';
 
 	get active(): boolean {
 		return this.status === 'connecting' || this.status === 'streaming';
 	}
 
-	start(location: string, method: string, methodLabel: string, target: string): void {
+	start(locationId: string, locationName: string, method: string, target: string): void {
 		this.#close();
 		this.lines = [];
-		this.summary = '';
 		this.errorText = '';
 		this.status = 'connecting';
-		this.#methodLabel = methodLabel;
-		this.#target = target;
+		this.runTitle = `${locationName} ~ ${method}`;
 
-		const params = new URLSearchParams({ location, method, target });
+		const params = new URLSearchParams({ location: locationId, method, target });
 		const source = new EventSource(`/api/run/stream?${params.toString()}`);
 		this.#source = source;
 
@@ -78,7 +75,7 @@ export class RunController {
 	cancel(): void {
 		if (!this.#source) return;
 		this.#close();
-		this.status = 'idle';
+		this.status = 'canceled';
 		this.lines.push({ kind: 'meta', text: 'Run canceled.' });
 	}
 
@@ -86,8 +83,6 @@ export class RunController {
 		this.#close();
 		if (payload?.status === 'completed' && payload.success) {
 			this.status = 'done';
-			const seconds = ((payload.elapsed_ms ?? 0) / 1000).toFixed(1);
-			this.summary = `${this.#methodLabel} · ${this.#target} · ${seconds}s`;
 			return;
 		}
 		this.status = 'error';
