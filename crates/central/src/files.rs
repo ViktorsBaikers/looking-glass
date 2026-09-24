@@ -15,14 +15,21 @@ use std::path::{Component, Path, PathBuf};
 
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use axum::Router;
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use futures_util::StreamExt;
+use serde_json::json;
 use tower_http::services::ServeFile;
 
-use crate::store::LocationStatus;
+use crate::auth::{ApiError, ClientContext};
+use crate::run_api::same_origin;
+use crate::store::{LocationStatus, NodeKind};
 use crate::AppState;
+
+/// The browser speed-test upload cap (spec #1): 25 MB, refused with 413 beyond.
+const UPLOAD_CAP_BYTES: u64 = 25 * 1024 * 1024;
 
 pub fn routes(state: AppState) -> Router {
     Router::new()
@@ -30,7 +37,74 @@ pub fn routes(state: AppState) -> Router {
             "/api/locations/{location_id}/files/{file_id}/download",
             get(download),
         )
+        .route(
+            "/api/locations/{location_id}/speedtest/upload",
+            post(upload),
+        )
         .with_state(state)
+}
+
+/// The local node's speed-test upload sink (spec #1): streams the visitor's
+/// upload and discards it — bytes never touch disk — capped at 25 MB (413
+/// beyond) and counted against the same per-client rate limiter as runs. The
+/// response reports how many bytes were received. Remote locations upload to
+/// their agent's data-plane instead, so a remote (or unknown) id is a 404.
+async fn upload(
+    State(state): State<AppState>,
+    ctx: ClientContext,
+    headers: HeaderMap,
+    AxumPath(location_id): AxumPath<String>,
+    request: Request<Body>,
+) -> Response {
+    // The same unauthenticated-work posture as the run endpoint: a browser
+    // request must prove same-origin, and the trusted-proxy client identity
+    // keys the shared exec rate limit.
+    if !same_origin(&headers) {
+        return ApiError::Coded(
+            StatusCode::FORBIDDEN,
+            "cross_origin_refused",
+            "The speed test upload must be started from this site.",
+        )
+        .into_response();
+    }
+    if let Some(client) = ctx.ip {
+        if !state.run.rate_allow(client) {
+            return ApiError::RateLimited.into_response();
+        }
+    }
+    match state.store.get_location(&location_id) {
+        Ok(Some(location)) if location.kind == NodeKind::Local => {}
+        Ok(_) => return ApiError::NotFound.into_response(),
+        Err(_) => return ApiError::Internal.into_response(),
+    }
+
+    let mut stream = request.into_body().into_data_stream();
+    let mut total: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => {
+                total += bytes.len() as u64;
+                if total > UPLOAD_CAP_BYTES {
+                    return ApiError::Coded(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "payload_too_large",
+                        "Uploads are capped at 25 MB.",
+                    )
+                    .into_response();
+                }
+            }
+            Err(_) => {
+                return ApiError::Coded(
+                    StatusCode::BAD_REQUEST,
+                    "upload_failed",
+                    "The upload could not be read.",
+                )
+                .into_response()
+            }
+        }
+    }
+    tracing::debug!(location_id = %location_id, bytes = total, "speedtest upload discarded");
+    Json(json!({ "bytes": total })).into_response()
 }
 
 /// Serve one of a location's test files with range support. The file must belong

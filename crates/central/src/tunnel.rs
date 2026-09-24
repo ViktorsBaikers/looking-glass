@@ -2508,6 +2508,7 @@ mod tests {
                 facility_url: None,
                 kind: crate::store::NodeKind::Remote,
                 data_plane_origin: None,
+                asn: None,
                 offered_methods: vec![],
                 status: crate::store::LocationStatus::Offline,
                 created_at: 0,

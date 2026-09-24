@@ -18,6 +18,7 @@ use tower_http::{
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod admin_api;
+mod administrators;
 mod auth;
 mod enroll;
 mod files;
@@ -34,7 +35,7 @@ pub use enroll::EnrollConfig;
 pub use ratelimit::{LoginLimiter, TransportConfig};
 pub use run_api::RunService;
 pub use session::{RedbSessionStore, COOKIE_NAME as SESSION_COOKIE_NAME};
-pub use store::{Agent, EnrollmentToken, Store, StoreError};
+pub use store::{Administrator, Agent, EnrollmentToken, Store, StoreError};
 // The authenticated relay hub this slice produces — the seam the remote-run path
 // (Slice 10) submits diagnostics through.
 pub use tunnel::{NotConnected, RelayEvent, SubmitError, TunnelHub};
@@ -240,6 +241,7 @@ pub fn build(state: AppState) -> Router {
         .merge(run)
         .merge(files)
         .merge(public)
+        .merge(administrators::activation_routes(state.clone()))
         .layer(from_fn_with_state(state.clone(), installer::require_setup));
     with_routes(api)
 }
@@ -252,6 +254,7 @@ fn api_routes(state: AppState) -> Router {
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/admin/me", get(auth::me))
         .merge(admin_api::admin_routes())
+        .merge(administrators::admin_routes())
         .merge(enroll::routes())
         .with_state(state)
 }

@@ -645,3 +645,129 @@ async fn test_file_download_refuses_path_traversal() {
     .await;
     assert_status(&response, StatusCode::NOT_FOUND);
 }
+
+// Spec #1 Location schema: the optional ASN is exposed in the public payload —
+// a number where set, null where absent (old rows / no ASN configured).
+#[tokio::test]
+async fn public_locations_expose_the_optional_asn() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+
+    let created = send(
+        central::build(state.clone()),
+        authed(
+            "POST",
+            "/api/admin/locations",
+            &cookie,
+            &json!({ "name": "Vienna", "geo_label": "AT", "kind": "local", "offered_methods": ["ping"], "asn": 64500 })
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_status(&created, StatusCode::CREATED);
+    let _with_asn = create_local_location(&state, &cookie, json!(["ping"])).await;
+
+    let public = send(
+        central::build(state),
+        Request::builder()
+            .uri("/api/locations")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let body = json_body(public).await;
+    let locations = body.as_array().unwrap();
+    let vienna = locations.iter().find(|l| l["name"] == "Vienna").unwrap();
+    assert_eq!(vienna["asn"], json!(64500));
+    let frankfurt = locations.iter().find(|l| l["name"] == "Frankfurt").unwrap();
+    assert_eq!(
+        frankfurt["asn"],
+        Value::Null,
+        "a location without an ASN exposes null, never omits the field"
+    );
+}
+
+// ----- Browser speed-test upload sink (spec #1) ---------------------------------
+
+/// A same-origin public upload POST from an untrusted peer.
+fn upload_request(location: &str, body: Vec<u8>) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(format!("/api/locations/{location}/speedtest/upload"))
+        .header("host", "localhost")
+        .header("origin", "http://localhost")
+        .extension(ConnectInfo(SocketAddr::new(UNTRUSTED_PEER, 50000)))
+        .body(Body::from(body))
+        .unwrap()
+}
+
+// Spec #1 upload sink: a local-node upload streams, is discarded, and reports
+// the received byte count; a remote or unknown location has no central sink (404).
+#[tokio::test]
+async fn upload_sink_discards_the_body_and_reports_its_size() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let local = create_local_location(&state, &cookie, json!(["ping"])).await;
+    let remote = create_remote_location(&state, &cookie, json!(["ping"])).await;
+
+    let uploaded = send(
+        central::build(state.clone()),
+        upload_request(&local, vec![7u8; 4096]),
+    )
+    .await;
+    assert_status(&uploaded, StatusCode::OK);
+    assert_eq!(json_body(uploaded).await, json!({ "bytes": 4096 }));
+
+    // The sink is the local node's: a remote location uploads to its agent's
+    // data-plane, never to central.
+    let remote_refused = send(
+        central::build(state.clone()),
+        upload_request(&remote, vec![7u8; 16]),
+    )
+    .await;
+    assert_status(&remote_refused, StatusCode::NOT_FOUND);
+
+    let unknown = send(
+        central::build(state),
+        upload_request("ghost", vec![7u8; 16]),
+    )
+    .await;
+    assert_status(&unknown, StatusCode::NOT_FOUND);
+}
+
+// Spec #1 upload sink: beyond the 25 MB cap the upload is refused with 413.
+#[tokio::test]
+async fn upload_sink_refuses_more_than_25_mb() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let local = create_local_location(&state, &cookie, json!(["ping"])).await;
+
+    let oversized = send(
+        central::build(state),
+        upload_request(&local, vec![0u8; 25 * 1024 * 1024 + 1]),
+    )
+    .await;
+    assert_status(&oversized, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(json_body(oversized).await["error"], "payload_too_large");
+}
+
+// Spec #1 upload sink: uploads count against the run rate limiter — with a
+// one-request window the second upload is refused 429.
+#[tokio::test]
+async fn upload_sink_counts_against_the_run_rate_limit() {
+    let mut state = test_state();
+    state.run = central::RunService::for_test(8, std::time::Duration::from_secs(30), 1);
+    let cookie = setup_and_login(&state).await;
+    let local = create_local_location(&state, &cookie, json!(["ping"])).await;
+
+    let first = send(
+        central::build(state.clone()),
+        upload_request(&local, vec![1u8; 64]),
+    )
+    .await;
+    assert_status(&first, StatusCode::OK);
+
+    let second = send(central::build(state), upload_request(&local, vec![1u8; 64])).await;
+    assert_status(&second, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(json_body(second).await["error"], "rate_limited");
+}

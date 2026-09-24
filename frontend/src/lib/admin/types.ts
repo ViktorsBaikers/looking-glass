@@ -27,6 +27,9 @@ export interface Location {
 	facility_url: string | null;
 	kind: NodeKind;
 	data_plane_origin: string | null;
+	/** Optional ASN (1–4294967295). The server always sends it (null when unset);
+	 * optional here so existing literals keep type-checking. Displayed as AS{n}. */
+	asn?: number | null;
 	offered_methods: OfferedMethod[];
 	status: LocationStatus;
 	created_at: number;
@@ -74,6 +77,34 @@ export interface EnrollmentTicket {
 	install_command: string;
 	token: string;
 	fingerprint: string;
+	expires_at: number;
+}
+
+/** The signed-in administrator (GET /api/admin/me). */
+export interface Me {
+	id: string;
+	username: string;
+}
+
+export type AdministratorStatus = 'active' | 'pending';
+
+/** One equal-peer administrator (ADR-0001), as listed by
+ * GET /api/admin/administrators. `activation_expires_at` is unix seconds and
+ * non-null only while pending. */
+export interface Administrator {
+	id: string;
+	username: string;
+	status: AdministratorStatus;
+	created_at: number;
+	activation_expires_at: number | null;
+}
+
+/** The one-time response of create/regenerate: the activation URL is shown
+ * once and never retrievable again (POST /api/admin/administrators,
+ * POST /api/admin/administrators/{id}/activation). `expires_at` is unix seconds. */
+export interface ActivationLink {
+	administrator: Administrator;
+	activation_url: string;
 	expires_at: number;
 }
 

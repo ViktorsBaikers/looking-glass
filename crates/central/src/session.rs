@@ -32,6 +32,41 @@ impl RedbSessionStore {
             cookie_key: Key::from(store.session_cookie_key()),
         }
     }
+
+    /// Delete every session record belonging to one administrator, except `keep`
+    /// — the mechanism behind "removal ends that peer's sessions immediately"
+    /// and "a password change signs out the caller's OTHER sessions" (spec #1).
+    /// The record data has no secondary index on the admin id, so this scans and
+    /// deletes inside one write transaction.
+    pub async fn delete_for_admin(
+        &self,
+        admin_id: &str,
+        keep: Option<Id>,
+    ) -> session_store::Result<()> {
+        let txn = self.db.begin_write().map_err(backend)?;
+        {
+            let mut table = txn.open_table(SESSION).map_err(backend)?;
+            let doomed: Vec<String> = table
+                .iter()
+                .map_err(backend)?
+                .filter_map(|entry| {
+                    let (key, value) = entry.ok()?;
+                    let record = decode(value.value()).ok()?;
+                    let mine = record
+                        .data
+                        .get(crate::auth::SESSION_ADMIN_KEY)
+                        .and_then(|value| value.as_str())
+                        == Some(admin_id);
+                    (mine && Some(record.id) != keep).then(|| key.value().to_string())
+                })
+                .collect();
+            for key in doomed {
+                table.remove(key.as_str()).map_err(backend)?;
+            }
+        }
+        txn.commit().map_err(backend)?;
+        Ok(())
+    }
 }
 
 fn backend<E: std::fmt::Display>(e: E) -> session_store::Error {

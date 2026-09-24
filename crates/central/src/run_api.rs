@@ -173,6 +173,12 @@ impl RunService {
         self.runtime.clone()
     }
 
+    /// The per-client exec rate check the run endpoint uses — the speedtest
+    /// upload sink counts against the same budget (spec #1).
+    pub(crate) fn rate_allow(&self, client: IpAddr) -> bool {
+        self.runtime.admission.allow(client)
+    }
+
     #[cfg(test)]
     fn available_permits(&self) -> usize {
         self.runtime.admission.available_permits()
@@ -704,7 +710,7 @@ fn target_message(error: &TargetError) -> String {
 /// A same-origin check on `Origin` (falling back to `Referer`). Public runs are
 /// unauthenticated but still trigger node work, so absence is refused: a browser
 /// request must prove same-origin by sending one of these headers.
-fn same_origin(headers: &HeaderMap) -> bool {
+pub(crate) fn same_origin(headers: &HeaderMap) -> bool {
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
@@ -826,6 +832,7 @@ mod tests {
                 facility_url: None,
                 kind: NodeKind::Remote,
                 data_plane_origin: None,
+                asn: None,
                 offered_methods: vec![OfferedMethod::Ping, OfferedMethod::Traceroute],
                 status: LocationStatus::Offline,
                 created_at: 0,
@@ -1014,6 +1021,7 @@ mod tests {
                 facility_url: None,
                 kind: NodeKind::Remote,
                 data_plane_origin: None,
+                asn: None,
                 offered_methods: vec![OfferedMethod::Ping],
                 status: LocationStatus::Offline,
                 created_at: 0,
@@ -1222,6 +1230,7 @@ mod tests {
                 facility_url: None,
                 kind: NodeKind::Local,
                 data_plane_origin: None,
+                asn: None,
                 offered_methods: vec![OfferedMethod::Ping, OfferedMethod::Bgp, OfferedMethod::Bgp6],
                 status: LocationStatus::Online,
                 created_at: 0,
@@ -1342,6 +1351,7 @@ mod tests {
                 facility_url: None,
                 kind: NodeKind::Remote,
                 data_plane_origin: None,
+                asn: None,
                 offered_methods: vec![OfferedMethod::Bgp],
                 status: LocationStatus::Offline,
                 created_at: 0,

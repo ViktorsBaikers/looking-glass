@@ -200,6 +200,24 @@ fn clean_data_plane_origin(
     Ok(Some(format!("{scheme}://{authority}")))
 }
 
+/// The optional ASN (spec #1): a whole number 1–4294967295, or absent. Any
+/// other JSON value — 0, negative, beyond u32, a float, a string — is the
+/// spec's 400 `invalid_asn`, judged here rather than by the deserializer so
+/// the caller gets the coded error body instead of an extractor rejection.
+fn clean_asn(value: &Option<serde_json::Value>) -> Result<Option<u32>, ApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value.as_u64() {
+        Some(asn) if (1..=4_294_967_295).contains(&asn) => Ok(Some(asn as u32)),
+        _ => Err(ApiError::Coded(
+            StatusCode::BAD_REQUEST,
+            "invalid_asn",
+            "ASN must be a whole number between 1 and 4294967295.",
+        )),
+    }
+}
+
 // ----- Locations -------------------------------------------------------------
 
 #[derive(Deserialize, Validate)]
@@ -218,6 +236,10 @@ struct LocationInput {
     kind: NodeKind,
     #[garde(inner(length(max = 300)))]
     data_plane_origin: Option<String>,
+    /// Raw JSON on purpose — see [`clean_asn`]: invalid shapes must answer 400
+    /// `invalid_asn`, not a body-extractor rejection.
+    #[garde(skip)]
+    asn: Option<serde_json::Value>,
     #[garde(length(max = 8))]
     offered_methods: Vec<OfferedMethod>,
 }
@@ -233,6 +255,7 @@ impl LocationInput {
         status: LocationStatus,
     ) -> Result<Location, ApiError> {
         let data_plane_origin = clean_data_plane_origin(self.kind, self.data_plane_origin)?;
+        let asn = clean_asn(&self.asn)?;
         Ok(Location {
             id,
             name: self.name,
@@ -241,6 +264,7 @@ impl LocationInput {
             facility: self.facility,
             facility_url: self.facility_url,
             data_plane_origin,
+            asn,
             status: match self.kind {
                 NodeKind::Local => LocationStatus::Online,
                 NodeKind::Remote => status,
@@ -764,13 +788,13 @@ fn admin_validation_error(
     reason: &str,
     error: ApiError,
 ) -> ApiError {
-    if matches!(error, ApiError::Validation(_)) {
+    if matches!(error, ApiError::Validation(_) | ApiError::Coded(..)) {
         log_validation_rejected(&correlation_id(headers), surface, reason);
     }
     error
 }
 
-fn first_message(report: &garde::Report) -> String {
+pub(crate) fn first_message(report: &garde::Report) -> String {
     report
         .iter()
         .next()
