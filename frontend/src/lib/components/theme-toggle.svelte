@@ -1,19 +1,19 @@
 <script lang="ts">
-	import Moon from '@lucide/svelte/icons/moon';
-	import Sun from '@lucide/svelte/icons/sun';
-	import { Button } from '$lib/components/ui/button/index.js';
+	import { themeToggleBtn as btn } from '$lib/styles.js';
 	import { theme } from '$lib/theme.svelte.js';
+	import LightMode from '~icons/material-symbols/light-mode';
+	import DarkMode from '~icons/material-symbols/dark-mode';
 </script>
 
-<Button
-	variant="ghost"
-	size="icon"
+<button
+	type="button"
+	class={btn}
 	onclick={() => theme.toggle()}
 	aria-label={theme.dark ? 'Switch to light theme' : 'Switch to dark theme'}
 >
 	{#if theme.dark}
-		<Sun aria-hidden="true" />
+		<LightMode aria-hidden="true" />
 	{:else}
-		<Moon aria-hidden="true" />
+		<DarkMode aria-hidden="true" />
 	{/if}
-</Button>
+</button>

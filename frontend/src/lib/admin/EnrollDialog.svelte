@@ -1,10 +1,10 @@
 <script lang="ts">
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
-	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
-	import CircleCheck from '@lucide/svelte/icons/circle-check';
+	import LoaderCircle from '~icons/material-symbols/progress-activity';
+	import RefreshCw from '~icons/material-symbols/refresh';
+	import CircleCheck from '~icons/material-symbols/check-circle';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import Dialog from '$lib/components/ui/dialog.svelte';
-	import CopyButton from '$lib/public/CopyButton.svelte';
+	import CopyButton from '$lib/components/ui/copy-button.svelte';
 	import { createEnrollment, getLocation } from './api.js';
 	import type { EnrollmentTicket } from './types.js';
 
@@ -105,7 +105,7 @@
 			<p class="text-sm text-destructive" role="alert">
 				The enrollment token could not be generated.
 			</p>
-			<Button variant="outline" size="sm" onclick={generate}>Try again</Button>
+			<Button variant="secondary" size="sm" onclick={generate}>Try again</Button>
 		</div>
 	{:else if ticket}
 		<div class="space-y-4">

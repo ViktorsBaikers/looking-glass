@@ -1,5 +1,5 @@
 <script lang="ts">
-	import Download from '@lucide/svelte/icons/download';
+	import Download from '~icons/material-symbols/download';
 	import {
 		Card,
 		CardHeader,
@@ -8,8 +8,7 @@
 		CardContent
 	} from '$lib/components/ui/card/index.js';
 	import { buttonVariants } from '$lib/components/ui/button/index.js';
-	import { cn } from '$lib/utils.js';
-	import CopyButton from './CopyButton.svelte';
+	import CopyButton from '$lib/components/ui/copy-button.svelte';
 	import { downloadUrl } from './api.js';
 	import type { LocationDetail } from '$lib/admin/types.js';
 
@@ -37,7 +36,7 @@
 						<a
 							href={downloadUrl(location, file)}
 							download={file.label}
-							class={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'max-w-full gap-2 whitespace-normal text-left')}
+							class={buttonVariants({ variant: 'secondary', size: 'sm' })}
 						>
 							<Download class="size-4" aria-hidden="true" />
 							{file.label}

@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+	import LoaderCircle from '~icons/material-symbols/progress-activity';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
-	import { toaster } from '$lib/toast.svelte.js';
+	import { toast } from '$lib/toast.svelte.js';
 	import { getSettings, saveSettings } from '$lib/admin/api.js';
 	import type { GlobalSettings } from '$lib/admin/types.js';
 
@@ -53,7 +53,7 @@
 		saving = false;
 		if (result.ok) {
 			form = result.data;
-			toaster.success('Settings saved.');
+			toast.success('Settings saved.');
 		} else {
 			formError = result.message;
 		}
@@ -74,7 +74,7 @@
 	{:else if phase === 'error'}
 		<div class="rounded-md border border-destructive/40 px-4 py-6 text-sm text-destructive" role="alert">
 			<p>Settings could not be loaded.</p>
-			<Button variant="outline" size="sm" class="mt-3" onclick={load}>Try again</Button>
+			<Button variant="secondary" size="sm" class="mt-3" onclick={load}>Try again</Button>
 		</div>
 	{:else if form}
 		<form class="space-y-8" onsubmit={submit} novalidate>

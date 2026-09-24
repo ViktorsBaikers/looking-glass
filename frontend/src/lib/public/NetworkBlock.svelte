@@ -1,8 +1,8 @@
 <script lang="ts">
-	import MapPin from '@lucide/svelte/icons/map-pin';
-	import Building2 from '@lucide/svelte/icons/building-2';
-	import Gauge from '@lucide/svelte/icons/gauge';
-	import ExternalLink from '@lucide/svelte/icons/external-link';
+	import MapPin from '~icons/material-symbols/location-on';
+	import Building2 from '~icons/material-symbols/apartment';
+	import Gauge from '~icons/material-symbols/speed';
+	import ExternalLink from '~icons/material-symbols/open-in-new';
 	import {
 		Card,
 		CardHeader,
@@ -10,7 +10,7 @@
 		CardDescription,
 		CardContent
 	} from '$lib/components/ui/card/index.js';
-	import CopyButton from './CopyButton.svelte';
+	import CopyButton from '$lib/components/ui/copy-button.svelte';
 	import type { LocationDetail } from '$lib/admin/types.js';
 
 	let {
