@@ -59,6 +59,8 @@
 	// The one-time link from create/regenerate; shown once, discarded on close.
 	let link = $state<ActivationLink | null>(null);
 	let showLink = $state(false);
+	// A regenerated link waits here until the confirm dialog has fully closed.
+	let pendingLink: ActivationLink | null = null;
 
 	let newUsername = $state('');
 	let creating = $state(false);
@@ -132,13 +134,10 @@
 			toast.error(result.message);
 			return;
 		}
-		// The closing confirm dialog restores focus on its next tick; opening the
-		// link dialog in the same tick makes its dismissable layer read that
-		// restore as an outside interaction and close it at once.
-		setTimeout(() => {
-			link = result.data;
-			showLink = true;
-		}, 0);
+		// Opening the link dialog while the confirm dialog is still closing lets
+		// its focus restore read as an outside interaction that dismisses the
+		// new dialog, so the link waits for the confirm dialog's exit to finish.
+		pendingLink = result.data;
 		await reload();
 	}
 
@@ -328,6 +327,12 @@
 	confirmLabel="Regenerate"
 	busy={regenerating}
 	onconfirm={confirmRegenerate}
+	onexitcomplete={() => {
+		if (!pendingLink) return;
+		link = pendingLink;
+		pendingLink = null;
+		showLink = true;
+	}}
 />
 
 <ConfirmDialog

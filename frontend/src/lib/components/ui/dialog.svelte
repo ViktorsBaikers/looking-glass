@@ -10,6 +10,7 @@
 		title,
 		description,
 		onclose,
+		onexitcomplete,
 		preventClose = false,
 		class: className,
 		children
@@ -18,6 +19,8 @@
 		title: string;
 		description?: string;
 		onclose?: () => void;
+		/** Fires once the close animation and focus restore are done. */
+		onexitcomplete?: () => void;
 		preventClose?: boolean;
 		class?: string;
 		children: Snippet;
@@ -33,6 +36,7 @@
 	onOpenChange={(e) => {
 		if (!e.open) onclose?.();
 	}}
+	onExitComplete={() => onexitcomplete?.()}
 >
 	<Portal>
 		<Dialog.Backdrop class={s.backdrop} />
