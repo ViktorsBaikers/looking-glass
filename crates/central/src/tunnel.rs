@@ -161,6 +161,7 @@ struct AgentEntry {
 pub struct TunnelHub {
     agents: Arc<Mutex<HashMap<String, AgentEntry>>>,
     next_generation: Arc<AtomicU64>,
+    liveness: Arc<LivenessBatch>,
 }
 
 impl TunnelHub {
@@ -307,14 +308,16 @@ enum ConnectionControl {
 /// preserves `revoked`, so recording liveness never resurrects a revoked agent.
 struct Liveness {
     store: Store,
+    batch: Arc<LivenessBatch>,
     agent_id: String,
     last_written: u64,
 }
 
 impl Liveness {
-    fn new(store: Store, agent_id: String) -> Self {
+    fn new(store: Store, batch: Arc<LivenessBatch>, agent_id: String) -> Self {
         Self {
             store,
+            batch,
             agent_id,
             last_written: 0,
         }
@@ -326,21 +329,71 @@ impl Liveness {
             return;
         }
         self.last_written = now;
-        #[cfg(test)]
-        if let Some(gate) = tests::liveness_write_gate() {
-            gate.enter();
-        }
-        if let Err(error) = self.store.touch_agent_last_seen(&self.agent_id, now) {
-            // Liveness is best-effort telemetry; a failed write must not tear down a
-            // healthy tunnel. Surface it, keep serving.
-            tracing::warn!(agent_id = %self.agent_id, %error, "failed to record agent liveness");
-        }
+        self.batch.record(&self.store, &self.agent_id, now);
     }
 
     fn is_revoked_or_missing(&self) -> bool {
         match self.store.get_agent(&self.agent_id) {
             Ok(Some(agent)) => agent.revoked,
             _ => true,
+        }
+    }
+}
+
+/// Coalesces every connected agent's liveness writes into as few redb commits as
+/// possible, off the async runtime. Each commit fsyncs: inline, a burst of
+/// heartbeats parked the async workers (stalling run output and /health), and one
+/// commit per heartbeat capped a 500-agent burst beyond the 10s interval. Here
+/// the newest timestamp per agent waits in `pending` while a single blocking-pool
+/// flusher drains it, one transaction per drain.
+#[derive(Default)]
+struct LivenessBatch {
+    pending: Mutex<HashMap<String, u64>>,
+    flushing: AtomicBool,
+}
+
+impl LivenessBatch {
+    fn record(self: &Arc<Self>, store: &Store, agent_id: &str, ts: u64) {
+        {
+            let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+            let slot = pending.entry(agent_id.to_string()).or_insert(ts);
+            *slot = (*slot).max(ts);
+        }
+        if self.flushing.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let batch = Arc::clone(self);
+        let store = store.clone();
+        tokio::task::spawn_blocking(move || batch.flush(&store));
+    }
+
+    fn flush(&self, store: &Store) {
+        loop {
+            let beats: Vec<(String, u64)> = self
+                .pending
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .drain()
+                .collect();
+            if beats.is_empty() {
+                self.flushing.store(false, Ordering::Release);
+                // A record landing between the drain and the flag drop found the
+                // flag still set and did not spawn: reclaim and keep draining.
+                let idle = self.pending.lock().unwrap_or_else(|p| p.into_inner()).is_empty();
+                if idle || self.flushing.swap(true, Ordering::AcqRel) {
+                    return;
+                }
+                continue;
+            }
+            #[cfg(test)]
+            if let Some(gate) = tests::liveness_write_gate() {
+                gate.enter();
+            }
+            if let Err(error) = store.touch_agents_last_seen(&beats) {
+                // Liveness is best-effort telemetry; a failed write must not tear
+                // down a healthy tunnel. Surface it, keep serving.
+                tracing::warn!(agents = beats.len(), %error, "failed to record agent liveness");
+            }
         }
     }
 }
@@ -502,7 +555,7 @@ async fn serve_agent<T: FrameTransport>(
         shutdown_tx,
         Arc::new(AtomicBool::new(false)),
     );
-    let mut liveness = Liveness::new(store, agent_id.clone());
+    let mut liveness = Liveness::new(store, Arc::clone(&hub.liveness), agent_id.clone());
     // A completed handshake is itself proof of life: the location goes online on
     // dial-home, before its first heartbeat arrives (AC7 online half).
     liveness.touch();
@@ -2024,7 +2077,6 @@ mod tests {
     }
 
     async fn liveness_load(agents: usize) -> LivenessLoadMetrics {
-        let started = Instant::now();
         let store = Store::open(unique_db_path()).expect("open load store");
         let hub = TunnelHub::new();
         let mut channels = Vec::with_capacity(agents);
@@ -2249,7 +2301,10 @@ mod tests {
         );
         latencies.push(output);
         latencies.sort_unstable();
-        let completed = started.elapsed();
+        // Measured from the heartbeat burst, not test start: enrolling and
+        // connecting the agents is fixture cost (500 sequential fsynced inserts,
+        // seconds on macOS) and already has its own 10s connect assertion above.
+        let completed = writes_started.elapsed();
         assert!(
             completed <= Duration::from_secs(10),
             "{agents} liveness writes completed in {completed:?}, over the 10 second heartbeat interval"
@@ -2447,7 +2502,7 @@ mod tests {
         let store = Store::open(unique_db_path()).unwrap();
         enrolled_agent(&store, "agent-1");
         let (mut central_channel, mut agent_channel) = established_pair().await;
-        let mut liveness = Liveness::new(store, "agent-1".to_string());
+        let mut liveness = Liveness::new(store, Arc::default(), "agent-1".to_string());
         let (events_tx, events_rx) = mpsc::channel(1);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
