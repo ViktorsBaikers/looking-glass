@@ -1,7 +1,7 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/svelte';
-import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import LocationsPage from '../../routes/admin/+page.svelte';
+// Seam 3 (pure logic) for the admin Locations list: derived state, search and
+// sort. The rendered page itself is covered by tests/locations.e2e.spec.ts.
+import { describe, expect, it } from 'vitest';
+import { filterLocations, locationState, sortLocations } from './locationList.js';
 import type { Location } from './types.js';
 
 function location(overrides: Partial<Location> = {}): Location {
@@ -14,86 +14,108 @@ function location(overrides: Partial<Location> = {}): Location {
 		facility_url: null,
 		kind: 'remote',
 		data_plane_origin: null,
+		asn: 64501,
 		offered_methods: ['ping'],
 		status: 'online',
-		last_seen: Math.floor(Date.now() / 1000),
 		created_at: 0,
+		last_seen: 1_700_000_000,
 		...overrides
 	};
 }
 
-function response(body: unknown, status = 200) {
-	return new Response(JSON.stringify(body), {
-		status,
-		headers: { 'content-type': 'application/json' }
+const fleet: Location[] = [
+	location(),
+	location({
+		id: 'vie',
+		name: 'Vienna',
+		geo_label: 'Vienna, AT',
+		asn: 64500,
+		status: 'offline',
+		last_seen: 1_700_000_500
+	}),
+	location({
+		id: 'sfo',
+		name: 'San Francisco Hub',
+		geo_label: 'SF-01',
+		asn: null,
+		offered_methods: [],
+		status: 'offline',
+		last_seen: null
+	}),
+	location({ id: 'lon', name: 'London', geo_label: 'London, UK', kind: 'local', asn: 64502 })
+];
+
+describe('locationState', () => {
+	it('reads the heartbeat-derived state the badges show', () => {
+		expect(locationState(fleet[0])).toBe('online');
+		expect(locationState(fleet[1])).toBe('offline');
+		expect(locationState(fleet[2])).toBe('not_enrolled');
 	});
-}
 
-describe('admin agent status and revoke', () => {
-	let locations: Location[];
+	it('treats a local node by its reported status, never as unenrolled', () => {
+		expect(locationState(fleet[3])).toBe('online');
+		expect(locationState(location({ kind: 'local', status: 'offline', last_seen: null }))).toBe(
+			'offline'
+		);
+	});
+});
 
-	beforeEach(() => {
-		locations = [
-			location(),
-			location({ id: 'vie', name: 'Vienna', status: 'offline', last_seen: 1_700_000_000 })
-		];
-		if (!HTMLDialogElement.prototype.showModal) {
-			HTMLDialogElement.prototype.showModal = function () {
-				this.open = true;
-			};
-			HTMLDialogElement.prototype.close = function () {
-				this.open = false;
-				this.dispatchEvent(new Event('close'));
-			};
-		}
-		vi.stubGlobal(
-			'fetch',
-			vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-				const path = new URL(input.toString(), 'http://looking-glass.test').pathname;
-				if ((init?.method ?? 'GET') === 'GET' && path === '/api/admin/locations') {
-					return response(locations);
-				}
-				if (init?.method === 'POST' && path === '/api/admin/locations/fra/agent/revoke') {
-					locations = locations.map((record) =>
-						record.id === 'fra' ? { ...record, status: 'offline', last_seen: null } : record
-					);
-					return response(locations[0]);
-				}
-				throw new Error(`unexpected fetch ${init?.method ?? 'GET'} ${path}`);
-			})
+describe('filterLocations', () => {
+	it('keeps everything on an empty or blank query', () => {
+		expect(filterLocations(fleet, '')).toEqual(fleet);
+		expect(filterLocations(fleet, '   ')).toEqual(fleet);
+	});
+
+	it('matches name and geo label case-insensitively', () => {
+		expect(filterLocations(fleet, 'frank').map((l) => l.id)).toEqual(['fra']);
+		expect(filterLocations(fleet, 'VIENNA, AT').map((l) => l.id)).toEqual(['vie']);
+	});
+
+	it('matches the displayed state', () => {
+		expect(filterLocations(fleet, 'not enrolled').map((l) => l.id)).toEqual(['sfo']);
+		expect(filterLocations(fleet, 'online')).toEqual(
+			fleet.filter((l) => l.status === 'online')
 		);
 	});
 
-	afterEach(() => {
-		cleanup();
-		vi.unstubAllGlobals();
+	it('matches the ASN as bare digits and as the AS form', () => {
+		expect(filterLocations(fleet, '64500').map((l) => l.id)).toEqual(['vie']);
+		expect(filterLocations(fleet, 'as64502').map((l) => l.id)).toEqual(['lon']);
+		expect(filterLocations(fleet, '64999')).toEqual([]);
+	});
+});
+
+describe('sortLocations', () => {
+	it('sorts by name alphabetically', () => {
+		expect(sortLocations(fleet, 'name').map((l) => l.name)).toEqual([
+			'Frankfurt',
+			'London',
+			'San Francisco Hub',
+			'Vienna'
+		]);
 	});
 
-	it('renders heartbeat-derived online and offline status dots and readouts', async () => {
-		render(LocationsPage);
-
-		const frankfurt = (await screen.findByText('Frankfurt')).closest('li')!;
-		const vienna = screen.getByText('Vienna').closest('li')!;
-		expect(within(frankfurt).getByText('Online')).toBeTruthy();
-		expect(within(vienna).getByText('Offline')).toBeTruthy();
+	it('groups by state (online, offline, not enrolled) with name as tie-break', () => {
+		expect(sortLocations(fleet, 'status').map((l) => l.id)).toEqual([
+			'fra',
+			'lon',
+			'vie',
+			'sfo'
+		]);
 	});
 
-	it('moves a successfully revoked agent to offline and not enrolled after confirmation', async () => {
-		const user = userEvent.setup();
-		render(LocationsPage);
-		const frankfurt = (await screen.findByText('Frankfurt')).closest('li')!;
-		expect(within(frankfurt).getByText('Online')).toBeTruthy();
+	it('puts the freshest heartbeat first and never-seen last', () => {
+		expect(sortLocations(fleet, 'recent').map((l) => l.id)).toEqual([
+			'vie',
+			'fra',
+			'lon',
+			'sfo'
+		]);
+	});
 
-		await user.click(within(frankfurt).getByRole('button', { name: 'Revoke' }));
-		const dialog = await screen.findByRole('dialog', { name: 'Revoke this agent?' });
-		await user.click(within(dialog).getByRole('button', { name: 'Revoke agent' }));
-
-		await waitFor(() => {
-			const updated = screen.getByText('Frankfurt').closest('li')!;
-			expect(within(updated).getByText('Not enrolled')).toBeTruthy();
-		});
-		expect(fetch).toHaveBeenCalledWith('/api/admin/locations/fra/agent/revoke', expect.objectContaining({
-			method: 'POST'
-		}));
+	it('does not mutate the input array', () => {
+		const input = [...fleet];
+		sortLocations(input, 'name');
+		expect(input).toEqual(fleet);
 	});
 });
