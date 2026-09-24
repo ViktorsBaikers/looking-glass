@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import '../app.css';
 	// Self-hosted variable fonts (Plus Jakarta Sans UI, JetBrains Mono code).
@@ -50,16 +50,17 @@
 	const showHeader = $derived(!isAuthRoute);
 	const showFooter = $derived(!isAuthRoute && !isAdminRoute);
 
+	// Re-check the session after every navigation so the Administration link
+	// appears right after an in-app sign-in and disappears after log-out.
+	afterNavigate(async () => {
+		isAdmin = (await getJson<{ id: number; username: string }>('/api/admin/me')).ok;
+	});
+
 	onMount(async () => {
-		const [status, settings, me] = await Promise.all([
-			fetchSetupStatus(),
-			fetchPublicSettings(),
-			getJson<{ id: number; username: string }>('/api/admin/me')
-		]);
+		const [status, settings] = await Promise.all([fetchSetupStatus(), fetchPublicSettings()]);
 		if (status && !status.installed && path !== '/install') {
 			goto('/install');
 		}
-		isAdmin = me.ok;
 		if (settings) {
 			siteTitle = settings.site_title;
 			logoUrl = settings.logo_url;

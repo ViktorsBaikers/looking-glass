@@ -20,6 +20,7 @@
 		name,
 		id,
 		class: className,
+		portaled = true,
 		'aria-label': ariaLabel
 	}: {
 		items: T[];
@@ -30,6 +31,9 @@
 		name?: string;
 		id?: string;
 		class?: string;
+		/** Set false inside a modal Dialog: the portalled listbox would land
+		 * outside the dialog and be inerted by its focus trap. */
+		portaled?: boolean;
 		'aria-label'?: string;
 	} = $props();
 
@@ -64,7 +68,7 @@
 			</Select.Indicator>
 		</Select.Trigger>
 	</Select.Control>
-	<Portal>
+	<Portal disabled={!portaled}>
 		<Select.Positioner class={s.positioner}>
 			<Select.Content class={s.content}>
 				{#each items as item (item.value)}

@@ -23,7 +23,7 @@ export const header = css({
 	position: 'sticky',
 	top: '0',
 	zIndex: 40,
-	width: 'full',
+	width: '100%',
 	background: 'surface',
 	borderBottomWidth: '1px',
 	borderBottomStyle: 'solid',
@@ -35,7 +35,7 @@ export const headerInner = css({
 	justifyContent: 'space-between',
 	gap: '16px',
 	flexWrap: 'wrap',
-	width: 'full',
+	width: '100%',
 	maxWidth: '1200px',
 	margin: '0 auto',
 	minHeight: '64px',
@@ -76,7 +76,7 @@ export const navLink = css({
 });
 export const navLinkActive = css({ color: 'primary', fontWeight: 700, borderBottomColor: 'primary' });
 export const headerRight = css({ display: 'flex', alignItems: 'center', gap: '8px' });
-export const mainArea = css({ flex: '1', width: 'full', minWidth: '0' });
+export const mainArea = css({ flex: '1', width: '100%', minWidth: '0' });
 export const footer = css({
 	borderTopWidth: '1px',
 	borderTopStyle: 'solid',
@@ -88,7 +88,7 @@ export const footerInner = css({
 	flexDirection: 'column',
 	alignItems: 'center',
 	gap: '8px',
-	width: 'full',
+	width: '100%',
 	maxWidth: '1200px',
 	margin: '0 auto',
 	padding: '24px 16px',
@@ -116,7 +116,7 @@ export const checking = css({
 export const adminShell = css({
 	display: 'flex',
 	alignItems: 'flex-start',
-	width: 'full',
+	width: '100%',
 	minHeight: '100%'
 });
 export const sidebar = css({
@@ -130,7 +130,7 @@ export const sidebar = css({
 		gap: '8px',
 		width: '240px',
 		flexShrink: 0,
-		maxHeight: 'calc(100vh - 64px)',
+		height: 'calc(100vh - 64px)',
 		overflowY: 'auto',
 		padding: '24px 16px',
 		background: 'surface-container-low',
@@ -154,7 +154,7 @@ export const navItem = css({
 	color: 'on-surface-variant',
 	background: 'transparent',
 	border: 'none',
-	width: 'full',
+	width: '100%',
 	cursor: 'pointer',
 	textAlign: 'left',
 	transitionProperty: 'background, color',
@@ -215,7 +215,7 @@ export const drawerContent = css({
 	gap: '8px',
 	width: '280px',
 	maxWidth: '85vw',
-	height: 'full',
+	height: '100%',
 	padding: '24px 16px',
 	background: 'surface-container-low',
 	color: 'on-surface',

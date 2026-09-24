@@ -238,28 +238,17 @@ Ark Dialog (focus trap, Escape, inert backdrop, portal). `bind:open`, `title`,
   confirmLabel="Delete" danger busy={deleting} onconfirm={confirmDelete} />
 ```
 
-### Checkbox / CheckboxCard — `$lib/components/ui/checkbox.svelte`, `checkbox-card.svelte` (defaults)
+### CheckboxCard — `$lib/components/ui/checkbox-card.svelte` (default)
 
-Ark Checkbox. `bind:checked`, `disabled`, `name`, `value`. `Checkbox` takes an
-optional label via `children`; `CheckboxCard` is the whole-card control for the Methods
-grid and takes `label` (string, rendered mono).
+Ark Checkbox as a whole-card control for the Methods grid. `bind:checked`, `disabled`,
+`name`, `value`, `label` (string, rendered mono).
 
 ```svelte
-<Checkbox bind:checked={agree}>I understand</Checkbox>
-
 <div class={grid}>
   {#each methods as m (m)}
     <CheckboxCard label={m} bind:checked={enabled[m]} name="methods" value={m} />
   {/each}
 </div>
-```
-
-### Switch — `$lib/components/ui/switch.svelte` (default)
-
-Ark Switch. `bind:checked`, `disabled`, `name`, `label?`.
-
-```svelte
-<Switch bind:checked={iperfEnabled} label="Enable iperf3 server" />
 ```
 
 ### Tooltip — `$lib/components/ui/tooltip.svelte` (default)
