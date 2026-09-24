@@ -74,7 +74,8 @@ test('settings tab saves the location and rejects a bad ASN', async ({ page }) =
 
 	await page.getByLabel('ASN').fill('64501');
 	await page.getByRole('button', { name: 'Save location' }).click();
-	await expect(page.getByText('Location saved.')).toBeVisible();
+	// The first save's toast may still be showing; check the newest one.
+	await expect(page.getByText('Location saved.').last()).toBeVisible();
 	await expect(page.getByLabel('ASN')).toHaveValue('64501');
 
 	// The data-plane origin field is remote-only.

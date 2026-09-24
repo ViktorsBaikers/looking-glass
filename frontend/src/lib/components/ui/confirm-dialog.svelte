@@ -11,7 +11,8 @@
 		cancelLabel = 'Cancel',
 		danger = false,
 		busy = false,
-		onconfirm
+		onconfirm,
+		onexitcomplete
 	}: {
 		open?: boolean;
 		title: string;
@@ -21,11 +22,12 @@
 		danger?: boolean;
 		busy?: boolean;
 		onconfirm: () => void;
+		onexitcomplete?: () => void;
 	} = $props();
 
 </script>
 
-<Dialog bind:open {title} description={message}>
+<Dialog bind:open {title} description={message} {onexitcomplete}>
 	<div class={actions}>
 		<Button variant="ghost" onclick={() => (open = false)} disabled={busy}>{cancelLabel}</Button>
 		<Button variant={danger ? 'danger' : 'primary'} onclick={onconfirm} loading={busy}>
