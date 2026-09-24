@@ -5,6 +5,7 @@
 import { getJson } from '$lib/api.js';
 import type { LocationDetail } from '$lib/admin/types.js';
 export { downloadUrl } from './downloadUrl.js';
+export { speedtestUploadUrl } from './uploadUrl.js';
 
 export const fetchLocations = () => getJson<LocationDetail[]>('/api/locations');
 

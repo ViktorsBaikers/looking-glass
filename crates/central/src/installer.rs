@@ -52,7 +52,7 @@ pub struct SetupRequest {
     pub password: String,
 }
 
-fn username_allowed(username: &str) -> bool {
+pub(crate) fn username_allowed(username: &str) -> bool {
     username
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
@@ -110,9 +110,10 @@ pub async fn create_admin(
     }
 
     let password_hash = hash_password(&body.password)?;
-    let admin = state
-        .store
-        .create_admin(random_id(), body.username, password_hash)?;
+    let admin =
+        state
+            .store
+            .create_first_administrator(random_id(), body.username, password_hash)?;
     tracing::info!(
         event = "auth.setup",
         correlation_id = %correlation_id,

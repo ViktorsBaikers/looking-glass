@@ -147,7 +147,10 @@ async fn setup_creates_admin_and_marks_complete() {
     install_admin(app, "alice", PASSWORD).await;
 
     assert!(state.store.is_installed().unwrap());
-    assert_eq!(state.store.admin().unwrap().unwrap().username, "alice");
+    assert_eq!(
+        state.store.list_administrators().unwrap()[0].username,
+        "alice"
+    );
 
     let status = send(
         central::build(state),
@@ -177,7 +180,10 @@ async fn second_setup_is_refused_and_creates_no_second_admin() {
     .await;
     assert_status(&response, StatusCode::CONFLICT);
     assert!(body_string(response).await.contains("already_installed"));
-    assert_eq!(state.store.admin().unwrap().unwrap().username, "alice");
+    assert_eq!(
+        state.store.list_administrators().unwrap()[0].username,
+        "alice"
+    );
 }
 
 // AC4 — an admin route without a valid session is refused.
@@ -204,7 +210,7 @@ async fn legacy_raw_session_id_is_refused_even_when_a_record_exists() {
     let state = test_state();
     install_admin(central::build(state.clone()), "alice", PASSWORD).await;
 
-    let admin_id = state.store.admin().unwrap().unwrap().id;
+    let admin_id = state.store.list_administrators().unwrap()[0].id.clone();
     let raw_id = Id::default();
     let mut data = HashMap::new();
     data.insert("admin_id".to_string(), serde_json::json!(admin_id));
@@ -302,7 +308,7 @@ async fn session_past_absolute_cap_is_refused() {
     let mut data = HashMap::new();
     data.insert(
         "admin_id".to_string(),
-        serde_json::json!(state.store.admin().unwrap().unwrap().id),
+        serde_json::json!(state.store.list_administrators().unwrap()[0].id),
     );
     data.insert("auth_at".to_string(), serde_json::json!(0u64));
     let record = Record {
@@ -480,7 +486,7 @@ async fn setup_requires_the_correct_setup_token() {
     .await;
     assert_status(&wrong, StatusCode::FORBIDDEN);
     assert!(
-        state.store.admin().unwrap().is_none(),
+        state.store.list_administrators().unwrap().is_empty(),
         "a rejected setup must create no admin"
     );
 
@@ -494,7 +500,10 @@ async fn setup_requires_the_correct_setup_token() {
     )
     .await;
     assert_status(&accepted, StatusCode::CREATED);
-    assert_eq!(state.store.admin().unwrap().unwrap().username, "alice");
+    assert_eq!(
+        state.store.list_administrators().unwrap()[0].username,
+        "alice"
+    );
 }
 
 // (hardening) login rotates the session id, so a fixed pre-auth id cannot be
@@ -571,7 +580,7 @@ async fn authenticated_request_refreshes_the_idle_window() {
     let mut data = HashMap::new();
     data.insert(
         "admin_id".to_string(),
-        serde_json::json!(state.store.admin().unwrap().unwrap().id),
+        serde_json::json!(state.store.list_administrators().unwrap()[0].id),
     );
     data.insert(
         "auth_at".to_string(),
@@ -696,7 +705,7 @@ async fn data_persists_across_a_store_reopen() {
     {
         let store = central::Store::open(&path).unwrap();
         store
-            .create_admin(
+            .create_first_administrator(
                 "alice-id".to_string(),
                 "alice".to_string(),
                 "$argon2id$v=19$stored-hash-placeholder".to_string(),
@@ -717,7 +726,7 @@ async fn data_persists_across_a_store_reopen() {
     {
         let store = central::Store::open(&path).unwrap();
         assert!(store.is_installed().unwrap());
-        assert_eq!(store.admin().unwrap().unwrap().username, "alice");
+        assert_eq!(store.list_administrators().unwrap()[0].username, "alice");
         assert_eq!(store.settings().unwrap().site_title, "Looking Glass");
 
         let session_store = RedbSessionStore::new(&store);
