@@ -16,6 +16,8 @@ export const page = css({
 	padding: '16px',
 	md: { padding: '32px' }
 });
+/** The selected Location's tab panel keeps the page's 32px rhythm below the tabs. */
+export const locationPanel = css({ paddingTop: '32px' });
 export const pageTitle = css({
 	textStyle: 'headline-mobile',
 	color: 'on-surface',

@@ -265,7 +265,7 @@
 									<span>{location.kind === 'remote' ? 'Remote' : 'Local'}</span>
 								</div>
 							</div>
-							<StatusBadge tone={tone[state]}>{STATE_LABEL[state]}</StatusBadge>
+							<StatusBadge tone={tone[state]} size="lg">{STATE_LABEL[state]}</StatusBadge>
 						</div>
 						<div class={metrics}>
 							<div>

@@ -191,7 +191,9 @@ or `hint`; the control is `children`.
 ### Badge / StatusBadge — `$lib/components/ui/badge.svelte`, `status-badge.svelte` (defaults)
 
 `tone: 'neutral'|'success'|'warning'|'danger'` (default `neutral`). `StatusBadge`
-prefixes a coloured dot (used for Online/Offline/Not-enrolled, Active/Pending).
+prefixes a coloured dot (used for Online/Offline/Not-enrolled, Active/Pending) and
+takes `size: 'sm'|'lg'` (default `sm`, uppercase tag; `lg` is the sentence-case
+Locations card pill).
 
 ```svelte
 import StatusBadge from '$lib/components/ui/status-badge.svelte';
