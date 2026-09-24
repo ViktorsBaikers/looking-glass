@@ -1,12 +1,16 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { cn } from '$lib/utils.js';
+	import { Dialog, Portal } from '@ark-ui/svelte';
+	import { cx } from 'styled-system/css';
+	import { dialog } from 'styled-system/recipes';
+	import Close from '~icons/material-symbols/close';
 
 	let {
 		open = $bindable(false),
 		title,
 		description,
-		onclose: onDialogClose = () => {},
+		onclose,
+		onexitcomplete,
 		preventClose = false,
 		class: className,
 		children
@@ -15,44 +19,38 @@
 		title: string;
 		description?: string;
 		onclose?: () => void;
+		/** Fires once the close animation and focus restore are done. */
+		onexitcomplete?: () => void;
 		preventClose?: boolean;
 		class?: string;
 		children: Snippet;
 	} = $props();
 
-	let el: HTMLDialogElement | undefined = $state();
-
-	// Drive the native <dialog> from `open` so it brings the focus trap, Escape
-	// handling, and inert background that an accessible modal needs for free.
-	$effect(() => {
-		if (!el) return;
-		if (open && !el.open) el.showModal();
-		else if (!open && el.open) el.close();
-	});
+	const s = dialog();
 </script>
 
-<dialog
-	bind:this={el}
-	oncancel={(event) => {
-		if (preventClose) event.preventDefault();
+<Dialog.Root
+	bind:open
+	closeOnEscape={!preventClose}
+	closeOnInteractOutside={!preventClose}
+	onOpenChange={(e) => {
+		if (!e.open) onclose?.();
 	}}
-	onclose={() => {
-		open = false;
-		onDialogClose();
-	}}
-	aria-label={title}
-	class={cn(
-		'w-full max-w-lg rounded-lg border border-border bg-card p-6 text-card-foreground shadow-lg backdrop:bg-black/50',
-		className
-	)}
+	onExitComplete={() => onexitcomplete?.()}
 >
-	{#if open}
-		<div class="mb-4 space-y-1">
-			<h2 class="text-lg font-semibold tracking-tight">{title}</h2>
-			{#if description}
-				<p class="text-sm text-muted-foreground">{description}</p>
-			{/if}
-		</div>
-		{@render children()}
-	{/if}
-</dialog>
+	<Portal>
+		<Dialog.Backdrop class={s.backdrop} />
+		<Dialog.Positioner class={s.positioner}>
+			<Dialog.Content class={cx(s.content, className)}>
+				<Dialog.Title class={s.title}>{title}</Dialog.Title>
+				{#if description}
+					<Dialog.Description class={s.description}>{description}</Dialog.Description>
+				{/if}
+				<Dialog.CloseTrigger class={s.closeTrigger} aria-label="Close dialog">
+					<Close />
+				</Dialog.CloseTrigger>
+				{@render children()}
+			</Dialog.Content>
+		</Dialog.Positioner>
+	</Portal>
+</Dialog.Root>

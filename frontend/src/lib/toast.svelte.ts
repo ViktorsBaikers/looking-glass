@@ -1,37 +1,17 @@
-// A minimal toast queue for admin success/error feedback. Runes-based so any
-// component can push a toast and the layout's <Toaster> renders it.
+// Toast queue backed by the Ark UI toaster machine. `toast.success/error(msg)`
+// is the only API pages need; the <Toaster> in the root layout renders whatever
+// is pushed. Kept as `.svelte.ts` so the existing `$lib/toast.svelte.js` import
+// path is unchanged.
+import { createToaster } from '@ark-ui/svelte';
 
-export type ToastKind = 'success' | 'error';
-export interface Toast {
-	id: number;
-	kind: ToastKind;
-	message: string;
-}
+/** The Ark toaster instance. Consumed by <Toaster>; not part of the page API. */
+export const arkToaster = createToaster({
+	placement: 'bottom',
+	pauseOnPageIdle: true,
+	removeDelay: 200
+});
 
-const DISMISS_MS = 4000;
-
-function createToaster() {
-	let toasts = $state<Toast[]>([]);
-	let seq = 0;
-
-	function push(kind: ToastKind, message: string) {
-		const id = ++seq;
-		toasts.push({ id, kind, message });
-		setTimeout(() => dismiss(id), DISMISS_MS);
-	}
-
-	function dismiss(id: number) {
-		toasts = toasts.filter((t) => t.id !== id);
-	}
-
-	return {
-		get items() {
-			return toasts;
-		},
-		success: (message: string) => push('success', message),
-		error: (message: string) => push('error', message),
-		dismiss
-	};
-}
-
-export const toaster = createToaster();
+export const toast = {
+	success: (message: string) => arkToaster.success({ title: message }),
+	error: (message: string) => arkToaster.error({ title: message })
+};

@@ -1,0 +1,144 @@
+{
+  "displayName": "Emerald Tech Narrative",
+  "styleGuidelines": "## Brand & Style\nThe design system focuses on clarity, technical precision, and a refreshing editorial feel. It is tailored for high-density information environments like technical documentation, SaaS platforms, and knowledge bases.\n\nThe aesthetic blends **Minimalism** with a **Corporate Modern** structure. It utilizes generous white space to reduce cognitive load while maintaining a professional rigor through structured grids and sharp typography. The primary emotional response should be one of focused productivity and \"systematic elegance\"\u2014where the UI recedes to let the content lead.\n\n## Layout & Spacing\nThe system utilizes a **12-column fluid grid** for desktop and a **4-column grid** for mobile. \n\n- **Vertical Rhythm:** Built on an 8px baseline. All components should have heights and internal padding that are multiples of 4px.\n- **Sectioning:** Use large `2xl` (64px) spacing between major sections to emphasize the minimalist aesthetic.\n- **Containers:** Content should be capped at a max-width of 1280px for readability, centered within the viewport.\n- **Mobile Reflow:** Gutters shrink to 16px on mobile, and margins reduce to 16px to maximize screen real estate.\n\n## Elevation & Depth\nThis design system avoids heavy shadows, opting instead for **Tonal Layers** and **Low-Contrast Outlines**.\n\n- **Level 0 (Base):** Pure white background.\n- **Level 1 (Subtle):** Elements like cards or sidebars use a thin 1px border in `#e2e8f0` rather than a shadow.\n- **Level 2 (Active/Hover):** A very soft, diffused shadow (0px 4px 12px rgba(0, 0, 0, 0.05)) is used only when an element is lifted or needs to sit atop other content.\n- **Interaction:** Hover states on interactive elements should primarily use background color shifts (e.g., White to Slate-50) rather than elevation increases.\n\n## Components\n\n- **Buttons:** Primary buttons use a solid Emerald (#10b981) background with white text. Secondary buttons use a Slate-900 outline with Slate-900 text. Both use the `label-caps` font style for a precise look.\n- **Input Fields:** Use a 1px border in `#cbd5e1`. On focus, the border transitions to Emerald (#10b981) with a 2px outer \"glow\" in the Tertiary Emerald tint.\n- **Chips/Tags:** Small, pill-shaped elements with `#f1f5f9` backgrounds and Slate-600 text. Use `label-caps` typography.\n- **Cards:** White background, 1px `#e2e8f0` border, and no shadow. Title should be `headline-md`.\n- **Lists:** Clean lines with `#f1f5f9` separators. Icons within lists should be monochromatic (Slate-400) unless indicating a specific status.\n- **Data Tables:** Highly structured with 0px roundedness on rows. Header row uses a Slate-50 background and `label-caps` text.",
+  "theme": {
+    "colorMode": "LIGHT",
+    "font": "HANKEN_GROTESK",
+    "roundness": "ROUND_FOUR",
+    "customColor": "#10b981",
+    "headlineFont": "HANKEN_GROTESK",
+    "bodyFont": "INTER",
+    "labelFont": "JETBRAINS_MONO",
+    "namedColors": {
+      "primary_fixed_dim": "#4edea3",
+      "outline_variant": "#bbcabf",
+      "on_secondary": "#ffffff",
+      "surface_tint": "#006c49",
+      "on_primary_container": "#00422b",
+      "error_container": "#ffdad6",
+      "surface_container_lowest": "#ffffff",
+      "on_secondary_container": "#5c647a",
+      "surface_container": "#e5eeff",
+      "on_error": "#ffffff",
+      "on_primary": "#ffffff",
+      "tertiary_fixed": "#d9e6dd",
+      "primary_fixed": "#6ffbbe",
+      "surface_container_low": "#eff4ff",
+      "surface_container_high": "#dce9ff",
+      "secondary_fixed_dim": "#bec6e0",
+      "tertiary_fixed_dim": "#bdcac1",
+      "on_surface_variant": "#3c4a42",
+      "on_error_container": "#93000a",
+      "on_secondary_fixed": "#131b2e",
+      "surface_dim": "#cbdbf5",
+      "outline": "#6c7a71",
+      "surface_container_highest": "#d3e4fe",
+      "error": "#ba1a1a",
+      "tertiary": "#55615a",
+      "inverse_primary": "#4edea3",
+      "on_secondary_fixed_variant": "#3f465c",
+      "on_tertiary": "#ffffff",
+      "secondary_container": "#dae2fd",
+      "primary": "#006c49",
+      "secondary": "#565e74",
+      "background": "#f8f9ff",
+      "tertiary_container": "#99a69e",
+      "on_background": "#0b1c30",
+      "primary_container": "#10b981",
+      "surface": "#f8f9ff",
+      "inverse_surface": "#213145",
+      "on_tertiary_fixed": "#131e19",
+      "on_primary_fixed": "#002113",
+      "surface_variant": "#d3e4fe",
+      "surface_bright": "#f8f9ff",
+      "on_primary_fixed_variant": "#005236",
+      "on_surface": "#0b1c30",
+      "on_tertiary_fixed_variant": "#3e4943",
+      "inverse_on_surface": "#eaf1ff",
+      "on_tertiary_container": "#303c36",
+      "secondary_fixed": "#dae2fd"
+    },
+    "designMd": "---\nname: Emerald Tech Narrative\ncolors:\n  surface: '#f8f9ff'\n  surface-dim: '#cbdbf5'\n  surface-bright: '#f8f9ff'\n  surface-container-lowest: '#ffffff'\n  surface-container-low: '#eff4ff'\n  surface-container: '#e5eeff'\n  surface-container-high: '#dce9ff'\n  surface-container-highest: '#d3e4fe'\n  on-surface: '#0b1c30'\n  on-surface-variant: '#3c4a42'\n  inverse-surface: '#213145'\n  inverse-on-surface: '#eaf1ff'\n  outline: '#6c7a71'\n  outline-variant: '#bbcabf'\n  surface-tint: '#006c49'\n  primary: '#006c49'\n  on-primary: '#ffffff'\n  primary-container: '#10b981'\n  on-primary-container: '#00422b'\n  inverse-primary: '#4edea3'\n  secondary: '#565e74'\n  on-secondary: '#ffffff'\n  secondary-container: '#dae2fd'\n  on-secondary-container: '#5c647a'\n  tertiary: '#55615a'\n  on-tertiary: '#ffffff'\n  tertiary-container: '#99a69e'\n  on-tertiary-container: '#303c36'\n  error: '#ba1a1a'\n  on-error: '#ffffff'\n  error-container: '#ffdad6'\n  on-error-container: '#93000a'\n  primary-fixed: '#6ffbbe'\n  primary-fixed-dim: '#4edea3'\n  on-primary-fixed: '#002113'\n  on-primary-fixed-variant: '#005236'\n  secondary-fixed: '#dae2fd'\n  secondary-fixed-dim: '#bec6e0'\n  on-secondary-fixed: '#131b2e'\n  on-secondary-fixed-variant: '#3f465c'\n  tertiary-fixed: '#d9e6dd'\n  tertiary-fixed-dim: '#bdcac1'\n  on-tertiary-fixed: '#131e19'\n  on-tertiary-fixed-variant: '#3e4943'\n  background: '#f8f9ff'\n  on-background: '#0b1c30'\n  surface-variant: '#d3e4fe'\ntypography:\n  headline-xl:\n    fontFamily: Hanken Grotesk\n    fontSize: 48px\n    fontWeight: '700'\n    lineHeight: 56px\n    letterSpacing: -0.02em\n  headline-lg:\n    fontFamily: Hanken Grotesk\n    fontSize: 32px\n    fontWeight: '600'\n    lineHeight: 40px\n    letterSpacing: -0.01em\n  headline-lg-mobile:\n    fontFamily: Hanken Grotesk\n    fontSize: 28px\n    fontWeight: '600'\n    lineHeight: 36px\n    letterSpacing: -0.01em\n  headline-md:\n    fontFamily: Hanken Grotesk\n    fontSize: 24px\n    fontWeight: '600'\n    lineHeight: 32px\n  body-lg:\n    fontFamily: Inter\n    fontSize: 18px\n    fontWeight: '400'\n    lineHeight: 28px\n  body-md:\n    fontFamily: Inter\n    fontSize: 16px\n    fontWeight: '400'\n    lineHeight: 24px\n  body-sm:\n    fontFamily: Inter\n    fontSize: 14px\n    fontWeight: '400'\n    lineHeight: 20px\n  label-caps:\n    fontFamily: JetBrains Mono\n    fontSize: 12px\n    fontWeight: '500'\n    lineHeight: 16px\n    letterSpacing: 0.05em\n  code-snippet:\n    fontFamily: JetBrains Mono\n    fontSize: 14px\n    fontWeight: '400'\n    lineHeight: 22px\nrounded:\n  sm: 0.125rem\n  DEFAULT: 0.25rem\n  md: 0.375rem\n  lg: 0.5rem\n  xl: 0.75rem\n  full: 9999px\nspacing:\n  base: 4px\n  xs: 4px\n  sm: 8px\n  md: 16px\n  lg: 24px\n  xl: 40px\n  2xl: 64px\n  gutter: 24px\n  margin-mobile: 16px\n  margin-desktop: 48px\n---\n\n## Brand & Style\nThe design system focuses on clarity, technical precision, and a refreshing editorial feel. It is tailored for high-density information environments like technical documentation, SaaS platforms, and knowledge bases.\n\nThe aesthetic blends **Minimalism** with a **Corporate Modern** structure. It utilizes generous white space to reduce cognitive load while maintaining a professional rigor through structured grids and sharp typography. The primary emotional response should be one of focused productivity and \"systematic elegance\"\u2014where the UI recedes to let the content lead.\n\n## Colors\nThe palette is rooted in a high-contrast light mode to ensure maximum readability. \n\n- **Primary Emerald (#10b981):** Used sparingly for key actions, progress indicators, and primary brand moments. \n- **Deep Slate (#0f172a):** The core color for headings and text, providing a grounded, ink-like contrast against the white backgrounds.\n- **Surface Tones:** Pure white (#ffffff) serves as the base layer, while a very subtle cool gray (#f8fafc) is used for secondary containers and layout partitioning.\n- **Semantic Accents:** Use the Tertiary Emerald tint (#f0fdf4) for soft background highlights and success states to maintain color harmony without overwhelming the user.\n\n## Typography\nThe typography system is a hierarchy of function. \n\n**Hanken Grotesk** is used for all headings. It provides a contemporary, sharp edge that feels engineered yet accessible. Tighten letter spacing on larger sizes to maintain a sleek appearance.\n\n**Inter** is the workhorse for body copy, chosen for its exceptional legibility and neutral character in dense text blocks.\n\n**JetBrains Mono** is utilized for metadata, labels, and actual code snippets. It signals \"technical detail\" to the user and breaks the rhythm of the sans-serif fonts to denote a change in information type.\n\n## Layout & Spacing\nThe system utilizes a **12-column fluid grid** for desktop and a **4-column grid** for mobile. \n\n- **Vertical Rhythm:** Built on an 8px baseline. All components should have heights and internal padding that are multiples of 4px.\n- **Sectioning:** Use large `2xl` (64px) spacing between major sections to emphasize the minimalist aesthetic.\n- **Containers:** Content should be capped at a max-width of 1280px for readability, centered within the viewport.\n- **Mobile Reflow:** Gutters shrink to 16px on mobile, and margins reduce to 16px to maximize screen real estate.\n\n## Elevation & Depth\nThis design system avoids heavy shadows, opting instead for **Tonal Layers** and **Low-Contrast Outlines**.\n\n- **Level 0 (Base):** Pure white background.\n- **Level 1 (Subtle):** Elements like cards or sidebars use a thin 1px border in `#e2e8f0` rather than a shadow.\n- **Level 2 (Active/Hover):** A very soft, diffused shadow (0px 4px 12px rgba(0, 0, 0, 0.05)) is used only when an element is lifted or needs to sit atop other content.\n- **Interaction:** Hover states on interactive elements should primarily use background color shifts (e.g., White to Slate-50) rather than elevation increases.\n\n## Shapes\nThe shape language is **Soft (0.25rem)**. This provides enough rounding to feel modern and friendly without losing the \"technical\" feel of a sharp-edged grid.\n\n- **Standard Components:** 4px (0.25rem) radius for buttons and inputs.\n- **Large Components:** 8px (0.5rem) radius for cards and modals.\n- **Inner Radii:** When nesting elements, the inner radius should be 2px smaller than the outer radius to maintain visual concentricity.\n\n## Components\n\n- **Buttons:** Primary buttons use a solid Emerald (#10b981) background with white text. Secondary buttons use a Slate-900 outline with Slate-900 text. Both use the `label-caps` font style for a precise look.\n- **Input Fields:** Use a 1px border in `#cbd5e1`. On focus, the border transitions to Emerald (#10b981) with a 2px outer \"glow\" in the Tertiary Emerald tint.\n- **Chips/Tags:** Small, pill-shaped elements with `#f1f5f9` backgrounds and Slate-600 text. Use `label-caps` typography.\n- **Cards:** White background, 1px `#e2e8f0` border, and no shadow. Title should be `headline-md`.\n- **Lists:** Clean lines with `#f1f5f9` separators. Icons within lists should be monochromatic (Slate-400) unless indicating a specific status.\n- **Data Tables:** Highly structured with 0px roundedness on rows. Header row uses a Slate-50 background and `label-caps` text.",
+    "colorVariant": "FIDELITY",
+    "overridePrimaryColor": "#10b981",
+    "overrideSecondaryColor": "#0f172a",
+    "overrideTertiaryColor": "#f0fdf4",
+    "overrideNeutralColor": "#64748b",
+    "spacingScale": 2,
+    "typography": {
+      "headline-lg": {
+        "fontFamily": "Hanken Grotesk",
+        "fontSize": "32px",
+        "fontWeight": "600",
+        "lineHeight": "40px",
+        "letterSpacing": "-0.01em"
+      },
+      "headline-md": {
+        "fontFamily": "Hanken Grotesk",
+        "fontSize": "24px",
+        "fontWeight": "600",
+        "lineHeight": "32px"
+      },
+      "body-lg": {
+        "fontFamily": "Inter",
+        "fontSize": "18px",
+        "fontWeight": "400",
+        "lineHeight": "28px"
+      },
+      "headline-lg-mobile": {
+        "fontFamily": "Hanken Grotesk",
+        "fontSize": "28px",
+        "fontWeight": "600",
+        "lineHeight": "36px",
+        "letterSpacing": "-0.01em"
+      },
+      "headline-xl": {
+        "fontFamily": "Hanken Grotesk",
+        "fontSize": "48px",
+        "fontWeight": "700",
+        "lineHeight": "56px",
+        "letterSpacing": "-0.02em"
+      },
+      "body-md": {
+        "fontFamily": "Inter",
+        "fontSize": "16px",
+        "fontWeight": "400",
+        "lineHeight": "24px"
+      },
+      "label-caps": {
+        "fontFamily": "JetBrains Mono",
+        "fontSize": "12px",
+        "fontWeight": "500",
+        "lineHeight": "16px",
+        "letterSpacing": "0.05em"
+      },
+      "body-sm": {
+        "fontFamily": "Inter",
+        "fontSize": "14px",
+        "fontWeight": "400",
+        "lineHeight": "20px"
+      },
+      "code-snippet": {
+        "fontFamily": "JetBrains Mono",
+        "fontSize": "14px",
+        "fontWeight": "400",
+        "lineHeight": "22px"
+      }
+    },
+    "spacing": {
+      "xl": "40px",
+      "xs": "4px",
+      "sm": "8px",
+      "lg": "24px",
+      "margin-mobile": "16px",
+      "base": "4px",
+      "margin-desktop": "48px",
+      "2xl": "64px",
+      "gutter": "24px",
+      "md": "16px"
+    },
+    "headlineFontFamily": "Hanken Grotesk",
+    "bodyFontFamily": "Inter",
+    "labelFontFamily": "Jetbrains Mono"
+  }
+}

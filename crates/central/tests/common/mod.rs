@@ -141,6 +141,14 @@ pub fn assert_status(response: &Response<Body>, expected: StatusCode) {
     assert_eq!(response.status(), expected, "unexpected status");
 }
 
+/// Wall-clock unix seconds — for asserting TTL-derived timestamps.
+pub fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 use std::sync::{Mutex, OnceLock};
 
 static LOG_CAPTURE: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();

@@ -1,4 +1,4 @@
-//! redb-backed persistence: the single volume file holding the admin account,
+//! redb-backed persistence: the single volume file holding the administrator
 //! setup state, sessions, global settings, and the location catalogue (locations
 //! and their test IPs / iperf endpoints / test files, plus the agents and
 //! enrollment tokens a location owns). All state the container needs to survive a
@@ -10,14 +10,22 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand_core::{OsRng, RngCore};
-use redb::{Database, ReadableDatabase, ReadableTable, Table, TableDefinition, TableHandle};
+use redb::{
+    Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, Table, TableDefinition,
+    TableHandle, WriteTransaction,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use shared::liveness::is_online;
 use shared::template::Method;
 use shared::validate::PrefixFamily;
 
-pub(crate) const ADMIN: TableDefinition<&str, &[u8]> = TableDefinition::new("admin");
+pub(crate) const ADMINISTRATOR: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("administrator");
+/// The pre-Administrators single-row admin table (spec #1 legacy migration).
+/// Read once at open, migrated into [`ADMINISTRATOR`], then deleted.
+const LEGACY_ADMIN_TABLE_NAME: &str = "admin";
+const LEGACY_ADMIN: TableDefinition<&str, &[u8]> = TableDefinition::new(LEGACY_ADMIN_TABLE_NAME);
 pub(crate) const SETUP: TableDefinition<&str, &[u8]> = TableDefinition::new("setup");
 pub(crate) const SESSION: TableDefinition<&str, &[u8]> = TableDefinition::new("session");
 const SESSION_COOKIE_KEY_TABLE_NAME: &str = "session_cookie_key";
@@ -32,18 +40,50 @@ pub(crate) const AGENT: TableDefinition<&str, &[u8]> = TableDefinition::new("age
 pub(crate) const ENROLLMENT_TOKEN: TableDefinition<&str, &[u8]> =
     TableDefinition::new("enrollment_token");
 
-const ADMIN_KEY: &str = "admin";
+const LEGACY_ADMIN_KEY: &str = "admin";
 const SETUP_KEY: &str = "state";
 const SETTINGS_KEY: &str = "global";
 const SESSION_COOKIE_KEY_ID: &str = "signing";
 const SESSION_COOKIE_KEY_LEN: usize = 64;
 
+/// Whether an administrator can sign in (`Active`) or still owes a password set
+/// through their activation link (`Pending`, ADR-0001).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AdministratorStatus {
+    Active,
+    Pending,
+}
+
+/// One equal-peer administrator (ADR-0001). `password_hash` is `None` while
+/// pending — the password is set at activation, never by the creating peer. The
+/// activation token itself is never stored: only its SHA-256 hash and absolute
+/// expiry, and regenerating replaces both, which is what invalidates the old link.
+/// `session_generation` is the credential epoch: every password rotation bumps
+/// it inside the same write transaction, and the session extractor refuses any
+/// session stamped with an older value — so a session record resurrected by an
+/// overlapping request cannot survive the rotation. The serde default keeps
+/// rows written before the field (and the sessions minted from them) valid.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Admin {
+pub struct Administrator {
     pub id: String,
     pub username: String,
-    pub password_hash: String,
+    pub password_hash: Option<String>,
+    pub status: AdministratorStatus,
     pub created_at: u64,
+    pub activation_token_hash: Option<String>,
+    pub activation_expires_at: Option<u64>,
+    #[serde(default)]
+    pub session_generation: u64,
+}
+
+/// The legacy single-admin row shape, decoded only by the open-time migration.
+#[derive(Deserialize)]
+struct LegacyAdmin {
+    id: String,
+    username: String,
+    password_hash: String,
+    created_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +262,10 @@ pub struct Location {
     pub kind: NodeKind,
     #[serde(default)]
     pub data_plane_origin: Option<String>,
+    /// Optional ASN (spec #1): 1–4294967295, absent for rows saved before the
+    /// redesign (`#[serde(default)]` keeps old volumes readable).
+    #[serde(default)]
+    pub asn: Option<u32>,
     pub offered_methods: Vec<OfferedMethod>,
     pub status: LocationStatus,
     pub created_at: u64,
@@ -347,6 +391,7 @@ struct ChildRef {
 #[derive(Debug)]
 pub enum StoreError {
     AlreadyInstalled,
+    UsernameTaken,
     Backend(String),
 }
 
@@ -354,6 +399,7 @@ impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StoreError::AlreadyInstalled => f.write_str("setup already completed"),
+            StoreError::UsernameTaken => f.write_str("username already taken"),
             StoreError::Backend(msg) => write!(f, "store backend error: {msg}"),
         }
     }
@@ -363,6 +409,22 @@ impl std::error::Error for StoreError {}
 
 fn backend<E: std::fmt::Display>(e: E) -> StoreError {
     StoreError::Backend(e.to_string())
+}
+
+/// Why [`Store::remove_administrator`] refused — the spec #1 guard rails,
+/// checked inside the delete transaction itself.
+#[derive(Debug)]
+pub enum RemoveAdministratorError {
+    NotFound,
+    CannotRemoveSelf,
+    LastActive,
+    Backend(StoreError),
+}
+
+impl From<StoreError> for RemoveAdministratorError {
+    fn from(error: StoreError) -> Self {
+        Self::Backend(error)
+    }
 }
 
 pub(crate) fn unix_now() -> u64 {
@@ -411,8 +473,8 @@ impl Store {
     }
 
     fn bootstrap(db: &Database) -> Result<[u8; SESSION_COOKIE_KEY_LEN], StoreError> {
-        let txn = db.begin_write().map_err(backend)?;
-        txn.open_table(ADMIN).map_err(backend)?;
+        let mut txn = db.begin_write().map_err(backend)?;
+        txn.open_table(ADMINISTRATOR).map_err(backend)?;
         txn.open_table(SETUP).map_err(backend)?;
         txn.open_table(SESSION).map_err(backend)?;
         txn.open_table(LOCATION).map_err(backend)?;
@@ -421,6 +483,7 @@ impl Store {
         txn.open_table(TEST_FILE).map_err(backend)?;
         txn.open_table(AGENT).map_err(backend)?;
         txn.open_table(ENROLLMENT_TOKEN).map_err(backend)?;
+        Self::migrate_legacy_single_admin(&mut txn)?;
         {
             let mut settings = txn.open_table(SETTINGS).map_err(backend)?;
             if settings.get(SETTINGS_KEY).map_err(backend)?.is_none() {
@@ -473,6 +536,51 @@ impl Store {
         Ok(session_cookie_key)
     }
 
+    /// Legacy single-admin volume migration (spec #1): a pre-Administrators volume
+    /// holds one row keyed `"admin"` in an `admin` table. When that table exists its
+    /// row becomes an equivalent active [`Administrator`] (id, username, password
+    /// hash, and created-at preserved) and the legacy table is dropped, so a second
+    /// open finds nothing to migrate. Runs inside the bootstrap write transaction —
+    /// no reader ever observes a half-migrated volume.
+    fn migrate_legacy_single_admin(txn: &mut WriteTransaction) -> Result<(), StoreError> {
+        let legacy_present = txn
+            .list_tables()
+            .map_err(backend)?
+            .any(|table| table.name() == LEGACY_ADMIN_TABLE_NAME);
+        if !legacy_present {
+            return Ok(());
+        }
+        let legacy: Option<LegacyAdmin> = {
+            let table = txn.open_table(LEGACY_ADMIN).map_err(backend)?;
+            let row = table.get(LEGACY_ADMIN_KEY).map_err(backend)?;
+            match row {
+                Some(guard) => Some(serde_json::from_slice(guard.value()).map_err(backend)?),
+                None => None,
+            }
+        };
+        if let Some(legacy) = legacy {
+            let mut admins = txn.open_table(ADMINISTRATOR).map_err(backend)?;
+            if admins.get(legacy.id.as_str()).map_err(backend)?.is_none() {
+                let admin = Administrator {
+                    id: legacy.id,
+                    username: legacy.username,
+                    password_hash: Some(legacy.password_hash),
+                    status: AdministratorStatus::Active,
+                    created_at: legacy.created_at,
+                    activation_token_hash: None,
+                    activation_expires_at: None,
+                    session_generation: 0,
+                };
+                let encoded = serde_json::to_vec(&admin).map_err(backend)?;
+                admins
+                    .insert(admin.id.as_str(), encoded.as_slice())
+                    .map_err(backend)?;
+            }
+        }
+        txn.delete_table(LEGACY_ADMIN).map_err(backend)?;
+        Ok(())
+    }
+
     pub fn is_installed(&self) -> Result<bool, StoreError> {
         Ok(self.setup_state()?.map(|s| s.installed).unwrap_or(false))
     }
@@ -488,15 +596,48 @@ impl Store {
         }
     }
 
-    pub fn admin(&self) -> Result<Option<Admin>, StoreError> {
-        let txn = self.db.begin_read().map_err(backend)?;
-        let table = txn.open_table(ADMIN).map_err(backend)?;
-        match table.get(ADMIN_KEY).map_err(backend)? {
-            Some(guard) => Ok(Some(
-                serde_json::from_slice(guard.value()).map_err(backend)?,
-            )),
-            None => Ok(None),
-        }
+    pub fn list_administrators(&self) -> Result<Vec<Administrator>, StoreError> {
+        let mut admins: Vec<Administrator> = self.read_all(ADMINISTRATOR)?;
+        admins.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+        Ok(admins)
+    }
+
+    pub fn get_administrator(&self, id: &str) -> Result<Option<Administrator>, StoreError> {
+        self.read_record(ADMINISTRATOR, id)
+    }
+
+    pub fn put_administrator(&self, admin: &Administrator) -> Result<(), StoreError> {
+        self.write_record(ADMINISTRATOR, &admin.id, admin)
+    }
+
+    /// The (at most one) sign-in-capable administrator with this exact username —
+    /// the login lookup. Pending peers never match: they have no password yet.
+    pub fn find_active_administrator_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<Administrator>, StoreError> {
+        Ok(self
+            .read_all::<Administrator>(ADMINISTRATOR)?
+            .into_iter()
+            .find(|admin| {
+                admin.status == AdministratorStatus::Active && admin.username == username
+            }))
+    }
+
+    /// The (at most one) pending administrator whose current activation token
+    /// hashes to `token_hash` — a full scan, the accepted redb-hold cost. Expiry
+    /// is judged by the caller against the returned row.
+    pub fn find_pending_by_activation_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<Administrator>, StoreError> {
+        Ok(self
+            .read_all::<Administrator>(ADMINISTRATOR)?
+            .into_iter()
+            .find(|admin| {
+                admin.status == AdministratorStatus::Pending
+                    && admin.activation_token_hash.as_deref() == Some(token_hash)
+            }))
     }
 
     pub fn settings(&self) -> Result<GlobalSettings, StoreError> {
@@ -508,31 +649,35 @@ impl Store {
         }
     }
 
-    /// Create the one admin account and mark setup complete in a single write
+    /// Create the first administrator and mark setup complete in a single write
     /// transaction. redb serializes writers, so a concurrent second call sees the
-    /// existing admin and returns `AlreadyInstalled` — the single-admin invariant
-    /// and the closed-installer guarantee are both atomic here.
-    pub fn create_admin(
+    /// existing administrator and returns `AlreadyInstalled` — the closed-installer
+    /// guarantee is atomic here.
+    pub fn create_first_administrator(
         &self,
         id: String,
         username: String,
         password_hash: String,
-    ) -> Result<Admin, StoreError> {
+    ) -> Result<Administrator, StoreError> {
         let txn = self.db.begin_write().map_err(backend)?;
         let admin = {
-            let mut admins = txn.open_table(ADMIN).map_err(backend)?;
-            if admins.get(ADMIN_KEY).map_err(backend)?.is_some() {
+            let mut admins = txn.open_table(ADMINISTRATOR).map_err(backend)?;
+            if admins.len().map_err(backend)? > 0 {
                 return Err(StoreError::AlreadyInstalled);
             }
-            let admin = Admin {
+            let admin = Administrator {
                 id,
                 username,
-                password_hash,
+                password_hash: Some(password_hash),
+                status: AdministratorStatus::Active,
                 created_at: unix_now(),
+                activation_token_hash: None,
+                activation_expires_at: None,
+                session_generation: 0,
             };
             let encoded = serde_json::to_vec(&admin).map_err(backend)?;
             admins
-                .insert(ADMIN_KEY, encoded.as_slice())
+                .insert(admin.id.as_str(), encoded.as_slice())
                 .map_err(backend)?;
             admin
         };
@@ -549,6 +694,187 @@ impl Store {
         }
         txn.commit().map_err(backend)?;
         Ok(admin)
+    }
+
+    /// Insert a new pending administrator, refusing a username already taken
+    /// case-insensitively (spec #1). The uniqueness scan and the insert share one
+    /// write transaction, so two racing creates cannot both claim a name.
+    pub fn create_pending_administrator(
+        &self,
+        admin: Administrator,
+    ) -> Result<Administrator, StoreError> {
+        let txn = self.db.begin_write().map_err(backend)?;
+        {
+            let mut admins = txn.open_table(ADMINISTRATOR).map_err(backend)?;
+            for entry in admins.iter().map_err(backend)? {
+                let (_key, value) = entry.map_err(backend)?;
+                let existing: Administrator =
+                    serde_json::from_slice(value.value()).map_err(backend)?;
+                if existing.username.eq_ignore_ascii_case(&admin.username) {
+                    return Err(StoreError::UsernameTaken);
+                }
+            }
+            let encoded = serde_json::to_vec(&admin).map_err(backend)?;
+            admins
+                .insert(admin.id.as_str(), encoded.as_slice())
+                .map_err(backend)?;
+        }
+        txn.commit().map_err(backend)?;
+        Ok(admin)
+    }
+
+    /// Replace a pending administrator's activation token+expiry in one write
+    /// transaction — replacing the stored hash is what invalidates the previous
+    /// link. `Ok(None)` when the row is absent or no longer pending, so a
+    /// regeneration racing an activation can never hand out a fresh link for an
+    /// account that already has a password.
+    pub fn regenerate_activation(
+        &self,
+        id: &str,
+        token_hash: String,
+        expires_at: u64,
+    ) -> Result<Option<Administrator>, StoreError> {
+        let txn = self.db.begin_write().map_err(backend)?;
+        let updated = {
+            let mut admins = txn.open_table(ADMINISTRATOR).map_err(backend)?;
+            let current: Option<Administrator> = match admins.get(id).map_err(backend)? {
+                Some(guard) => Some(serde_json::from_slice(guard.value()).map_err(backend)?),
+                None => None,
+            };
+            match current.filter(|admin| admin.status == AdministratorStatus::Pending) {
+                Some(mut admin) => {
+                    admin.activation_token_hash = Some(token_hash);
+                    admin.activation_expires_at = Some(expires_at);
+                    let encoded = serde_json::to_vec(&admin).map_err(backend)?;
+                    admins.insert(id, encoded.as_slice()).map_err(backend)?;
+                    Some(admin)
+                }
+                None => None,
+            }
+        };
+        txn.commit().map_err(backend)?;
+        Ok(updated)
+    }
+
+    /// Atomically consume an activation link: in one write transaction, re-read
+    /// the administrator and activate only if still pending, the stored hash
+    /// still matches, and the expiry has not passed. Returns `true` when this
+    /// call is the one that activated — two racing activations can never both
+    /// succeed on one single-use token (the enrollment-token pattern).
+    pub fn activate_administrator(
+        &self,
+        id: &str,
+        token_hash: &str,
+        password_hash: String,
+        now: u64,
+    ) -> Result<bool, StoreError> {
+        let txn = self.db.begin_write().map_err(backend)?;
+        let activated = {
+            let mut admins = txn.open_table(ADMINISTRATOR).map_err(backend)?;
+            let current: Option<Administrator> = match admins.get(id).map_err(backend)? {
+                Some(guard) => Some(serde_json::from_slice(guard.value()).map_err(backend)?),
+                None => None,
+            };
+            let eligible = current.filter(|admin| {
+                admin.status == AdministratorStatus::Pending
+                    && admin.activation_token_hash.as_deref() == Some(token_hash)
+                    && admin
+                        .activation_expires_at
+                        .is_some_and(|expiry| now <= expiry)
+            });
+            match eligible {
+                Some(mut admin) => {
+                    admin.password_hash = Some(password_hash);
+                    admin.status = AdministratorStatus::Active;
+                    admin.activation_token_hash = None;
+                    admin.activation_expires_at = None;
+                    let encoded = serde_json::to_vec(&admin).map_err(backend)?;
+                    admins.insert(id, encoded.as_slice()).map_err(backend)?;
+                    true
+                }
+                None => false,
+            }
+        };
+        txn.commit().map_err(backend)?;
+        Ok(activated)
+    }
+
+    /// Remove one administrator under the spec #1 guard rails — enforced inside
+    /// the same redb write transaction as the delete, so two peers concurrently
+    /// removing each other can never both pass the last-active check (redb
+    /// serializes writers; the loser re-reads the winner's committed table).
+    pub fn remove_administrator(
+        &self,
+        caller_id: &str,
+        target_id: &str,
+    ) -> Result<(), RemoveAdministratorError> {
+        let txn = self.db.begin_write().map_err(backend)?;
+        {
+            let mut admins = txn.open_table(ADMINISTRATOR).map_err(backend)?;
+            let target: Administrator = match admins.get(target_id).map_err(backend)? {
+                Some(guard) => serde_json::from_slice(guard.value()).map_err(backend)?,
+                None => return Err(RemoveAdministratorError::NotFound),
+            };
+            if target.id == caller_id {
+                return Err(RemoveAdministratorError::CannotRemoveSelf);
+            }
+            if target.status == AdministratorStatus::Active {
+                let mut active = 0usize;
+                for entry in admins.iter().map_err(backend)? {
+                    let (_key, value) = entry.map_err(backend)?;
+                    let admin: Administrator =
+                        serde_json::from_slice(value.value()).map_err(backend)?;
+                    if admin.status == AdministratorStatus::Active {
+                        active += 1;
+                    }
+                }
+                if active <= 1 {
+                    return Err(RemoveAdministratorError::LastActive);
+                }
+            }
+            admins.remove(target_id).map_err(backend)?;
+        }
+        txn.commit().map_err(backend)?;
+        Ok(())
+    }
+
+    /// Conditional password rotation: one write transaction that requires the
+    /// row to still exist, still be active, and still carry the exact hash the
+    /// handler verified against — so a removal (or a second rotation) racing
+    /// the Argon2 work can never be undone by this write, and the row is never
+    /// re-created. On success stores `new_hash`, bumps `session_generation`
+    /// (revoking every session stamped with an older value), and returns the
+    /// new generation; `Ok(None)` when any precondition broke.
+    pub fn rotate_password(
+        &self,
+        id: &str,
+        expected_hash: &str,
+        new_hash: String,
+    ) -> Result<Option<u64>, StoreError> {
+        let txn = self.db.begin_write().map_err(backend)?;
+        let generation = {
+            let mut admins = txn.open_table(ADMINISTRATOR).map_err(backend)?;
+            let current: Option<Administrator> = match admins.get(id).map_err(backend)? {
+                Some(guard) => Some(serde_json::from_slice(guard.value()).map_err(backend)?),
+                None => None,
+            };
+            let eligible = current.filter(|admin| {
+                admin.status == AdministratorStatus::Active
+                    && admin.password_hash.as_deref() == Some(expected_hash)
+            });
+            match eligible {
+                Some(mut admin) => {
+                    admin.password_hash = Some(new_hash);
+                    admin.session_generation += 1;
+                    let encoded = serde_json::to_vec(&admin).map_err(backend)?;
+                    admins.insert(id, encoded.as_slice()).map_err(backend)?;
+                    Some(admin.session_generation)
+                }
+                None => None,
+            }
+        };
+        txn.commit().map_err(backend)?;
+        Ok(generation)
     }
 
     pub(crate) fn persist_settings(&self, settings: &GlobalSettings) -> Result<(), StoreError> {
@@ -926,6 +1252,7 @@ mod tests {
             facility_url: None,
             kind,
             data_plane_origin: None,
+            asn: None,
             offered_methods: offered,
             status: LocationStatus::Online,
             created_at: 0,

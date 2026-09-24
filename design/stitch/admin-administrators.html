@@ -1,0 +1,262 @@
+<!DOCTYPE html><html class="dark" lang="en"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Administrators - Looking Glass</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-high": "#222a3d",
+                        "surface-variant": "#2d3449",
+                        "outline": "#86948a",
+                        "surface-container-low": "#131b2e",
+                        "on-primary": "#003824",
+                        "surface-container-lowest": "#060e20",
+                        "on-error": "#690005",
+                        "inverse-surface": "#dae2fd",
+                        "secondary-fixed-dim": "#95d3ba",
+                        "surface-container": "#171f33",
+                        "on-primary-container": "#00422b",
+                        "surface-dim": "#0b1326",
+                        "inverse-primary": "#006c49",
+                        "primary-fixed-dim": "#4edea3",
+                        "on-tertiary": "#003825",
+                        "on-tertiary-fixed-variant": "#005137",
+                        "inverse-on-surface": "#283044",
+                        "primary-fixed": "#6ffbbe",
+                        "surface-bright": "#31394d",
+                        "on-primary-fixed": "#002113",
+                        "error-container": "#93000a",
+                        "on-surface": "#dae2fd",
+                        "on-tertiary-container": "#00422c",
+                        "background": "#0b1326",
+                        "on-secondary-fixed": "#002117",
+                        "on-surface-variant": "#bbcabf",
+                        "secondary-container": "#0b513d",
+                        "error": "#ffb4ab",
+                        "tertiary-fixed-dim": "#45dfa4",
+                        "surface-container-highest": "#2d3449",
+                        "tertiary": "#45dfa4",
+                        "on-error-container": "#ffdad6",
+                        "secondary-fixed": "#b0f0d6",
+                        "primary": "#4edea3",
+                        "on-tertiary-fixed": "#002114",
+                        "on-primary-fixed-variant": "#005236",
+                        "surface": "#0b1326",
+                        "primary-container": "#10b981",
+                        "on-secondary-container": "#83c2a9",
+                        "tertiary-fixed": "#68fcbf",
+                        "outline-variant": "#3c4a42",
+                        "on-background": "#dae2fd",
+                        "on-secondary": "#003829",
+                        "tertiary-container": "#00b982",
+                        "on-secondary-fixed-variant": "#0b513d",
+                        "secondary": "#95d3ba",
+                        "surface-tint": "#4edea3"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-desktop": "64px",
+                        "sm": "12px",
+                        "md": "24px",
+                        "margin-mobile": "16px",
+                        "lg": "48px",
+                        "xs": "4px",
+                        "xl": "80px",
+                        "gutter": "24px",
+                        "base": "8px"
+                    },
+                    "fontFamily": {
+                        "headline-sm": ["Plus Jakarta Sans"],
+                        "body-lg": ["Plus Jakarta Sans"],
+                        "headline-lg-mobile": ["Plus Jakarta Sans"],
+                        "label-sm": ["Plus Jakarta Sans"],
+                        "headline-lg": ["Plus Jakarta Sans"],
+                        "body-sm": ["Plus Jakarta Sans"],
+                        "body-md": ["Plus Jakarta Sans"],
+                        "label-md": ["Plus Jakarta Sans"],
+                        "headline-md": ["Plus Jakarta Sans"]
+                    },
+                    "fontSize": {
+                        "headline-sm": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "400" }],
+                        "headline-lg-mobile": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "700" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "headline-lg": ["48px", { "lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "label-md": ["14px", { "lineHeight": "20px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "headline-md": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined.fill {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        
+        /* Custom Scrollbar for a cleaner look */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: theme('colors.surface-variant');
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: theme('colors.outline');
+        }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen font-sans selection:bg-primary selection:text-on-primary bg-background text-on-background dark:bg-background dark:text-on-background">
+<!-- TopNavBar -->
+<nav class="bg-surface dark:bg-surface border-b border-outline-variant dark:border-outline-variant flex justify-between items-center w-full px-margin-desktop h-16 sticky top-0 z-50">
+<div class="flex items-center gap-md">
+<div class="flex items-center gap-sm text-primary">
+<span class="material-symbols-outlined fill text-[24px]">lens</span>
+<span class="text-headline-md font-headline-md font-bold text-on-surface dark:text-on-surface tracking-tight">Looking Glass</span>
+</div>
+</div>
+<div class="flex items-center gap-lg">
+<ul class="hidden md:flex gap-md items-center">
+<li class="">
+<a class="text-on-surface-variant dark:text-on-surface-variant hover:text-primary transition-colors duration-200 text-label-md font-label-md py-1" href="#">Diagnostics</a>
+</li>
+<li class="">
+<a class="text-primary font-bold border-b-2 border-primary pb-1 text-label-md font-label-md hover:text-primary transition-colors duration-200 opacity-80" href="#">Administration</a>
+</li>
+</ul>
+<button class="text-on-surface-variant hover:text-primary transition-colors duration-200 flex items-center justify-center">
+<span class="material-symbols-outlined" data-icon="light_mode">light_mode</span>
+</button>
+</div>
+</nav>
+<div class="flex flex-1 overflow-hidden relative">
+<!-- SideNavBar -->
+<aside class="hidden md:flex flex-col p-md space-y-sm bg-surface-container-low dark:bg-surface-container-low border-r border-outline-variant dark:border-outline-variant fixed left-0 top-16 h-[calc(100vh-64px)] w-[240px] z-40">
+<div class="flex flex-col flex-1 gap-sm pt-sm">
+<a class="flex items-center gap-sm px-sm py-xs text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-colors rounded-lg text-label-md font-label-md group" href="#">
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors" data-icon="location_on">location_on</span>
+                    Locations
+                </a>
+<a class="flex items-center gap-sm px-sm py-xs bg-secondary-container dark:bg-secondary-container text-on-secondary-container dark:text-on-secondary-container rounded-lg font-semibold text-label-md font-label-md scale-95 transition-transform hover:bg-surface-container-highest dark:hover:bg-surface-container-highest" href="#">
+<span class="material-symbols-outlined text-on-secondary-container" data-icon="group">group</span>
+                    Administrators
+                </a>
+<a class="flex items-center gap-sm px-sm py-xs text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-colors rounded-lg text-label-md font-label-md group" href="#">
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors" data-icon="settings">settings</span>
+                    Settings
+                </a>
+</div>
+<div class="mt-auto pt-md border-t border-outline-variant/50">
+<a class="flex items-center gap-sm px-sm py-xs text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-colors rounded-lg text-label-md font-label-md group" href="#">
+<span class="material-symbols-outlined text-on-surface-variant group-hover:text-error transition-colors" data-icon="logout">logout</span>
+                    Log out
+                </a>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 w-full md:pl-[240px] overflow-y-auto">
+<div class="max-w-4xl mx-auto px-margin-mobile md:px-margin-desktop py-xl">
+<!-- Page Header -->
+<header class="mb-lg">
+<h1 class="text-headline-lg font-headline-lg-mobile md:font-headline-lg text-on-surface mb-xs">Administrators</h1>
+<p class="text-body-lg font-body-lg text-on-surface-variant">Manage equal peers and your own password. One-time links disappear when closed.</p>
+</header>
+<div class="flex flex-col gap-md">
+<!-- Section 1: Add Administrator -->
+<section class="bg-surface-container-low rounded-xl p-md border border-outline-variant/30 relative overflow-hidden group">
+<div class="absolute inset-0 bg-gradient-to-br from-secondary-container/5 to-transparent pointer-events-none"></div>
+<div class="relative z-10">
+<h2 class="text-headline-sm font-headline-sm text-on-surface mb-xs">Add an administrator</h2>
+<p class="text-body-sm font-body-sm text-on-surface-variant mb-md">They choose their password from the one-time activation link.</p>
+<div class="flex flex-col sm:flex-row gap-md items-end">
+<div class="flex-1 w-full">
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs" for="new-admin-username">Username</label>
+<input class="w-full bg-surface-dim border-b-2 border-outline-variant text-on-surface text-body-md font-body-md py-sm px-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all rounded-t-md" id="new-admin-username" placeholder="Enter username" type="text">
+</div>
+<button class="w-full sm:w-auto bg-primary-container text-on-primary-container hover:bg-primary transition-colors duration-300 px-md py-sm rounded-lg text-label-md font-label-md flex items-center justify-center gap-xs shadow-[0_0_15px_rgba(16,185,129,0.1)] hover:shadow-[0_0_20px_rgba(16,185,129,0.2)]">
+<span class="material-symbols-outlined text-[18px]">add</span>
+                                    Create pending
+                                </button>
+</div>
+</div>
+</section>
+<!-- Section 2: Administrator Peers -->
+<section class="bg-surface-container-low rounded-xl p-md border border-outline-variant/30">
+<div class="flex justify-between items-baseline mb-md">
+<h2 class="text-headline-sm font-headline-sm text-on-surface">Administrator peers</h2>
+<span class="text-label-sm font-label-sm text-on-surface-variant">1 account</span>
+</div>
+<div class="flex flex-col gap-xs">
+<!-- Active Admin Row -->
+<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center p-sm rounded-lg bg-surface hover:bg-surface-container transition-colors border border-transparent hover:border-outline-variant/30 group">
+<div class="flex flex-col gap-xs mb-sm sm:mb-0">
+<div class="flex items-center gap-sm">
+<span class="text-body-md font-body-md text-on-surface font-semibold">brooke</span>
+<span class="bg-surface-variant text-on-surface-variant text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full font-bold">You</span>
+<span class="bg-primary/10 text-primary border border-primary/20 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-primary inline-block"></span> Active
+                                        </span>
+</div>
+<span class="text-label-sm font-label-sm text-on-surface-variant/70">Added 8/5/2026</span>
+</div>
+<button class="text-on-surface-variant hover:text-error transition-colors flex items-center gap-xs px-sm py-xs rounded-md hover:bg-error/10 text-label-md font-label-md opacity-70 group-hover:opacity-100">
+<span class="material-symbols-outlined text-[18px]">delete</span>
+                                    Remove
+                                </button>
+</div>
+</div>
+</section>
+<!-- Section 3: Change Password -->
+<section class="bg-surface-container-low rounded-xl p-md border border-outline-variant/30">
+<h2 class="text-headline-sm font-headline-sm text-on-surface mb-xs">Change your password</h2>
+<p class="text-body-sm font-body-sm text-on-surface-variant mb-md">Your current password is required.</p>
+<form class="flex flex-col gap-md">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-md">
+<div class="flex flex-col">
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs" for="current-password">Current password</label>
+<input class="w-full bg-surface-dim border-b-2 border-outline-variant text-on-surface text-body-md font-body-md py-sm px-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all rounded-t-md" id="current-password" type="password">
+</div>
+<div class="flex flex-col">
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs" for="new-password">New password</label>
+<input class="w-full bg-surface-dim border-b-2 border-outline-variant text-on-surface text-body-md font-body-md py-sm px-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all rounded-t-md" id="new-password" type="password">
+</div>
+<div class="flex flex-col">
+<label class="block text-label-sm font-label-sm text-on-surface-variant mb-xs" for="confirm-password">Confirm new password</label>
+<input class="w-full bg-surface-dim border-b-2 border-outline-variant text-on-surface text-body-md font-body-md py-sm px-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all rounded-t-md" id="confirm-password" type="password">
+</div>
+</div>
+<div class="mt-sm">
+<button class="bg-primary-container text-on-primary-container hover:bg-primary transition-colors duration-300 px-md py-sm rounded-lg text-label-md font-label-md shadow-[0_0_15px_rgba(16,185,129,0.1)] hover:shadow-[0_0_20px_rgba(16,185,129,0.2)]" type="button">
+                                    Change password
+                                </button>
+</div>
+</form>
+</section>
+</div>
+</div>
+</main>
+</div>
+
+
+</body></html>

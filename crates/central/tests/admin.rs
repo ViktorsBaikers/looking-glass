@@ -892,3 +892,106 @@ async fn deleting_a_location_removes_it_from_the_public_api() {
         "the deleted location is gone from public read"
     );
 }
+
+// Spec #1 Location schema: an optional ASN (1–4294967295) round-trips through
+// create/read/update and clears back to null; it is exposed in the admin payload.
+#[tokio::test]
+async fn asn_round_trips_and_clears() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+
+    let created = send(
+        central::build(state.clone()),
+        authed(
+            "POST",
+            "/api/admin/locations",
+            &cookie,
+            &json!({ "name": "Vienna", "geo_label": "AT", "kind": "local", "offered_methods": ["ping"], "asn": 64500 })
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_status(&created, StatusCode::CREATED);
+    let body = json_body(created).await;
+    assert_eq!(body["asn"], json!(64500));
+    let id = body["id"].as_str().unwrap().to_string();
+
+    let fetched = send(
+        central::build(state.clone()),
+        authed("GET", &format!("/api/admin/locations/{id}"), &cookie, ""),
+    )
+    .await;
+    assert_eq!(json_body(fetched).await["asn"], json!(64500));
+
+    // The top of the range is valid.
+    let boundary = send(
+        central::build(state.clone()),
+        authed(
+            "PUT",
+            &format!("/api/admin/locations/{id}"),
+            &cookie,
+            &json!({ "name": "Vienna", "geo_label": "AT", "kind": "local", "offered_methods": ["ping"], "asn": 4_294_967_295u64 })
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_status(&boundary, StatusCode::OK);
+    assert_eq!(json_body(boundary).await["asn"], json!(4_294_967_295u64));
+
+    // Omitting the field on update clears it (old rows / no ASN configured).
+    let cleared = send(
+        central::build(state),
+        authed(
+            "PUT",
+            &format!("/api/admin/locations/{id}"),
+            &cookie,
+            &json!({ "name": "Vienna", "geo_label": "AT", "kind": "local", "offered_methods": ["ping"] })
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_status(&cleared, StatusCode::OK);
+    assert_eq!(json_body(cleared).await["asn"], Value::Null);
+}
+
+// Spec #1 / AC of issue #4: an invalid ASN — 0, negative, beyond u32, a float,
+// or a non-number — is refused with 400 `invalid_asn` and writes nothing.
+#[tokio::test]
+async fn invalid_asn_values_are_refused_with_invalid_asn() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+
+    for invalid in [
+        json!(0),
+        json!(-1),
+        json!(4_294_967_296u64),
+        json!(64500.5),
+        json!("64500"),
+    ] {
+        let rejected = send(
+            central::build(state.clone()),
+            authed(
+                "POST",
+                "/api/admin/locations",
+                &cookie,
+                &json!({ "name": "Bad", "geo_label": "AT", "kind": "local", "offered_methods": [], "asn": invalid })
+                    .to_string(),
+            ),
+        )
+        .await;
+        assert_status(&rejected, StatusCode::BAD_REQUEST);
+        let body = json_body(rejected).await;
+        assert_eq!(body["error"], "invalid_asn", "asn {invalid}");
+    }
+
+    let list = send(
+        central::build(state),
+        authed("GET", "/api/admin/locations", &cookie, ""),
+    )
+    .await;
+    assert_eq!(
+        json_body(list).await.as_array().unwrap().len(),
+        0,
+        "a rejected ASN wrote nothing"
+    );
+}

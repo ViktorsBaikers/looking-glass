@@ -1,0 +1,316 @@
+<!DOCTYPE html><html class="dark" lang="en" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Global Settings - Looking Glass</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-container-high": "#222a3d",
+                        "surface-variant": "#2d3449",
+                        "outline": "#86948a",
+                        "surface-container-low": "#131b2e",
+                        "on-primary": "#003824",
+                        "surface-container-lowest": "#060e20",
+                        "on-error": "#690005",
+                        "inverse-surface": "#dae2fd",
+                        "secondary-fixed-dim": "#95d3ba",
+                        "surface-container": "#171f33",
+                        "on-primary-container": "#00422b",
+                        "surface-dim": "#0b1326",
+                        "inverse-primary": "#006c49",
+                        "primary-fixed-dim": "#4edea3",
+                        "on-tertiary": "#003825",
+                        "on-tertiary-fixed-variant": "#005137",
+                        "inverse-on-surface": "#283044",
+                        "primary-fixed": "#6ffbbe",
+                        "surface-bright": "#31394d",
+                        "on-primary-fixed": "#002113",
+                        "error-container": "#93000a",
+                        "on-surface": "#dae2fd",
+                        "on-tertiary-container": "#00422c",
+                        "background": "#0b1326",
+                        "on-secondary-fixed": "#002117",
+                        "on-surface-variant": "#bbcabf",
+                        "secondary-container": "#0b513d",
+                        "error": "#ffb4ab",
+                        "tertiary-fixed-dim": "#45dfa4",
+                        "surface-container-highest": "#2d3449",
+                        "tertiary": "#45dfa4",
+                        "on-error-container": "#ffdad6",
+                        "secondary-fixed": "#b0f0d6",
+                        "primary": "#4edea3",
+                        "on-tertiary-fixed": "#002114",
+                        "on-primary-fixed-variant": "#005236",
+                        "surface": "#0b1326",
+                        "primary-container": "#10b981",
+                        "on-secondary-container": "#83c2a9",
+                        "tertiary-fixed": "#68fcbf",
+                        "outline-variant": "#3c4a42",
+                        "on-background": "#dae2fd",
+                        "on-secondary": "#003829",
+                        "tertiary-container": "#00b982",
+                        "on-secondary-fixed-variant": "#0b513d",
+                        "secondary": "#95d3ba",
+                        "surface-tint": "#4edea3"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "margin-desktop": "64px",
+                        "sm": "12px",
+                        "md": "24px",
+                        "margin-mobile": "16px",
+                        "lg": "48px",
+                        "xs": "4px",
+                        "xl": "80px",
+                        "gutter": "24px",
+                        "base": "8px"
+                    },
+                    "fontFamily": {
+                        "headline-sm": ["Plus Jakarta Sans"],
+                        "body-lg": ["Plus Jakarta Sans"],
+                        "headline-lg-mobile": ["Plus Jakarta Sans"],
+                        "label-sm": ["Plus Jakarta Sans"],
+                        "headline-lg": ["Plus Jakarta Sans"],
+                        "body-sm": ["Plus Jakarta Sans"],
+                        "body-md": ["Plus Jakarta Sans"],
+                        "label-md": ["Plus Jakarta Sans"],
+                        "headline-md": ["Plus Jakarta Sans"]
+                    },
+                    "fontSize": {
+                        "headline-sm": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "400" }],
+                        "headline-lg-mobile": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "700" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "headline-lg": ["48px", { "lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "label-md": ["14px", { "lineHeight": "20px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "headline-md": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body {
+            background-color: theme('colors.background');
+            color: theme('colors.on-background');
+        }
+        
+        /* Custom scrollbar for webkit */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: theme('colors.surface-container-low');
+        }
+        ::-webkit-scrollbar-thumb {
+            background: theme('colors.surface-container-highest');
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: theme('colors.outline-variant');
+        }
+
+        .input-glow:focus {
+            outline: none;
+            border-color: theme('colors.primary');
+            box-shadow: 0 0 0 1px theme('colors.primary');
+        }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen bg-background text-on-background">
+<!-- TopNavBar -->
+<header class="flex justify-between items-center w-full px-margin-desktop h-16 bg-surface dark:bg-surface border-b border-outline-variant dark:border-outline-variant">
+<div class="flex items-center gap-md">
+<span class="text-headline-md font-headline-md font-bold text-on-surface dark:text-on-surface">Looking Glass</span>
+</div>
+<nav class="hidden md:flex items-center gap-md">
+<a class="text-on-surface-variant dark:text-on-surface-variant hover:text-primary transition-colors duration-200 text-label-md font-label-md" href="#">Diagnostics</a>
+<a class="text-primary font-bold border-b-2 border-primary pb-1 hover:text-primary transition-colors duration-200 text-label-md font-label-md opacity-80 transition-all" href="#">Administration</a>
+<button class="text-on-surface-variant hover:text-primary transition-colors duration-200 ml-sm">
+<span class="material-symbols-outlined" data-icon="light_mode">light_mode</span>
+</button>
+</nav>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<!-- SideNavBar -->
+<aside class="hidden md:flex flex-col p-md space-y-sm bg-surface-container-low dark:bg-surface-container-low border-r border-outline-variant dark:border-outline-variant fixed left-0 top-16 h-[calc(100vh-4rem)] w-[240px] min-h-screen">
+<div class="mb-lg">
+<h2 class="text-headline-sm font-headline-sm text-primary">Administration</h2>
+<p class="text-body-sm font-body-sm text-on-surface-variant">Network Settings</p>
+</div>
+<nav class="flex-1 space-y-2">
+<a class="flex items-center gap-sm px-sm py-2 text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-colors rounded-lg text-label-md font-label-md" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="location_on">location_on</span>
+                    Locations
+                </a>
+<a class="flex items-center gap-sm px-sm py-2 text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-colors rounded-lg text-label-md font-label-md" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="group">group</span>
+                    Administrators
+                </a>
+<a class="flex items-center gap-sm px-sm py-2 bg-secondary-container dark:bg-secondary-container text-on-secondary-container dark:text-on-secondary-container rounded-lg font-semibold scale-95 transition-transform text-label-md font-label-md" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+                    Settings
+                </a>
+</nav>
+<div class="mt-auto">
+<a class="flex items-center gap-sm px-sm py-2 text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-colors rounded-lg text-label-md font-label-md" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="logout">logout</span>
+                    Log out
+                </a>
+</div>
+<div class="mt-auto">
+<a class="flex items-center gap-sm px-sm py-2 text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-container-highest dark:hover:bg-surface-container-highest transition-colors rounded-lg text-label-md font-label-md hover:text-primary" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="logout">logout</span>
+                    Log out
+                </a>
+</div></aside>
+<!-- Main Content Area -->
+<main class="flex-1 ml-[240px] p-margin-desktop overflow-y-auto bg-background">
+<div class="max-w-4xl mx-auto space-y-xl">
+<header>
+<h1 class="text-headline-lg font-headline-lg mb-2">Settings</h1>
+<p class="text-body-lg font-body-lg text-on-surface-variant">Preview branding and appearance, then publish them with the limits every run must follow.</p>
+</header>
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-gutter">
+<!-- Left Column: Forms -->
+<div class="lg:col-span-8 space-y-lg">
+<!-- Branding Section -->
+<section class="bg-surface-container-low rounded-xl p-md border border-outline-variant">
+<h2 class="text-headline-sm font-headline-sm mb-md text-primary">Branding</h2>
+<div class="space-y-md">
+<div>
+<label class="block text-label-md font-label-md text-on-surface-variant mb-2">Site title</label>
+<input class="w-full bg-surface-container-highest border-b border-outline-variant text-on-surface px-4 py-3 rounded-t-md input-glow focus:bg-surface transition-colors" type="text" value="Looking Glasssss">
+</div>
+<div>
+<label class="block text-label-md font-label-md text-on-surface-variant mb-2">Logo URL (optional)</label>
+<input class="w-full bg-surface-container-highest border-b border-outline-variant text-on-surface px-4 py-3 rounded-t-md input-glow focus:bg-surface transition-colors" placeholder="https://example.test/logo.svg" type="text">
+</div>
+<div>
+<label class="block text-label-md font-label-md text-on-surface-variant mb-2">Terms-of-service URL (optional)</label>
+<input class="w-full bg-surface-container-highest border-b border-outline-variant text-on-surface px-4 py-3 rounded-t-md input-glow focus:bg-surface transition-colors" placeholder="https://example.test/terms" type="text">
+</div>
+<div>
+<label class="block text-label-md font-label-md text-on-surface-variant mb-2">Custom content block (optional)</label>
+<textarea class="w-full bg-surface-container-highest border-b border-outline-variant text-on-surface px-4 py-3 rounded-t-md input-glow focus:bg-surface transition-colors resize-y" rows="4"></textarea>
+</div>
+</div>
+</section>
+<!-- Appearance Section -->
+<section class="bg-surface-container-low rounded-xl p-md border border-outline-variant">
+<h2 class="text-headline-sm font-headline-sm mb-md text-primary">Appearance</h2>
+<div>
+<label class="block text-label-md font-label-md text-on-surface-variant mb-2">Default theme</label>
+<div class="relative">
+<select class="w-full bg-surface-container-highest border-b border-outline-variant text-on-surface px-4 py-3 rounded-t-md input-glow appearance-none focus:bg-surface transition-colors">
+<option>Follow system</option>
+<option>Light</option>
+<option>Dark</option>
+</select>
+<div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="expand_more">expand_more</span>
+</div>
+</div>
+<p class="text-body-sm font-body-sm text-on-surface-variant mt-2">This changes the default only. It does not replace a visitor's saved preference.</p>
+</div>
+</section>
+<!-- Execution Limits Section -->
+<section class="bg-surface-container-low rounded-xl p-md border border-outline-variant">
+<h2 class="text-headline-sm font-headline-sm mb-md text-primary">Execution limits</h2>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-md">
+<div>
+<label class="block text-label-md font-label-md text-on-surface-variant mb-2">Global concurrency cap</label>
+<input class="w-full bg-surface-container-highest border-b border-outline-variant text-on-surface px-4 py-3 rounded-t-md input-glow focus:bg-surface transition-colors" type="number" value="8">
+</div>
+<div>
+<label class="block text-label-md font-label-md text-on-surface-variant mb-2">Per-run timeout (seconds)</label>
+<input class="w-full bg-surface-container-highest border-b border-outline-variant text-on-surface px-4 py-3 rounded-t-md input-glow focus:bg-surface transition-colors" type="number" value="30">
+</div>
+<div>
+<label class="block text-label-md font-label-md text-on-surface-variant mb-2">Output cap (KiB)</label>
+<input class="w-full bg-surface-container-highest border-b border-outline-variant text-on-surface px-4 py-3 rounded-t-md input-glow focus:bg-surface transition-colors" type="number" value="256">
+</div>
+<div>
+<label class="block text-label-md font-label-md text-on-surface-variant mb-2">Rate limit (runs)</label>
+<input class="w-full bg-surface-container-highest border-b border-outline-variant text-on-surface px-4 py-3 rounded-t-md input-glow focus:bg-surface transition-colors" type="number" value="20">
+</div>
+<div>
+<label class="block text-label-md font-label-md text-on-surface-variant mb-2">Rate window (seconds)</label>
+<input class="w-full bg-surface-container-highest border-b border-outline-variant text-on-surface px-4 py-3 rounded-t-md input-glow focus:bg-surface transition-colors" type="number" value="60">
+</div>
+</div>
+</section>
+<!-- Actions -->
+<div class="flex items-center gap-md pt-sm">
+<button class="bg-primary-container text-on-primary-container px-6 py-3 rounded-lg font-semibold hover:bg-primary transition-colors shadow-[0_0_15px_rgba(16,185,129,0.3)]">
+                                Save settings
+                            </button>
+<span class="text-body-sm font-body-sm text-on-surface-variant">No unsaved changes.</span>
+</div>
+</div>
+<!-- Right Column: Preview -->
+<div class="lg:col-span-4 space-y-md">
+<h2 class="text-headline-sm font-headline-sm text-primary">Preview</h2>
+<p class="text-body-sm font-body-sm text-on-surface-variant mb-4">Saved settings preview.</p>
+<!-- Light Theme Preview Card -->
+<div class="bg-surface-container-low rounded-xl p-md border border-outline-variant shadow-sm relative overflow-hidden group">
+<div class="flex items-center gap-sm mb-4">
+<div class="w-8 h-8 bg-primary-container rounded flex items-center justify-center text-on-primary-container font-bold text-sm">
+                                    L
+                                </div>
+<div>
+<div class="text-on-surface font-bold text-sm">Looking Glasssss</div>
+<div class="text-on-surface-variant text-xs">Light theme</div>
+</div>
+</div>
+<div class="text-on-surface-variant text-sm mb-4">
+                                No custom message configured.
+                            </div>
+<div class="flex gap-2 text-xs text-on-surface-variant">
+<span class="">Lettermark logo</span> • <span class="">No terms link</span> • <span class="">Default: system</span>
+</div>
+<!-- Subtle overlay gradient on hover for premium feel -->
+<div class="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
+</div>
+<!-- Dark Theme Preview Card -->
+<div class="bg-surface-container-lowest rounded-xl p-md border border-outline-variant shadow-md relative overflow-hidden group">
+<div class="flex items-center gap-sm mb-4">
+<div class="w-8 h-8 bg-primary rounded flex items-center justify-center text-on-primary font-bold text-sm">
+                                    L
+                                </div>
+<div>
+<div class="text-on-surface font-bold text-sm">Looking Glasssss</div>
+<div class="text-on-surface-variant text-xs">Dark theme</div>
+</div>
+</div>
+<div class="text-on-surface-variant text-sm mb-4">
+                                No custom message configured.
+                            </div>
+<div class="flex gap-2 text-xs text-on-surface-variant">
+<span class="">Lettermark logo</span> • <span class="">No terms link</span> • <span class="">Default: system</span>
+</div>
+<!-- Subtle overlay gradient on hover for premium feel -->
+<div class="absolute inset-0 bg-gradient-to-tr from-transparent via-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+
+
+</body></html>

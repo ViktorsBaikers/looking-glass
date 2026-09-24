@@ -1,3 +1,4 @@
+import { APP, FIXTURE } from './ports';
 import { expect, test, type Response } from '@playwright/test';
 
 test('install.e2e redirects a fresh public entry to the installer after its bound setup probe', async ({
@@ -13,14 +14,14 @@ test('install.e2e redirects a fresh public entry to the installer after its boun
 			response.request().headers()['x-looking-glass-fixture'] === fixtureId
 	);
 
-	await page.goto('http://127.0.0.1:4174/');
+	await page.goto(`${APP}/`);
 	const statusResponse = await initialStatus;
 	expect(statusResponse.status()).toBe(200);
 	expect(await statusResponse.json()).toEqual({ installed: false });
-	await expect(page).toHaveURL('http://127.0.0.1:4174/install');
+	await expect(page).toHaveURL(`${APP}/install`);
 	await expect(page.getByRole('heading', { name: 'Create the admin account' })).toBeVisible();
 
-	const protectedRoute = await request.get('http://127.0.0.1:4173/api/locations', {
+	const protectedRoute = await request.get(`${FIXTURE}/api/locations`, {
 		headers: { 'x-looking-glass-fixture': fixtureId }
 	});
 	expect(protectedRoute.status()).toBe(403);
@@ -33,7 +34,7 @@ test('install.e2e creates the only admin and closes the installer', async ({ pag
 	const initialStatus = page.waitForResponse(
 		(response) => response.url().endsWith('/api/setup/status') && response.request().method() === 'GET'
 	);
-	await page.goto('http://127.0.0.1:4174/install');
+	await page.goto(`${APP}/install`);
 	const statusResponse = await initialStatus;
 	expect(statusResponse.status()).toBe(200);
 	expect(await statusResponse.json()).toEqual({ installed: false });
@@ -49,9 +50,9 @@ test('install.e2e creates the only admin and closes the installer', async ({ pag
 	);
 	await page.getByRole('button', { name: 'Create account' }).click();
 	expect((await setupResponse).status()).toBe(204);
-	await expect(page).toHaveURL('http://127.0.0.1:4174/login');
+	await expect(page).toHaveURL(`${APP}/login`);
 	await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
-	const unauthenticatedMe = await request.get('http://127.0.0.1:4173/api/admin/me', {
+	const unauthenticatedMe = await request.get(`${FIXTURE}/api/admin/me`, {
 		headers: { 'x-looking-glass-fixture': fixtureId }
 	});
 	expect(unauthenticatedMe.status()).toBe(401);
@@ -64,7 +65,7 @@ test('install.e2e creates the only admin and closes the installer', async ({ pag
 	);
 	await page.getByRole('button', { name: 'Sign in' }).click();
 	expect((await failedLoginResponse).status()).toBe(401);
-	await expect(page).toHaveURL('http://127.0.0.1:4174/login');
+	await expect(page).toHaveURL(`${APP}/login`);
 	await expect(page.getByRole('alert')).toHaveText('Invalid username or password.');
 
 	await page.getByLabel('Password').fill('fixture-password');
@@ -78,16 +79,16 @@ test('install.e2e creates the only admin and closes the installer', async ({ pag
 	expect((await loginResponse).status()).toBe(204);
 	const authenticatedMe = await meResponse;
 	expect(authenticatedMe.status()).toBe(200);
-	expect(await authenticatedMe.json()).toEqual({ username: 'admin' });
-	await expect(page).toHaveURL('http://127.0.0.1:4174/admin');
+	expect(await authenticatedMe.json()).toMatchObject({ username: 'admin' });
+	await expect(page).toHaveURL(`${APP}/admin`);
 	await expect(page.getByRole('heading', { name: 'Locations' })).toBeVisible();
 	await expect(page.getByRole('link', { name: 'Locations' })).toBeVisible();
 	await page.getByRole('link', { name: 'Settings' }).click();
-	await expect(page).toHaveURL('http://127.0.0.1:4174/admin/settings');
+	await expect(page).toHaveURL(`${APP}/admin/settings`);
 	await page.getByRole('link', { name: 'Locations' }).click();
-	await expect(page).toHaveURL('http://127.0.0.1:4174/admin');
+	await expect(page).toHaveURL(`${APP}/admin`);
 
-	const secondSetup = await request.post('http://127.0.0.1:4173/api/setup', {
+	const secondSetup = await request.post(`${FIXTURE}/api/setup`, {
 		headers: { 'x-looking-glass-fixture': fixtureId },
 		data: {
 			setup_token: 'fixture-setup-token',
@@ -108,14 +109,14 @@ test('install.e2e creates the only admin and closes the installer', async ({ pag
 		}
 	};
 	page.on('response', collectClosingStatus);
-	await page.goto('http://127.0.0.1:4174/install');
-	await page.waitForURL('http://127.0.0.1:4174/login');
+	await page.goto(`${APP}/install`);
+	await page.waitForURL(`${APP}/login`);
 	await page.waitForLoadState('networkidle');
 	page.off('response', collectClosingStatus);
 
 	const closingInstallStatusResponses: Response[] = [];
 	for (const response of closingStatusTraffic) {
-		if ((await response.request().headerValue('referer')) === 'http://127.0.0.1:4174/install') {
+		if ((await response.request().headerValue('referer')) === `${APP}/install`) {
 			closingInstallStatusResponses.push(response);
 		}
 	}
@@ -125,6 +126,6 @@ test('install.e2e creates the only admin and closes the installer', async ({ pag
 		expect(response.status()).toBe(200);
 		expect(await response.json()).toEqual({ installed: true });
 	}
-	await expect(page).toHaveURL('http://127.0.0.1:4174/login');
+	await expect(page).toHaveURL(`${APP}/login`);
 	await expect(page.getByRole('heading', { name: 'Create the admin account' })).toHaveCount(0);
 });

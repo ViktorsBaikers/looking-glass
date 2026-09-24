@@ -3,19 +3,29 @@
 
 import { getJson, postJsonReturning, putJson, del } from '$lib/api.js';
 import type {
+	ActivationLink,
+	Administrator,
 	EnrollmentTicket,
 	GlobalSettings,
 	IperfEndpoint,
 	Location,
 	LocationDetail,
+	Me,
 	TestFile,
 	TestIp
 } from './types.js';
 
 export type LocationInput = Pick<
 	Location,
-	'name' | 'geo_label' | 'map_query' | 'facility' | 'facility_url' | 'kind' | 'offered_methods'
+	| 'name'
+	| 'geo_label'
+	| 'map_query'
+	| 'facility'
+	| 'facility_url'
+	| 'kind'
+	| 'offered_methods'
 	| 'data_plane_origin'
+	| 'asn'
 >;
 export type TestIpInput = Pick<TestIp, 'family' | 'address' | 'label'>;
 export type IperfInput = Pick<
@@ -59,3 +69,26 @@ export const deleteTestFile = (id: string) => del(`/api/admin/files/${id}`);
 export const getSettings = () => getJson<GlobalSettings>('/api/admin/settings');
 export const saveSettings = (body: GlobalSettings) =>
 	putJson<GlobalSettings>('/api/admin/settings', body);
+
+// ----- Administrators (ADR-0001) ----------------------------------------------
+
+/** The signed-in administrator (spec #1: `{id, username}`). */
+export const getMe = () => getJson<Me>('/api/admin/me');
+
+export const listAdministrators = () => getJson<Administrator[]>('/api/admin/administrators');
+/** Create a pending peer; the activation URL in the result is shown once. */
+export const createAdministrator = (username: string) =>
+	postJsonReturning<ActivationLink>('/api/admin/administrators', { username });
+/** Replace a pending peer's activation link; the previous one dies. */
+export const regenerateActivation = (id: string) =>
+	postJsonReturning<ActivationLink>(`/api/admin/administrators/${id}/activation`, {});
+export const removeAdministrator = (id: string) => del(`/api/admin/administrators/${id}`);
+/** Ends the caller's other sessions; the current one stays signed in. */
+export const changePassword = (current_password: string, new_password: string) =>
+	putJson<undefined>('/api/admin/me/password', { current_password, new_password });
+/** Public activation page reads: whose link is this? 410 when invalid. */
+export const getActivation = (token: string) =>
+	getJson<{ username: string }>(`/api/activate/${token}`);
+/** Public activation submit: sets the peer's password, single use. */
+export const activate = (token: string, password: string) =>
+	postJsonReturning<undefined>(`/api/activate/${token}`, { password });

@@ -19,11 +19,17 @@ use serde_json::json;
 use tower_sessions::Session;
 
 use crate::observability::{correlation_id, log_validation_rejected};
-use crate::store::{unix_now, StoreError};
+use crate::store::{unix_now, AdministratorStatus, StoreError};
 use crate::AppState;
 
-const SESSION_ADMIN_KEY: &str = "admin_id";
+pub(crate) const SESSION_ADMIN_KEY: &str = "admin_id";
 const SESSION_AUTH_AT_KEY: &str = "auth_at";
+/// The credential epoch the session was minted under — stamped at login and
+/// compared against the administrator row on every request, so a session
+/// record resurrected after a password rotation is refused even though the
+/// row is still active. Sessions predating the key read as generation 0,
+/// matching rows migrated with the serde default.
+pub(crate) const SESSION_GENERATION_KEY: &str = "session_generation";
 const ABSOLUTE_SESSION_CAP_SECS: u64 = 12 * 60 * 60;
 
 /// Verified against on a username miss so a failed login costs the same work
@@ -91,10 +97,14 @@ impl FromRequestParts<AppState> for ClientContext {
     }
 }
 
-/// Proof of an authenticated admin — its successful extraction *is* the gate.
-/// Missing session, absent admin id, or a session past the absolute cap all
-/// reject with `Unauthorized`, so the admin surface fails closed (FR-006/AC4).
-pub struct AdminSession;
+/// Proof of an authenticated administrator — its successful extraction *is* the
+/// gate. Missing session, absent administrator id, an administrator row that no
+/// longer exists or is not active, or a session past the absolute cap all reject
+/// with `Unauthorized`, so the admin surface fails closed (FR-006/AC4). Carries
+/// the session's administrator id for the handlers that act as "me" (ADR-0001).
+pub struct AdminSession {
+    pub admin_id: String,
+}
 
 impl FromRequestParts<AppState> for AdminSession {
     type Rejection = ApiError;
@@ -111,9 +121,9 @@ impl FromRequestParts<AppState> for AdminSession {
             .get(SESSION_ADMIN_KEY)
             .await
             .map_err(|_| ApiError::Internal)?;
-        if admin_id.is_none() {
+        let Some(admin_id) = admin_id else {
             return Err(ApiError::Unauthorized);
-        }
+        };
 
         let auth_at: u64 = session
             .get(SESSION_AUTH_AT_KEY)
@@ -126,7 +136,34 @@ impl FromRequestParts<AppState> for AdminSession {
             return Err(ApiError::Unauthorized);
         }
 
-        Ok(Self)
+        // The administrator must still exist, still be active, and still carry
+        // the credential generation this session was minted under. Removal
+        // purges the peer's session records and a password change purges the
+        // caller's other sessions and bumps the generation — but the session
+        // middleware re-saves every in-flight request's record, so a stale
+        // record can be resurrected after either purge. This check is what
+        // makes revocation fail closed on the next request regardless.
+        let generation: u64 = session
+            .get(SESSION_GENERATION_KEY)
+            .await
+            .map_err(|_| ApiError::Internal)?
+            .unwrap_or(0);
+        let current = state
+            .store
+            .get_administrator(&admin_id)
+            .map_err(|_| ApiError::Internal)?
+            .is_some_and(|admin| {
+                admin.status == AdministratorStatus::Active
+                    && admin.session_generation == generation
+            });
+        if !current {
+            // Best-effort hygiene: the refusal below is the gate, and it fires
+            // again on every request even if this delete fails.
+            session.delete().await.ok();
+            return Err(ApiError::Unauthorized);
+        }
+
+        Ok(Self { admin_id })
     }
 }
 
@@ -173,12 +210,14 @@ pub async fn login(
         log_validation_rejected(&correlation_id, "auth.login", "invalid_login_payload");
     }
     let credentials_ok = request_valid && {
-        let admin = state.store.admin()?;
-        match &admin {
-            Some(admin) if admin.username == body.username => {
-                verify_password(&body.password, &admin.password_hash)
-            }
-            _ => {
+        match state
+            .store
+            .find_active_administrator_by_username(&body.username)?
+        {
+            Some(admin) => admin
+                .password_hash
+                .is_some_and(|hash| verify_password(&body.password, &hash)),
+            None => {
                 verify_password(&body.password, &DUMMY_HASH);
                 false
             }
@@ -196,7 +235,10 @@ pub async fn login(
         return Err(ApiError::InvalidCredentials);
     }
 
-    let admin = state.store.admin()?.ok_or(ApiError::InvalidCredentials)?;
+    let admin = state
+        .store
+        .find_active_administrator_by_username(&body.username)?
+        .ok_or(ApiError::InvalidCredentials)?;
     // Rotate the session id across the auth boundary so a fixed pre-auth id
     // cannot be promoted to an authenticated one (session fixation).
     session.cycle_id().await.map_err(|_| ApiError::Internal)?;
@@ -206,6 +248,10 @@ pub async fn login(
         .map_err(|_| ApiError::Internal)?;
     session
         .insert(SESSION_AUTH_AT_KEY, unix_now())
+        .await
+        .map_err(|_| ApiError::Internal)?;
+    session
+        .insert(SESSION_GENERATION_KEY, admin.session_generation)
         .await
         .map_err(|_| ApiError::Internal)?;
     state.login_limiter.clear(client);
@@ -233,16 +279,21 @@ pub async fn logout(session: Session, headers: HeaderMap) -> Result<StatusCode, 
 
 #[derive(Serialize)]
 pub struct MeResponse {
+    pub id: String,
     pub username: String,
 }
 
 pub async fn me(
     State(state): State<AppState>,
-    _admin: AdminSession,
+    admin: AdminSession,
 ) -> Result<Json<MeResponse>, ApiError> {
-    let admin = state.store.admin()?.ok_or(ApiError::Unauthorized)?;
+    let row = state
+        .store
+        .get_administrator(&admin.admin_id)?
+        .ok_or(ApiError::Unauthorized)?;
     Ok(Json(MeResponse {
-        username: admin.username,
+        id: row.id,
+        username: row.username,
     }))
 }
 
@@ -258,12 +309,20 @@ pub enum ApiError {
     Validation(String),
     NotFound,
     Internal,
+    /// A spec-named error: explicit HTTP status and machine-readable code (the
+    /// Administrators guard rails, ASN validation, activation lifecycle).
+    Coded(StatusCode, &'static str, &'static str),
 }
 
 impl From<StoreError> for ApiError {
     fn from(error: StoreError) -> Self {
         match error {
             StoreError::AlreadyInstalled => ApiError::AlreadyInstalled,
+            StoreError::UsernameTaken => ApiError::Coded(
+                StatusCode::CONFLICT,
+                "username_taken",
+                "That username is already taken.",
+            ),
             StoreError::Backend(_) => ApiError::Internal,
         }
     }
@@ -320,6 +379,7 @@ impl IntoResponse for ApiError {
                 "internal_error",
                 "Something went wrong.".to_string(),
             ),
+            ApiError::Coded(status, code, message) => (status, code, message.to_string()),
         };
         (status, Json(json!({ "error": code, "message": message }))).into_response()
     }

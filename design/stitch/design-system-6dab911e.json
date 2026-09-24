@@ -1,0 +1,144 @@
+{
+  "displayName": "Emerald Tech Narrative",
+  "styleGuidelines": "## Brand & Style\n\nThe design system is engineered for a high-performance, premium tech environment. It targets a sophisticated audience that values precision, speed, and deep focus. The aesthetic is a hybrid of **Modern Corporate** and **Minimalism**, utilizing a dark, immersive atmosphere to reduce visual fatigue while highlighting critical data points.\n\nThe emotional response should be one of \"quiet authority\"\u2014reliable, high-end, and technologically advanced. This is achieved through generous negative space, a restricted but vibrant color palette, and a focus on razor-sharp typography.\n\n## Layout & Spacing\n\nThe layout follows a **Fluid Grid** model with a standard 12-column structure for desktop. A strict 8px spacing scale ensures mathematical harmony across all components.\n\n- **Desktop (1440px+):** 12 columns, 64px side margins, 24px gutters.\n- **Tablet (768px - 1439px):** 8 columns, 32px side margins, 20px gutters.\n- **Mobile (Up to 767px):** 4 columns, 16px side margins, 16px gutters.\n\nLarge vertical sections should be separated by `xl` spacing to maintain the minimal, airy feel of the brand.\n\n## Elevation & Depth\n\nHierarchy is established through **Tonal Layers** rather than heavy shadows. In this dark emerald theme, surfaces \"rise\" by becoming lighter and more saturated.\n\n- **Level 0 (Background):** Deepest neutral (`#0F172A`).\n- **Level 1 (Card/Section):** Slightly lighter emerald-tinted surface.\n- **Level 2 (Dropdowns/Modals):** High-contrast emerald-tinted surface with a subtle 1px border (`rgba(255, 255, 255, 0.05)`).\n\nShadows, when used, are ambient and diffused, using a dark emerald tint (`#064E3B`) at 40% opacity to simulate glow rather than a physical shadow.\n\n## Components\n\n### Buttons\nPrimary buttons use the solid Primary Emerald (`#10B981`) with dark navy text. Secondary buttons use an emerald outline with transparent backgrounds. Interactions should feature a subtle glow transition on hover.\n\n### Input Fields\nFields are dark-filled with a subtle bottom border. On focus, the border transitions to Primary Emerald with a soft \"glow\" outer stroke. Labels sit above the field in `label-sm` style.\n\n### Cards\nCards use a subtle gradient from the secondary emerald to the neutral background. They should not have heavy borders; instead, use Level 1 elevation layering to define boundaries.\n\n### Chips & Badges\nSmall, pill-shaped elements used for status or filtering. Status badges should use the emerald palette: \"Active\" (Primary Emerald), \"Pending\" (Secondary Emerald tint), and \"Inactive\" (Neutral Grey).\n\n### Data Tables\nTables should avoid vertical lines. Use subtle horizontal dividers and hover-state highlights in a very faint emerald tint to assist row scanning.",
+  "theme": {
+    "colorMode": "DARK",
+    "font": "PLUS_JAKARTA_SANS",
+    "roundness": "ROUND_EIGHT",
+    "customColor": "#10b981",
+    "headlineFont": "PLUS_JAKARTA_SANS",
+    "bodyFont": "PLUS_JAKARTA_SANS",
+    "labelFont": "PLUS_JAKARTA_SANS",
+    "namedColors": {
+      "primary_fixed_dim": "#4edea3",
+      "on_surface": "#dae2fd",
+      "on_secondary_container": "#83c2a9",
+      "on_tertiary_container": "#00422c",
+      "error_container": "#93000a",
+      "outline_variant": "#3c4a42",
+      "on_secondary_fixed": "#002117",
+      "on_tertiary": "#003825",
+      "error": "#ffb4ab",
+      "surface_container": "#171f33",
+      "surface_container_lowest": "#060e20",
+      "on_primary_fixed": "#002113",
+      "on_error_container": "#ffdad6",
+      "on_surface_variant": "#bbcabf",
+      "tertiary_fixed_dim": "#45dfa4",
+      "secondary_fixed_dim": "#95d3ba",
+      "tertiary_fixed": "#68fcbf",
+      "tertiary": "#45dfa4",
+      "surface_container_high": "#222a3d",
+      "primary_fixed": "#6ffbbe",
+      "background": "#0b1326",
+      "on_primary_container": "#00422b",
+      "primary": "#4edea3",
+      "on_background": "#dae2fd",
+      "surface_container_low": "#131b2e",
+      "surface_container_highest": "#2d3449",
+      "inverse_primary": "#006c49",
+      "on_secondary": "#003829",
+      "surface_tint": "#4edea3",
+      "surface_bright": "#31394d",
+      "primary_container": "#10b981",
+      "on_secondary_fixed_variant": "#0b513d",
+      "inverse_on_surface": "#283044",
+      "secondary_container": "#0b513d",
+      "outline": "#86948a",
+      "on_error": "#690005",
+      "surface_dim": "#0b1326",
+      "inverse_surface": "#dae2fd",
+      "surface_variant": "#2d3449",
+      "on_tertiary_fixed": "#002114",
+      "secondary": "#95d3ba",
+      "tertiary_container": "#00b982",
+      "on_primary_fixed_variant": "#005236",
+      "on_primary": "#003824",
+      "secondary_fixed": "#b0f0d6",
+      "on_tertiary_fixed_variant": "#005137",
+      "surface": "#0b1326"
+    },
+    "designMd": "---\nname: Emerald Tech Narrative\ncolors:\n  surface: '#0b1326'\n  surface-dim: '#0b1326'\n  surface-bright: '#31394d'\n  surface-container-lowest: '#060e20'\n  surface-container-low: '#131b2e'\n  surface-container: '#171f33'\n  surface-container-high: '#222a3d'\n  surface-container-highest: '#2d3449'\n  on-surface: '#dae2fd'\n  on-surface-variant: '#bbcabf'\n  inverse-surface: '#dae2fd'\n  inverse-on-surface: '#283044'\n  outline: '#86948a'\n  outline-variant: '#3c4a42'\n  surface-tint: '#4edea3'\n  primary: '#4edea3'\n  on-primary: '#003824'\n  primary-container: '#10b981'\n  on-primary-container: '#00422b'\n  inverse-primary: '#006c49'\n  secondary: '#95d3ba'\n  on-secondary: '#003829'\n  secondary-container: '#0b513d'\n  on-secondary-container: '#83c2a9'\n  tertiary: '#45dfa4'\n  on-tertiary: '#003825'\n  tertiary-container: '#00b982'\n  on-tertiary-container: '#00422c'\n  error: '#ffb4ab'\n  on-error: '#690005'\n  error-container: '#93000a'\n  on-error-container: '#ffdad6'\n  primary-fixed: '#6ffbbe'\n  primary-fixed-dim: '#4edea3'\n  on-primary-fixed: '#002113'\n  on-primary-fixed-variant: '#005236'\n  secondary-fixed: '#b0f0d6'\n  secondary-fixed-dim: '#95d3ba'\n  on-secondary-fixed: '#002117'\n  on-secondary-fixed-variant: '#0b513d'\n  tertiary-fixed: '#68fcbf'\n  tertiary-fixed-dim: '#45dfa4'\n  on-tertiary-fixed: '#002114'\n  on-tertiary-fixed-variant: '#005137'\n  background: '#0b1326'\n  on-background: '#dae2fd'\n  surface-variant: '#2d3449'\ntypography:\n  headline-lg:\n    fontFamily: Plus Jakarta Sans\n    fontSize: 48px\n    fontWeight: '700'\n    lineHeight: 56px\n    letterSpacing: -0.02em\n  headline-lg-mobile:\n    fontFamily: Plus Jakarta Sans\n    fontSize: 32px\n    fontWeight: '700'\n    lineHeight: 40px\n    letterSpacing: -0.01em\n  headline-md:\n    fontFamily: Plus Jakarta Sans\n    fontSize: 32px\n    fontWeight: '600'\n    lineHeight: 40px\n    letterSpacing: -0.01em\n  headline-sm:\n    fontFamily: Plus Jakarta Sans\n    fontSize: 24px\n    fontWeight: '600'\n    lineHeight: 32px\n  body-lg:\n    fontFamily: Plus Jakarta Sans\n    fontSize: 18px\n    fontWeight: '400'\n    lineHeight: 28px\n  body-md:\n    fontFamily: Plus Jakarta Sans\n    fontSize: 16px\n    fontWeight: '400'\n    lineHeight: 24px\n  body-sm:\n    fontFamily: Plus Jakarta Sans\n    fontSize: 14px\n    fontWeight: '400'\n    lineHeight: 20px\n  label-md:\n    fontFamily: Plus Jakarta Sans\n    fontSize: 14px\n    fontWeight: '600'\n    lineHeight: 20px\n    letterSpacing: 0.05em\n  label-sm:\n    fontFamily: Plus Jakarta Sans\n    fontSize: 12px\n    fontWeight: '600'\n    lineHeight: 16px\n    letterSpacing: 0.05em\nrounded:\n  sm: 0.25rem\n  DEFAULT: 0.5rem\n  md: 0.75rem\n  lg: 1rem\n  xl: 1.5rem\n  full: 9999px\nspacing:\n  base: 8px\n  xs: 4px\n  sm: 12px\n  md: 24px\n  lg: 48px\n  xl: 80px\n  gutter: 24px\n  margin-mobile: 16px\n  margin-desktop: 64px\n---\n\n## Brand & Style\n\nThe design system is engineered for a high-performance, premium tech environment. It targets a sophisticated audience that values precision, speed, and deep focus. The aesthetic is a hybrid of **Modern Corporate** and **Minimalism**, utilizing a dark, immersive atmosphere to reduce visual fatigue while highlighting critical data points.\n\nThe emotional response should be one of \"quiet authority\"\u2014reliable, high-end, and technologically advanced. This is achieved through generous negative space, a restricted but vibrant color palette, and a focus on razor-sharp typography.\n\n## Colors\n\nThe palette is centered on a **Dark Emerald** theme. The primary emerald (`#10B981`) serves as the \"source of light\" within the interface, used for primary actions and success states. The secondary emerald (`#064E3B`) provides depth for container backgrounds and hover states, creating a tonal layering effect.\n\nThe background uses a deep navy-tinted neutral (`#0F172A`) to ensure the emerald tones pop without creating the harsh contrast found in pure black themes. Accent colors should be used sparingly to maintain the monochromatic, premium feel.\n\n## Typography\n\nThis design system exclusively uses **Plus Jakarta Sans** to deliver a modern, geometric, and premium tech aesthetic. The typeface's wide apertures and clean lines ensure high legibility in dark mode.\n\nHeadlines use bold weights and tighter letter-spacing to command attention, while body text remains balanced for long-form reading. Labels are treated with uppercase transformations and slight tracking increases to differentiate them from interactive text elements.\n\n## Layout & Spacing\n\nThe layout follows a **Fluid Grid** model with a standard 12-column structure for desktop. A strict 8px spacing scale ensures mathematical harmony across all components.\n\n- **Desktop (1440px+):** 12 columns, 64px side margins, 24px gutters.\n- **Tablet (768px - 1439px):** 8 columns, 32px side margins, 20px gutters.\n- **Mobile (Up to 767px):** 4 columns, 16px side margins, 16px gutters.\n\nLarge vertical sections should be separated by `xl` spacing to maintain the minimal, airy feel of the brand.\n\n## Elevation & Depth\n\nHierarchy is established through **Tonal Layers** rather than heavy shadows. In this dark emerald theme, surfaces \"rise\" by becoming lighter and more saturated.\n\n- **Level 0 (Background):** Deepest neutral (`#0F172A`).\n- **Level 1 (Card/Section):** Slightly lighter emerald-tinted surface.\n- **Level 2 (Dropdowns/Modals):** High-contrast emerald-tinted surface with a subtle 1px border (`rgba(255, 255, 255, 0.05)`).\n\nShadows, when used, are ambient and diffused, using a dark emerald tint (`#064E3B`) at 40% opacity to simulate glow rather than a physical shadow.\n\n## Shapes\n\nThe design system utilizes **Rounded** corners to soften the technical nature of the dark theme. This creates a more approachable, high-end \"consumer tech\" feel.\n\n- **Standard Buttons & Inputs:** 0.5rem (8px).\n- **Cards & Large Containers:** 1rem (16px).\n- **Data Tags/Chips:** 1.5rem (24px) for a distinct pill-shaped appearance.\n\nConsistent radius application is critical to maintaining the professional integrity of the design.\n\n## Components\n\n### Buttons\nPrimary buttons use the solid Primary Emerald (`#10B981`) with dark navy text. Secondary buttons use an emerald outline with transparent backgrounds. Interactions should feature a subtle glow transition on hover.\n\n### Input Fields\nFields are dark-filled with a subtle bottom border. On focus, the border transitions to Primary Emerald with a soft \"glow\" outer stroke. Labels sit above the field in `label-sm` style.\n\n### Cards\nCards use a subtle gradient from the secondary emerald to the neutral background. They should not have heavy borders; instead, use Level 1 elevation layering to define boundaries.\n\n### Chips & Badges\nSmall, pill-shaped elements used for status or filtering. Status badges should use the emerald palette: \"Active\" (Primary Emerald), \"Pending\" (Secondary Emerald tint), and \"Inactive\" (Neutral Grey).\n\n### Data Tables\nTables should avoid vertical lines. Use subtle horizontal dividers and hover-state highlights in a very faint emerald tint to assist row scanning.",
+    "colorVariant": "FIDELITY",
+    "overridePrimaryColor": "#10b981",
+    "overrideSecondaryColor": "#064e3b",
+    "overrideTertiaryColor": "#34d399",
+    "overrideNeutralColor": "#0f172a",
+    "spacingScale": 2,
+    "typography": {
+      "headline-lg-mobile": {
+        "fontFamily": "Plus Jakarta Sans",
+        "fontSize": "32px",
+        "fontWeight": "700",
+        "lineHeight": "40px",
+        "letterSpacing": "-0.01em"
+      },
+      "body-lg": {
+        "fontFamily": "Plus Jakarta Sans",
+        "fontSize": "18px",
+        "fontWeight": "400",
+        "lineHeight": "28px"
+      },
+      "label-md": {
+        "fontFamily": "Plus Jakarta Sans",
+        "fontSize": "14px",
+        "fontWeight": "600",
+        "lineHeight": "20px",
+        "letterSpacing": "0.05em"
+      },
+      "label-sm": {
+        "fontFamily": "Plus Jakarta Sans",
+        "fontSize": "12px",
+        "fontWeight": "600",
+        "lineHeight": "16px",
+        "letterSpacing": "0.05em"
+      },
+      "headline-sm": {
+        "fontFamily": "Plus Jakarta Sans",
+        "fontSize": "24px",
+        "fontWeight": "600",
+        "lineHeight": "32px"
+      },
+      "body-sm": {
+        "fontFamily": "Plus Jakarta Sans",
+        "fontSize": "14px",
+        "fontWeight": "400",
+        "lineHeight": "20px"
+      },
+      "headline-lg": {
+        "fontFamily": "Plus Jakarta Sans",
+        "fontSize": "48px",
+        "fontWeight": "700",
+        "lineHeight": "56px",
+        "letterSpacing": "-0.02em"
+      },
+      "body-md": {
+        "fontFamily": "Plus Jakarta Sans",
+        "fontSize": "16px",
+        "fontWeight": "400",
+        "lineHeight": "24px"
+      },
+      "headline-md": {
+        "fontFamily": "Plus Jakarta Sans",
+        "fontSize": "32px",
+        "fontWeight": "600",
+        "lineHeight": "40px",
+        "letterSpacing": "-0.01em"
+      }
+    },
+    "spacing": {
+      "sm": "12px",
+      "gutter": "24px",
+      "base": "8px",
+      "xs": "4px",
+      "xl": "80px",
+      "md": "24px",
+      "margin-mobile": "16px",
+      "margin-desktop": "64px",
+      "lg": "48px"
+    },
+    "headlineFontFamily": "Plus Jakarta Sans",
+    "bodyFontFamily": "Plus Jakarta Sans",
+    "labelFontFamily": "Plus Jakarta Sans"
+  }
+}

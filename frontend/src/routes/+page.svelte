@@ -1,16 +1,32 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+	import Tabs from '$lib/components/ui/tabs.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
+	import Field from '$lib/components/ui/field.svelte';
+	import Select from '$lib/components/ui/select.svelte';
 	import Console from '$lib/console/Console.svelte';
+	import MetricsGrid from '$lib/console/MetricsGrid.svelte';
 	import { RunController } from '$lib/console/run.svelte.js';
-	import NetworkBlock from '$lib/public/NetworkBlock.svelte';
+	import { metricsFor } from '$lib/console/metrics.js';
+	import StatusPanel from '$lib/public/StatusPanel.svelte';
 	import SpeedtestBlock from '$lib/public/SpeedtestBlock.svelte';
 	import { fetchLocations, fetchVisitorIp } from '$lib/public/api.js';
-	import { runnableMethods, targetPlaceholder } from '$lib/public/methods.js';
+	import { runnableMethods, targetPlaceholder, targetPreflightError } from '$lib/public/methods.js';
 	import { measureLatency } from '$lib/public/latency.js';
+	import { lineCode, lineStyle } from '$lib/lines.js';
+	import {
+		page,
+		pageHead,
+		pageTitle,
+		pageSubtitle,
+		band,
+		panel as controlPanel,
+		runButton,
+		panelNote,
+		pageNote,
+		resultsSection
+	} from '$lib/public/styles.js';
 	import type { LocationDetail } from '$lib/admin/types.js';
 
 	const controller = new RunController();
@@ -19,51 +35,49 @@
 	let locations = $state<LocationDetail[]>([]);
 	let selectedId = $state('');
 	let method = $state('');
+	let runMethod = $state('');
+	let runLocation = $state<LocationDetail | null>(null);
+	let outputSection = $state<HTMLElement>();
 	let target = $state('');
 	let requiredTargetError = $state('');
 	let detectedIp = $state<string | null>(null);
 	let latencyMs = $state<number | null>(null);
 
-	function isClearlyNonPublicIpv4(value: string): boolean {
-		const parts = value.split('.');
-		if (parts.length !== 4 || parts.some((part) => !/^(0|[1-9]\d{0,2})$/.test(part))) return false;
-
-		const octets = parts.map(Number);
-		if (octets.some((octet) => octet > 255)) return false;
-
-		const [first, second] = octets;
-		return (
-			first === 10 ||
-			first === 127 ||
-			(first === 169 && second === 254) ||
-			(first === 172 && second >= 16 && second <= 31) ||
-			(first === 192 && second === 168)
-		);
-	}
-
 	const selected = $derived(locations.find((location) => location.id === selectedId));
+	const locationTabs = $derived(
+		locations.map((location) => ({
+			id: location.id,
+			label: location.name,
+			meta: location.asn ? `AS${location.asn}` : undefined,
+			code: lineCode(location.name),
+			line: lineStyle(location.id)
+		}))
+	);
 	const methodOptions = $derived(selected ? runnableMethods(selected) : []);
 	const hasLocations = $derived(locations.length > 0);
-	const controlsDisabled = $derived(controller.active || !hasLocations);
-	const targetPreflightError = $derived(
-		method !== 'bgp' && method !== 'bgp6' && isClearlyNonPublicIpv4(target.trim())
-			? 'Enter a publicly routable IPv4 address or hostname.'
-			: ''
-	);
-	const targetError = $derived(targetPreflightError || requiredTargetError);
-	const canRun = $derived(hasLocations && methodOptions.length > 0 && !targetPreflightError);
+	const preflightError = $derived(targetPreflightError(method, target));
+	const targetError = $derived(preflightError || requiredTargetError);
+	const canRun = $derived(hasLocations && methodOptions.length > 0 && preflightError === '');
 
-	// Keep the method selection valid as the chosen location (and its offered set)
-	// changes — default to its first runnable method when the current one is gone.
+	// Metric cards derive from the finished run's output only (Completed).
+	const metrics = $derived(
+		controller.status === 'done'
+			? metricsFor(
+					runMethod,
+					controller.lines.filter((line) => line.kind === 'out').map((line) => line.text)
+				)
+			: []
+	);
+
+	// Keep the method selection valid as the chosen location (and its offered
+	// set) changes — default to its first runnable method when the current one
+	// is gone.
 	$effect(() => {
 		const values = methodOptions.map((option) => option.value);
 		if (values.length > 0 && !values.includes(method)) {
 			method = values[0];
 		}
 	});
-
-	const fieldClass =
-		'flex h-11 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50';
 
 	onMount(async () => {
 		const [catalogue, ip] = await Promise.all([fetchLocations(), fetchVisitorIp()]);
@@ -85,11 +99,16 @@
 			requiredTargetError = 'Enter a target IP address or hostname.';
 			return;
 		}
-		if (targetPreflightError) {
-			return;
+		if (preflightError || !selected) return;
+		runMethod = method;
+		runLocation = selected;
+		controller.start(selected.id, selected.name, method, trimmed);
+		// On short screens the output starts below the fold: bring it up.
+		const top = outputSection?.getBoundingClientRect().top ?? 0;
+		if (top > window.innerHeight - 120) {
+			const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+			outputSection?.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
 		}
-		const label = methodOptions.find((option) => option.value === method)?.label ?? method;
-		controller.start(selectedId, method, label, trimmed);
 	}
 
 	function onsubmit(event: SubmitEvent) {
@@ -99,98 +118,71 @@
 	}
 </script>
 
-<section class="space-y-6">
-	<div class="space-y-1">
-		<h1 class="text-2xl font-semibold tracking-tight">Network diagnostics</h1>
-		<p class="text-muted-foreground">
-			Run ping, traceroute, MTR, or a read-only BGP route lookup from a location and watch the
-			output stream in live.
-		</p>
-	</div>
+<div class={page}>
+	<header class={pageHead}>
+		<h1 class={pageTitle}>Network diagnostics</h1>
+		<p class={pageSubtitle}>Run connectivity and performance tests from any available location.</p>
+	</header>
 
-	<form class="space-y-4" {onsubmit}>
-		<div class="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto]">
-			<div class="space-y-2">
-				<Label for="location">Location</Label>
-				<select id="location" class={fieldClass} bind:value={selectedId} disabled={controlsDisabled}>
-					{#each locations as location (location.id)}
-						<option value={location.id}>{location.name}</option>
-					{/each}
-				</select>
-			</div>
+	{#if phase === 'error'}
+		<p class={pageNote} role="alert">Couldn't load locations. Refresh the page to try again.</p>
+	{:else if phase === 'loading'}
+		<p class={pageNote}>Loading locations…</p>
+	{:else if !hasLocations}
+		<p class={pageNote}>No locations online yet.</p>
+	{:else}
+		<Tabs tabs={locationTabs} bind:active={selectedId} label="Location" variant="routes">
+			{#snippet panel(tab)}
+				<div class={band} data-line style={tab.line}>
+					<form class={controlPanel} onsubmit={onsubmit}>
+						<Field label="Method" for="method">
+							<Select
+								id="method"
+								items={methodOptions}
+								bind:value={method}
+								placeholder="Select method"
+								disabled={controller.active || methodOptions.length === 0}
+							/>
+						</Field>
+						<Field label="Target" for="target" error={targetError}>
+							<Input
+								id="target"
+								bind:value={target}
+								mono
+								placeholder={targetPlaceholder(method)}
+								disabled={controller.active}
+								invalid={targetError !== ''}
+								aria-describedby={targetError ? 'target-error' : undefined}
+							/>
+						</Field>
+						<Button type="submit" class={runButton} disabled={!controller.active && !canRun}>
+							{controller.active ? 'Cancel' : 'Run Diagnostic'}
+						</Button>
+						{#if methodOptions.length === 0}
+							<p class={panelNote}>This location has no runnable methods enabled yet.</p>
+						{/if}
+					</form>
+					{#if selected}
+						<StatusPanel location={selected} {detectedIp} {latencyMs} />
+					{/if}
+				</div>
+			{/snippet}
+		</Tabs>
+	{/if}
 
-			<div class="space-y-2">
-				<Label for="method">Method</Label>
-				<select
-					id="method"
-					class={fieldClass}
-					bind:value={method}
-					disabled={controlsDisabled || methodOptions.length === 0}
-				>
-					{#each methodOptions as option (option.value)}
-						<option value={option.value}>{option.label}</option>
-					{/each}
-				</select>
-			</div>
-
-			<div class="space-y-2">
-				<Label for="target">Target</Label>
-				<Input
-					id="target"
-					placeholder={targetPlaceholder(method)}
-					autocomplete="off"
-					spellcheck={false}
-					bind:value={target}
-					disabled={controlsDisabled}
-					aria-invalid={targetError ? 'true' : undefined}
-					aria-describedby={targetError ? 'target-error' : undefined}
-				/>
-			</div>
-
-			<div class="space-y-2">
-				<span class="hidden text-sm sm:block sm:invisible" aria-hidden="true">Run</span>
-				{#if controller.active}
-					<div class="flex items-center gap-3">
-						<span class="flex items-center gap-2 text-sm text-muted-foreground" role="status">
-							<LoaderCircle class="size-4 animate-spin" aria-hidden="true" />
-							{controller.status === 'connecting' ? 'Connecting' : 'Running'}
-						</span>
-						<Button type="submit" variant="destructive" class="flex-1 sm:flex-none">Cancel</Button>
-					</div>
-				{:else}
-					<Button type="submit" class="w-full sm:w-auto" disabled={!canRun}>
-						Run
-					</Button>
-				{/if}
-			</div>
-		</div>
-
-		{#if targetError}
-			<p id="target-error" class="text-sm text-destructive" role="alert">{targetError}</p>
+	<section class={resultsSection} aria-label="Output" bind:this={outputSection}>
+		<Console
+			{controller}
+			method={runMethod || method}
+			idleTitle={selected ? `${selected.name} ~ ${method}` : ''}
+			location={runLocation ?? selected ?? null}
+		/>
+		{#if metrics.length > 0}
+			<MetricsGrid {metrics} />
 		{/if}
-
-		{#if phase === 'loading'}
-			<p class="flex items-center gap-2 text-sm text-muted-foreground">
-				<LoaderCircle class="size-4 animate-spin" aria-hidden="true" />
-				Loading locations…
-			</p>
-		{:else if phase === 'error'}
-			<p class="text-sm text-destructive" role="alert">
-				Couldn't load locations. Refresh the page to try again.
-			</p>
-		{:else if !hasLocations}
-			<p class="text-sm text-muted-foreground">No locations online yet.</p>
-		{:else if methodOptions.length === 0}
-			<p class="text-sm text-muted-foreground">
-				This location has no runnable methods enabled yet.
-			</p>
-		{/if}
-	</form>
-
-	<Console {controller} {method} />
+	</section>
 
 	{#if selected}
-		<NetworkBlock location={selected} {detectedIp} {latencyMs} />
 		<SpeedtestBlock location={selected} />
 	{/if}
-</section>
+</div>

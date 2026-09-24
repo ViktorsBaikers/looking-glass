@@ -1,63 +1,112 @@
-<script lang="ts" generics="T extends { id: string }">
-	import type { JsonResult } from '$lib/api.js';
-	import { Button } from '$lib/components/ui/button/index.js';
-	import { Input } from '$lib/components/ui/input/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
-	import Dialog from '$lib/components/ui/dialog.svelte';
-	import Pencil from '@lucide/svelte/icons/pencil';
-	import Trash2 from '@lucide/svelte/icons/trash-2';
-	import Plus from '@lucide/svelte/icons/plus';
+<script lang="ts" module>
+	export interface CrudColumn<Item> {
+		label: string;
+		value: (item: Item) => string;
+		mono?: boolean;
+		muted?: boolean;
+	}
 
-	interface FieldDef {
+	export interface CrudField {
 		key: string;
 		label: string;
 		type?: 'text' | 'number' | 'select';
 		options?: { value: string; label: string }[];
 		placeholder?: string;
 		optional?: boolean;
+		mono?: boolean;
 	}
+</script>
+
+<script lang="ts" generics="T extends { id: string }">
+	import type { JsonResult } from '$lib/api.js';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import Dialog from '$lib/components/ui/dialog.svelte';
+	import ConfirmDialog from '$lib/components/ui/confirm-dialog.svelte';
+	import Field from '$lib/components/ui/field.svelte';
+	import Select from '$lib/components/ui/select.svelte';
+	import { toast } from '$lib/toast.svelte.js';
+	import { cx } from 'styled-system/css';
+	import {
+		panelHead,
+		panelTitle,
+		panelDesc,
+		tableScroller,
+		table,
+		th,
+		thActions,
+		td,
+		tdMono,
+		tdMuted,
+		trHover,
+		tdActions,
+		rowAction,
+		rowActionDanger,
+		emptyWell,
+		formStack,
+		errorText
+	} from './editor-styles.js';
+	import Edit from '~icons/material-symbols/edit';
+	import Delete from '~icons/material-symbols/delete';
+	import Add from '~icons/material-symbols/add';
 
 	let {
 		title,
+		description,
 		addLabel,
+		itemLabel,
 		items,
+		columns,
 		fields,
-		summarize,
+		rowName,
 		create,
 		update,
 		remove,
-		onchanged
+		onchanged,
+		savedMessage,
+		deletedMessage
 	}: {
 		title: string;
+		description: string;
 		addLabel: string;
+		/** Short noun for dialog titles and row action labels ("IP", "endpoint"). */
+		itemLabel: string;
 		items: T[];
-		fields: FieldDef[];
-		summarize: (item: T) => string;
+		columns: CrudColumn<T>[];
+		fields: CrudField[];
+		rowName: (item: T) => string;
 		create: (draft: Record<string, unknown>) => Promise<JsonResult<unknown>>;
 		update: (id: string, draft: Record<string, unknown>) => Promise<JsonResult<unknown>>;
 		remove: (id: string) => Promise<JsonResult<unknown>>;
 		onchanged: () => void;
+		savedMessage: string;
+		deletedMessage: string;
 	} = $props();
 
 	let editing = $state<T | null>(null);
 	let showForm = $state(false);
-	let draft = $state<Record<string, string>>({});
+	let draft = $state<Record<string, string>>(blankDraft());
 	let submitting = $state(false);
 	let formError = $state('');
 	let pendingDelete = $state<T | null>(null);
 	let showDelete = $state(false);
 	let deleting = $state(false);
-	let deleteError = $state('');
 
-	function askDelete(item: T) {
-		pendingDelete = item;
-		deleteError = '';
-		showDelete = true;
+	const selectItems = $derived(
+		Object.fromEntries(fields.filter((field) => field.options).map((field) => [field.key, field.options ?? []]))
+	);
+	function blankDraft(): Record<string, string> {
+		return Object.fromEntries(
+			fields.map((field) => [
+				field.key,
+				field.type === 'select' ? (field.options?.[0]?.value ?? '') : ''
+			])
+		);
 	}
 
 	function startAdd() {
 		editing = null;
-		draft = Object.fromEntries(fields.map((f) => [f.key, defaultFor(f)]));
+		draft = blankDraft();
 		formError = '';
 		showForm = true;
 	}
@@ -65,27 +114,18 @@
 	function startEdit(item: T) {
 		editing = item;
 		const record = item as Record<string, unknown>;
-		draft = Object.fromEntries(fields.map((f) => [f.key, String(record[f.key] ?? '')]));
+		draft = Object.fromEntries(fields.map((field) => [field.key, String(record[field.key] ?? '')]));
 		formError = '';
 		showForm = true;
-	}
-
-	function defaultFor(field: FieldDef): string {
-		if (field.type === 'select' && field.options?.length) return field.options[0].value;
-		return '';
 	}
 
 	function buildBody(): Record<string, unknown> {
 		const body: Record<string, unknown> = {};
 		for (const field of fields) {
 			const raw = draft[field.key] ?? '';
-			if (field.type === 'number') {
-				body[field.key] = Number(raw);
-			} else if (field.optional) {
-				body[field.key] = raw.trim() === '' ? null : raw;
-			} else {
-				body[field.key] = raw;
-			}
+			if (field.type === 'number') body[field.key] = Number(raw);
+			else if (field.optional) body[field.key] = raw.trim() === '' ? null : raw;
+			else body[field.key] = raw;
 		}
 		return body;
 	}
@@ -100,120 +140,131 @@
 		submitting = false;
 		if (result.ok) {
 			showForm = false;
+			toast.success(savedMessage);
 			onchanged();
 		} else {
 			formError = result.message;
+			toast.error(result.message);
 		}
+	}
+
+	function askDelete(item: T) {
+		pendingDelete = item;
+		showDelete = true;
 	}
 
 	async function confirmDelete() {
 		if (!pendingDelete || deleting) return;
 		deleting = true;
-		deleteError = '';
 		const result = await remove(pendingDelete.id);
 		deleting = false;
 		if (result.ok) {
 			showDelete = false;
 			pendingDelete = null;
+			toast.success(deletedMessage);
 			onchanged();
 		} else {
-			deleteError = result.message;
+			toast.error(result.message);
 		}
 	}
 </script>
 
-<section class="space-y-4">
-	<div class="flex items-center justify-between">
-		<h3 class="text-sm font-semibold text-muted-foreground">{title}</h3>
-		<Button size="sm" variant="outline" onclick={startAdd}>
-			<Plus class="size-4" aria-hidden="true" />
+<section>
+	<div class={panelHead}>
+		<div>
+			<h3 class={panelTitle}>{title}</h3>
+			<p class={panelDesc}>{description}</p>
+		</div>
+		<Button variant="secondary" size="sm" onclick={startAdd}>
+			<Add aria-hidden="true" />
 			{addLabel}
 		</Button>
 	</div>
 
 	{#if items.length === 0}
-		<p class="rounded-md border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-			Nothing here yet.
-		</p>
+		<p class={emptyWell}>Nothing here yet.</p>
 	{:else}
-		<ul class="divide-y divide-border rounded-md border border-border">
-			{#each items as item (item.id)}
-				<li class="flex items-center justify-between gap-3 px-4 py-3">
-					<span class="min-w-0 break-words font-mono text-sm">{summarize(item)}</span>
-					<div class="flex shrink-0 gap-1">
-						<Button size="icon" variant="ghost" onclick={() => startEdit(item)} aria-label="Edit {title}">
-							<Pencil class="size-4" aria-hidden="true" />
-						</Button>
-						<Button
-							size="icon"
-							variant="ghost"
-							onclick={() => askDelete(item)}
-							aria-label="Delete {title}"
-						>
-							<Trash2 class="size-4 text-destructive" aria-hidden="true" />
-						</Button>
-					</div>
-				</li>
-			{/each}
-		</ul>
+		<div class={tableScroller}>
+			<table class={table}>
+				<thead>
+					<tr>
+						{#each columns as column (column.label)}
+							<th class={th} scope="col">{column.label}</th>
+						{/each}
+						<th class={cx(th, thActions)} scope="col">Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each items as item (item.id)}
+						<tr class={trHover}>
+							{#each columns as column (column.label)}
+								<td class={cx(td, column.mono ? tdMono : '', column.muted ? tdMuted : '')}>
+									{column.value(item)}
+								</td>
+							{/each}
+							<td class={cx(td, tdActions)}>
+								<button
+									type="button"
+									class={rowAction}
+									aria-label={`Edit ${rowName(item)}`}
+									onclick={() => startEdit(item)}
+								>
+									<Edit aria-hidden="true" />
+								</button>
+								<button
+									type="button"
+									class={cx(rowAction, rowActionDanger)}
+									aria-label={`Delete ${rowName(item)}`}
+									onclick={() => askDelete(item)}
+								>
+									<Delete aria-hidden="true" />
+								</button>
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
 	{/if}
 </section>
 
-<Dialog bind:open={showForm} title={editing ? `Edit ${addLabel}` : addLabel}>
-	<form class="space-y-4" onsubmit={submit} novalidate>
+<Dialog bind:open={showForm} title={editing ? `Edit ${itemLabel}` : addLabel}>
+	<form class={formStack} onsubmit={submit} novalidate>
 		{#each fields as field (field.key)}
-			<div class="space-y-2">
-				<Label for="field-{field.key}">{field.label}</Label>
+			<Field label={field.label} for={`crud-${field.key}`}>
 				{#if field.type === 'select'}
-					<select
-						id="field-{field.key}"
+					<Select
+						id={`crud-${field.key}`}
+						items={selectItems[field.key]}
 						bind:value={draft[field.key]}
-						disabled={submitting}
-						class="h-11 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					>
-						{#each field.options ?? [] as option (option.value)}
-							<option value={option.value}>{option.label}</option>
-						{/each}
-					</select>
+						portaled={false}
+					/>
 				{:else}
 					<Input
-						id="field-{field.key}"
+						id={`crud-${field.key}`}
 						type={field.type === 'number' ? 'number' : 'text'}
+						mono={field.mono}
 						placeholder={field.placeholder}
 						bind:value={draft[field.key]}
-						disabled={submitting}
 					/>
 				{/if}
-			</div>
+			</Field>
 		{/each}
 
 		{#if formError}
-			<p class="text-sm text-destructive" role="alert">{formError}</p>
+			<p class={errorText} role="alert">{formError}</p>
 		{/if}
 
-		<div class="flex justify-end gap-2">
-			<Button type="button" variant="ghost" onclick={() => (showForm = false)} disabled={submitting}>
-				Cancel
-			</Button>
-			<Button type="submit" disabled={submitting}>
-				{submitting ? 'Saving…' : 'Save'}
-			</Button>
-		</div>
+		<Button type="submit" loading={submitting}>Save</Button>
 	</form>
 </Dialog>
 
-<Dialog bind:open={showDelete} title="Delete this entry?" description="This cannot be undone.">
-	<div class="space-y-4">
-		{#if deleteError}
-			<p class="text-sm text-destructive" role="alert">{deleteError}</p>
-		{/if}
-		<div class="flex justify-end gap-2">
-			<Button type="button" variant="ghost" onclick={() => (showDelete = false)} disabled={deleting}>
-				Cancel
-			</Button>
-			<Button type="button" variant="destructive" onclick={confirmDelete} disabled={deleting}>
-				{deleting ? 'Deleting…' : 'Delete'}
-			</Button>
-		</div>
-	</div>
-</Dialog>
+<ConfirmDialog
+	bind:open={showDelete}
+	title={`Delete ${itemLabel}?`}
+	message={pendingDelete ? `“${rowName(pendingDelete)}” will be removed. This cannot be undone.` : ''}
+	confirmLabel="Delete"
+	danger
+	busy={deleting}
+	onconfirm={confirmDelete}
+/>
