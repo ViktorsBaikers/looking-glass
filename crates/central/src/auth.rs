@@ -24,6 +24,12 @@ use crate::AppState;
 
 pub(crate) const SESSION_ADMIN_KEY: &str = "admin_id";
 const SESSION_AUTH_AT_KEY: &str = "auth_at";
+/// The credential epoch the session was minted under — stamped at login and
+/// compared against the administrator row on every request, so a session
+/// record resurrected after a password rotation is refused even though the
+/// row is still active. Sessions predating the key read as generation 0,
+/// matching rows migrated with the serde default.
+pub(crate) const SESSION_GENERATION_KEY: &str = "session_generation";
 const ABSOLUTE_SESSION_CAP_SECS: u64 = 12 * 60 * 60;
 
 /// Verified against on a username miss so a failed login costs the same work
@@ -130,15 +136,29 @@ impl FromRequestParts<AppState> for AdminSession {
             return Err(ApiError::Unauthorized);
         }
 
-        // The administrator must still exist and be active. Removal purges the
-        // peer's session records, but a concurrent re-save could resurrect one —
-        // this row check is what makes revocation fail closed on the next request.
-        let active = state
+        // The administrator must still exist, still be active, and still carry
+        // the credential generation this session was minted under. Removal
+        // purges the peer's session records and a password change purges the
+        // caller's other sessions and bumps the generation — but the session
+        // middleware re-saves every in-flight request's record, so a stale
+        // record can be resurrected after either purge. This check is what
+        // makes revocation fail closed on the next request regardless.
+        let generation: u64 = session
+            .get(SESSION_GENERATION_KEY)
+            .await
+            .map_err(|_| ApiError::Internal)?
+            .unwrap_or(0);
+        let current = state
             .store
             .get_administrator(&admin_id)
             .map_err(|_| ApiError::Internal)?
-            .is_some_and(|admin| admin.status == AdministratorStatus::Active);
-        if !active {
+            .is_some_and(|admin| {
+                admin.status == AdministratorStatus::Active
+                    && admin.session_generation == generation
+            });
+        if !current {
+            // Best-effort hygiene: the refusal below is the gate, and it fires
+            // again on every request even if this delete fails.
             session.delete().await.ok();
             return Err(ApiError::Unauthorized);
         }
@@ -228,6 +248,10 @@ pub async fn login(
         .map_err(|_| ApiError::Internal)?;
     session
         .insert(SESSION_AUTH_AT_KEY, unix_now())
+        .await
+        .map_err(|_| ApiError::Internal)?;
+    session
+        .insert(SESSION_GENERATION_KEY, admin.session_generation)
         .await
         .map_err(|_| ApiError::Internal)?;
     state.login_limiter.clear(client);

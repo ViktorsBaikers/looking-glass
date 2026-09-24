@@ -23,7 +23,7 @@ use crate::auth::{
 use crate::installer::username_allowed;
 use crate::observability::{correlation_id, log_validation_rejected};
 use crate::session::RedbSessionStore;
-use crate::store::{unix_now, Administrator, AdministratorStatus};
+use crate::store::{unix_now, Administrator, AdministratorStatus, RemoveAdministratorError};
 use crate::AppState;
 
 /// Activation links live for 24 hours (spec #1) — long enough to hand to a peer,
@@ -173,6 +173,7 @@ async fn create_administrator(
         created_at: now,
         activation_token_hash: Some(token_hash),
         activation_expires_at: Some(expires_at),
+        session_generation: 0,
     };
     // The store enforces case-insensitive username uniqueness atomically; a
     // clash surfaces as StoreError::UsernameTaken → 409 username_taken.
@@ -243,17 +244,40 @@ async fn remove_administrator(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let correlation_id = correlation_id(&headers);
-    let target = state
-        .store
-        .get_administrator(&id)?
-        .ok_or(ApiError::NotFound)?;
-    removal_guard(
-        &correlation_id,
-        &admin.admin_id,
-        &target,
-        &state.store.list_administrators()?,
-    )?;
-    state.store.delete_administrator(&id)?;
+    // The guard rails (spec #1: never self, never the last active peer) run
+    // inside the same store write transaction as the delete, so two peers
+    // concurrently removing each other can never both leave zero active
+    // administrators behind.
+    if let Err(reason) = state.store.remove_administrator(&admin.admin_id, &id) {
+        return Err(match reason {
+            RemoveAdministratorError::NotFound => ApiError::NotFound,
+            RemoveAdministratorError::Backend(error) => error.into(),
+            RemoveAdministratorError::CannotRemoveSelf => {
+                log_validation_rejected(
+                    &correlation_id,
+                    "admin.administrators",
+                    "cannot_remove_self",
+                );
+                ApiError::Coded(
+                    StatusCode::CONFLICT,
+                    "cannot_remove_self",
+                    "You cannot remove your own account.",
+                )
+            }
+            RemoveAdministratorError::LastActive => {
+                log_validation_rejected(
+                    &correlation_id,
+                    "admin.administrators",
+                    "last_active_administrator",
+                );
+                ApiError::Coded(
+                    StatusCode::CONFLICT,
+                    "last_active_administrator",
+                    "The last active administrator cannot be removed.",
+                )
+            }
+        });
+    }
     // The removal only takes effect once the peer's session records are gone —
     // their next request is refused (ADR-0001: revoked access is truly revoked).
     RedbSessionStore::new(&state.store)
@@ -270,46 +294,6 @@ async fn remove_administrator(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The guard rails of spec #1: a peer can never remove themselves, and the last
-/// active administrator can never be removed — the site cannot be locked out.
-/// (Over HTTP the self check fires first for the sole-active-admin self-delete;
-/// the last-active check is the defensive backstop for any caller whose own row
-/// is gone or inactive but whose session record briefly survived.)
-fn removal_guard(
-    correlation_id: &str,
-    caller_id: &str,
-    target: &Administrator,
-    administrators: &[Administrator],
-) -> Result<(), ApiError> {
-    if target.id == caller_id {
-        log_validation_rejected(correlation_id, "admin.administrators", "cannot_remove_self");
-        return Err(ApiError::Coded(
-            StatusCode::CONFLICT,
-            "cannot_remove_self",
-            "You cannot remove your own account.",
-        ));
-    }
-    if target.status == AdministratorStatus::Active
-        && administrators
-            .iter()
-            .filter(|admin| admin.status == AdministratorStatus::Active)
-            .count()
-            <= 1
-    {
-        log_validation_rejected(
-            correlation_id,
-            "admin.administrators",
-            "last_active_administrator",
-        );
-        return Err(ApiError::Coded(
-            StatusCode::CONFLICT,
-            "last_active_administrator",
-            "The last active administrator cannot be removed.",
-        ));
-    }
-    Ok(())
-}
-
 #[derive(Deserialize, Validate)]
 struct ChangePasswordRequest {
     #[garde(length(min = 1, max = 512))]
@@ -323,23 +307,36 @@ async fn change_password(
     State(state): State<AppState>,
     admin: AdminSession,
     session: Session,
+    ctx: ClientContext,
     headers: HeaderMap,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, ApiError> {
     let correlation_id = correlation_id(&headers);
+    // A password change carries the current AND the new password, so it refuses
+    // cleartext transport exactly like every other credential-entry surface.
+    if !ctx.secure {
+        tracing::warn!(
+            event = "auth.password",
+            correlation_id = %correlation_id,
+            outcome = "rejected",
+            reason = "insecure_transport",
+            "password change rejected"
+        );
+        return Err(ApiError::CleartextRefused);
+    }
     if let Err(report) = body.validate() {
         log_validation_rejected(&correlation_id, "auth.password", "invalid_payload");
         return Err(ApiError::Validation(first_message(&report)));
     }
-    let mut row = state
+    let row = state
         .store
         .get_administrator(&admin.admin_id)?
         .ok_or(ApiError::Unauthorized)?;
-    let verified = row
+    let verified_hash = row
         .password_hash
         .as_deref()
-        .is_some_and(|hash| verify_password(&body.current_password, hash));
-    if !verified {
+        .filter(|hash| verify_password(&body.current_password, hash));
+    let Some(verified_hash) = verified_hash else {
         tracing::warn!(
             event = "auth.password",
             correlation_id = %correlation_id,
@@ -352,11 +349,28 @@ async fn change_password(
             "invalid_credentials",
             "The current password is incorrect.",
         ));
-    }
-    row.password_hash = Some(hash_password(&body.new_password)?);
-    state.store.put_administrator(&row)?;
-    // A leaked session must not survive a password change (spec #1): every other
-    // session of the caller is deleted; the current one stays signed in.
+    };
+    // The conditional store write re-checks existence, status, and the exact
+    // verified hash inside its transaction — a removal or second rotation
+    // racing the Argon2 work refuses instead of resurrecting the row, and the
+    // same transaction bumps the credential generation that revokes every
+    // session not stamped with the new value.
+    let Some(generation) = state.store.rotate_password(
+        &admin.admin_id,
+        verified_hash,
+        hash_password(&body.new_password)?,
+    )?
+    else {
+        return Err(ApiError::Unauthorized);
+    };
+    // The caller's current session moves to the new generation and stays
+    // signed in; every OTHER session is deleted — and a stale record an
+    // overlapping request re-saves afterwards is refused by the extractor's
+    // generation check (spec #1: a leaked session must not survive).
+    session
+        .insert(crate::auth::SESSION_GENERATION_KEY, generation)
+        .await
+        .map_err(|_| ApiError::Internal)?;
     RedbSessionStore::new(&state.store)
         .delete_for_admin(&row.id, Some(session.id().ok_or(ApiError::Internal)?))
         .await
@@ -459,80 +473,4 @@ async fn activate(
         "administrator activated"
     );
     Ok(StatusCode::NO_CONTENT)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn admin(id: &str, status: AdministratorStatus) -> Administrator {
-        Administrator {
-            id: id.to_string(),
-            username: id.to_string(),
-            password_hash: None,
-            status,
-            created_at: 0,
-            activation_token_hash: None,
-            activation_expires_at: None,
-        }
-    }
-
-    fn guard_code(result: Result<(), ApiError>) -> Option<&'static str> {
-        match result {
-            Ok(()) => None,
-            Err(ApiError::Coded(_, code, _)) => Some(code),
-            Err(_) => Some("unexpected"),
-        }
-    }
-
-    // The removal guard rails (spec #1) as pure semantics: self is always
-    // refused; the last active administrator is refused for any other caller;
-    // an active peer may be removed while another active peer remains; a
-    // pending peer (which holds no session) may always be removed.
-    #[test]
-    fn removal_guards_refuse_self_and_last_active() {
-        let alice = admin("alice", AdministratorStatus::Active);
-        let bob = admin("bob", AdministratorStatus::Active);
-
-        assert_eq!(
-            guard_code(removal_guard(
-                "cid",
-                "alice",
-                &alice,
-                &[alice.clone(), bob.clone()]
-            )),
-            Some("cannot_remove_self")
-        );
-        assert_eq!(
-            guard_code(removal_guard(
-                "cid",
-                "ghost",
-                &alice,
-                std::slice::from_ref(&alice)
-            )),
-            Some("last_active_administrator"),
-            "the last active administrator cannot be removed by anyone"
-        );
-        assert_eq!(
-            guard_code(removal_guard(
-                "cid",
-                "alice",
-                &bob.clone(),
-                &[alice.clone(), bob]
-            )),
-            None,
-            "an active peer may remove another active peer"
-        );
-        let pending = admin("cara", AdministratorStatus::Pending);
-        assert_eq!(
-            guard_code(removal_guard(
-                "cid",
-                "alice",
-                &pending.clone(),
-                &[alice, pending]
-            )),
-            None,
-            "a pending peer may always be removed"
-        );
-    }
 }

@@ -10,6 +10,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
@@ -20,6 +21,7 @@ use axum::{Json, Router};
 use futures_util::StreamExt;
 use serde_json::json;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeFile;
 
@@ -30,10 +32,16 @@ const DEFAULT_FILES_DIR: &str = "data/files";
 /// The browser speed-test upload cap (spec #1), identical to central's sink:
 /// 25 MB, refused with 413 beyond.
 const UPLOAD_CAP_BYTES: u64 = 25 * 1024 * 1024;
+/// The data port is public and unauthenticated, so uploads are admitted before
+/// their body is read and must finish within a deadline.
+// ponytail: one global cap for the node, add a per-client limiter if abuse shows up.
+const MAX_CONCURRENT_UPLOADS: usize = 4;
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 struct DataPlaneState {
     root: Arc<Path>,
+    uploads: Arc<Semaphore>,
 }
 
 pub fn routes(root: Arc<Path>) -> Router {
@@ -54,7 +62,10 @@ pub fn routes(root: Arc<Path>) -> Router {
                     header::ACCEPT_RANGES,
                 ]),
         )
-        .with_state(DataPlaneState { root })
+        .with_state(DataPlaneState {
+            root,
+            uploads: Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS)),
+        })
 }
 
 pub fn config_from_env() -> io::Result<Option<(SocketAddr, PathBuf)>> {
@@ -100,8 +111,32 @@ async fn serve_file(root: &Path, source_ref: &str, request: Request<Body>) -> Re
 /// upload and discards it — bytes never touch disk — capped at 25 MB (413
 /// beyond), reporting the received byte count. The mirror of central's local
 /// sink; the CORS layer above is what lets the console's browser reach it.
-async fn upload(request: Request<Body>) -> Response {
-    let mut stream = request.into_body().into_data_stream();
+async fn upload(State(state): State<DataPlaneState>, request: Request<Body>) -> Response {
+    let Ok(_permit) = state.uploads.try_acquire() else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "error": "rate_limited",
+                "message": "Too many uploads in progress. Try again shortly.",
+            })),
+        )
+            .into_response();
+    };
+    match tokio::time::timeout(UPLOAD_TIMEOUT, count_upload(request.into_body())).await {
+        Ok(response) => response,
+        Err(_) => (
+            StatusCode::REQUEST_TIMEOUT,
+            Json(json!({
+                "error": "upload_timeout",
+                "message": "The upload took too long.",
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn count_upload(body: Body) -> Response {
+    let mut stream = body.into_data_stream();
     let mut total: u64 = 0;
     while let Some(chunk) = stream.next().await {
         match chunk {
@@ -289,6 +324,7 @@ mod tests {
     #[tokio::test]
     async fn remote_upload_sink_counts_bytes_and_caps_at_25_mb() {
         let response = upload(
+            State(upload_state()),
             Request::builder()
                 .method("POST")
                 .body(Body::from(vec![7u8; 4096]))
@@ -299,6 +335,7 @@ mod tests {
         assert_eq!(body_string(response).await, r#"{"bytes":4096}"#);
 
         let oversized = upload(
+            State(upload_state()),
             Request::builder()
                 .method("POST")
                 .body(Body::from(vec![0u8; 25 * 1024 * 1024 + 1]))
@@ -306,6 +343,35 @@ mod tests {
         )
         .await;
         assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    fn upload_state() -> DataPlaneState {
+        DataPlaneState {
+            root: Arc::from(Path::new("/nonexistent")),
+            uploads: Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS)),
+        }
+    }
+
+    // The public upload sink admits a bounded number of uploads before reading
+    // any body: once every slot is taken, the next upload is refused with 429.
+    #[tokio::test]
+    async fn remote_upload_sink_refuses_uploads_beyond_the_concurrency_cap() {
+        let state = upload_state();
+        let _held = state
+            .uploads
+            .clone()
+            .try_acquire_many_owned(MAX_CONCURRENT_UPLOADS as u32)
+            .unwrap();
+
+        let refused = upload(
+            State(state),
+            Request::builder()
+                .method("POST")
+                .body(Body::from(vec![7u8; 16]))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     // Spec #1: the data-plane answers the console's cross-origin preflights for

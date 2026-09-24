@@ -35,7 +35,9 @@ pub use enroll::EnrollConfig;
 pub use ratelimit::{LoginLimiter, TransportConfig};
 pub use run_api::RunService;
 pub use session::{RedbSessionStore, COOKIE_NAME as SESSION_COOKIE_NAME};
-pub use store::{Administrator, Agent, EnrollmentToken, Store, StoreError};
+pub use store::{
+    Administrator, Agent, EnrollmentToken, RemoveAdministratorError, Store, StoreError,
+};
 // The authenticated relay hub this slice produces — the seam the remote-run path
 // (Slice 10) submits diagnostics through.
 pub use tunnel::{NotConnected, RelayEvent, SubmitError, TunnelHub};

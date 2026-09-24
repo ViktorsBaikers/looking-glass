@@ -12,7 +12,7 @@ use axum::extract::ConnectInfo;
 use axum::http::{Request, Response, StatusCode};
 use redb::{Database, TableDefinition};
 use serde_json::{json, Value};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use central::AppState;
 use common::{
@@ -794,4 +794,179 @@ async fn me_reports_the_signed_in_identity() {
     assert_eq!(admins.len(), 1);
     assert_eq!(admins[0]["id"], me["id"]);
     assert_eq!(admins[0]["status"], "active");
+}
+
+// ----- Revocation races ----------------------------------------------------------
+
+/// The tower-sessions `Id` inside a signed `lg.sid=` cookie value — the cookie
+/// crate's signed format is `{44-char base64 digest}{id}`, so the id is the tail.
+fn session_id(cookie: &str) -> tower_sessions::session::Id {
+    let value = cookie.trim_start_matches(&format!("{}=", central::SESSION_COOKIE_NAME));
+    value[44..].parse().expect("session id")
+}
+
+// SEC-003: a password change bumps the administrator's credential generation, so
+// a stale session record re-saved by an overlapping in-flight request (the
+// session middleware saves on every request) is refused by the extractor even
+// though the administrator row is still active — the revoked cookie stays dead.
+#[tokio::test]
+async fn a_session_resurrected_after_a_password_change_is_refused() {
+    use tower_sessions::SessionStore;
+
+    let state = test_state();
+    let cookie_a = setup_and_login(&state).await;
+    let cookie_b = login(&state, "alice", PASSWORD)
+        .await
+        .expect("second alice session");
+
+    // Capture the second session's record so it can be re-saved afterwards,
+    // exactly as an overlapping request's always-save would.
+    let sessions = central::RedbSessionStore::new(&state.store);
+    let stale = sessions
+        .load(&session_id(&cookie_b))
+        .await
+        .expect("session store")
+        .expect("the second session record exists");
+
+    let changed = send(
+        central::build(state.clone()),
+        authed(
+            "PUT",
+            "/api/admin/me/password",
+            &cookie_a,
+            &json!({ "current_password": PASSWORD, "new_password": PEER_PASSWORD }).to_string(),
+        ),
+    )
+    .await;
+    assert_status(&changed, StatusCode::NO_CONTENT);
+
+    // The purge deleted the other record; the overlapping save puts it back.
+    assert!(
+        sessions
+            .load(&stale.id)
+            .await
+            .expect("session store")
+            .is_none(),
+        "the password change purged the other session"
+    );
+    sessions.save(&stale).await.expect("resurrect the record");
+
+    let resurrected = send(
+        central::build(state.clone()),
+        authed("GET", "/api/admin/me", &cookie_b, ""),
+    )
+    .await;
+    assert_status(&resurrected, StatusCode::UNAUTHORIZED);
+
+    // The caller's own session was moved to the new generation and survives.
+    let me = send(
+        central::build(state),
+        authed("GET", "/api/admin/me", &cookie_a, ""),
+    )
+    .await;
+    assert_status(&me, StatusCode::OK);
+}
+
+// A password change carries the current AND the new password, so it refuses
+// cleartext transport exactly like login and activation (403 insecure_transport)
+// and changes nothing.
+#[tokio::test]
+async fn password_change_requires_secure_transport() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+
+    let cleartext = Request::builder()
+        .method("PUT")
+        .uri("/api/admin/me/password")
+        .header("content-type", "application/json")
+        .header("cookie", &cookie)
+        .extension(ConnectInfo(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7)),
+            40000,
+        )))
+        .body(Body::from(
+            json!({ "current_password": PASSWORD, "new_password": PEER_PASSWORD }).to_string(),
+        ))
+        .unwrap();
+    let refused = send(central::build(state.clone()), cleartext).await;
+    assert_status(&refused, StatusCode::FORBIDDEN);
+    assert_eq!(json_body(refused).await["error"], "insecure_transport");
+
+    // Nothing changed: the old password still signs in.
+    assert!(login(&state, "alice", PASSWORD).await.is_some());
+}
+
+// SEC-001: the removal guard runs inside the delete transaction. Two active
+// peers removing each other concurrently serialize in the store; the second
+// removal sees the first one's commit and is refused as the last active
+// administrator, even though its caller authorized against a stale view.
+#[tokio::test]
+async fn cross_removal_of_two_active_peers_keeps_one_active() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let link = create_pending(&state, &cookie, "bob").await;
+    let bob_id = link["administrator"]["id"].as_str().unwrap().to_string();
+    let activated = send(
+        central::build(state.clone()),
+        secure_request(
+            "POST",
+            &format!("/api/activate/{}", token_of(&link)),
+            &json!({ "password": PEER_PASSWORD }).to_string(),
+        ),
+    )
+    .await;
+    assert_status(&activated, StatusCode::NO_CONTENT);
+    let alice_id = state
+        .store
+        .list_administrators()
+        .unwrap()
+        .into_iter()
+        .find(|admin| admin.username == "alice")
+        .unwrap()
+        .id;
+
+    state
+        .store
+        .remove_administrator(&alice_id, &bob_id)
+        .unwrap();
+    assert!(matches!(
+        state.store.remove_administrator(&bob_id, &alice_id),
+        Err(central::RemoveAdministratorError::LastActive)
+    ));
+    assert!(login(&state, "alice", PASSWORD).await.is_some());
+}
+
+// SEC-002: the password rotation is conditional — a removed row is never
+// re-created, and a hash that no longer matches (a second rotation won the
+// race) changes nothing.
+#[tokio::test]
+async fn password_rotation_never_recreates_or_overwrites_a_changed_row() {
+    let state = test_state();
+    setup_and_login(&state).await;
+    let alice = state
+        .store
+        .list_administrators()
+        .unwrap()
+        .into_iter()
+        .find(|admin| admin.username == "alice")
+        .unwrap();
+    let hash = alice.password_hash.clone().unwrap();
+
+    assert_eq!(
+        state
+            .store
+            .rotate_password(&alice.id, "stale-hash", argon2_hash(PEER_PASSWORD))
+            .unwrap(),
+        None
+    );
+    assert!(login(&state, "alice", PASSWORD).await.is_some());
+
+    assert_eq!(
+        state
+            .store
+            .rotate_password("ghost", &hash, argon2_hash(PEER_PASSWORD))
+            .unwrap(),
+        None
+    );
+    assert!(state.store.get_administrator("ghost").unwrap().is_none());
 }
