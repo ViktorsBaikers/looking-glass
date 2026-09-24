@@ -15,6 +15,7 @@
 	import {
 		authPage,
 		authCard,
+		authTitle,
 		formStack,
 		formErrorText,
 		fullWidth
@@ -75,7 +76,7 @@
 <div class={authPage}>
 	<Card class={authCard}>
 		<CardHeader>
-			<CardTitle>Create the admin account</CardTitle>
+			<CardTitle class={authTitle}>Create the admin account</CardTitle>
 			<CardDescription>
 				This one-time step creates the single administrator for this Looking Glass.
 			</CardDescription>

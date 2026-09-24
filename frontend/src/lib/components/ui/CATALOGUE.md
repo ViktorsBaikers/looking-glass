@@ -8,11 +8,13 @@ from these primitives, the semantic tokens, and the layout patterns below. Styli
 Lucide are gone — do not import them.
 
 - Fonts are self-hosted and loaded globally in `routes/+layout.svelte`:
-  **Plus Jakarta Sans Variable** (UI, token `sans`) and **JetBrains Mono Variable**
-  (code, token `mono`).
+  **Overpass Variable** (UI, token `sans`) and **Overpass Mono Variable** (tool
+  output and data only, token `mono`).
 - Dark mode is a `.dark` class on `<html>`, set by the pre-paint script in `app.html`
-  and toggled by `$lib/theme.svelte.ts`. **Always use semantic colour tokens** (they
-  carry both light and dark values) — never hardcode a hex, or one theme breaks.
+  and toggled by `$lib/theme.svelte.ts`. Every semantic token is a `light-dark()`
+  value, so any subtree can flip scheme with a `dark` / `light` class (the settings
+  previews do). **Always use semantic colour tokens**, never a hex.
+- The visual world, "Backbone map", is recorded in `/DESIGN.md`.
 - `prefers-reduced-motion` is handled globally (animations/transitions collapse to
   ~0). Don't re-implement it per component.
 
@@ -30,7 +32,7 @@ import { button /* , card, dialog, … */ } from 'styled-system/recipes';
 - **Values must be static literals.** Panda extracts at build time by scanning source,
   so `css({ color: someRuntimeVar })` produces nothing. For a value that varies at
   runtime, either use a **recipe** (variants are pre-generated) or write **literal
-  branches**: `const c = tone === 'danger' ? css({ color: 'error' }) : css({ color: 'primary' })`.
+  branches**: `const c = tone === 'danger' ? css({ color: 'danger' }) : css({ color: 'ink' })`.
 - **One-off `css()` calls must live in a `.ts` module, not inline in `.svelte`.**
   Panda's extractor cannot read `css()` out of Svelte templates, so put one-off
   class strings in `src/lib/styles.ts` (already populated for the shells +
@@ -50,59 +52,48 @@ import { button /* , card, dialog, … */ } from 'styled-system/recipes';
 
 ### Semantic colour tokens
 
-`base` = light scheme, `_dark` = dark scheme; reference by the bare name
-(e.g. `background: 'surface-container-low'`).
+Reference by bare name (e.g. `background: 'panel'`).
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
-| `background` / `surface` | #f8f9ff | #0b1326 | page canvas / header |
-| `surface-container-lowest` | #ffffff | #060e20 | deepest inset, console bg |
-| `surface-container-low` | #eff4ff | #131b2e | cards, sidebar |
-| `surface-container` | #e8ecf8 | #171f33 | metric/section cards |
-| `surface-container-high` | #e2e7f2 | #222a3d | inputs, raised rows |
-| `surface-container-highest` | #dce1ec | #2d3449 | popovers, hover fill |
-| `surface-variant` | #e1e2ec | #2d3449 | neutral chips, switch track |
-| `surface-bright` | #f8f9ff | #31394d | subtle inner borders |
-| `surface-dim` | #cbdbf5 | #0b1326 | recessed wells |
-| `on-surface` / `on-surface-variant` | #191c20 / #44474e | #dae2fd / #bbcabf | primary / secondary text |
-| `outline` / `outline-variant` | #757780 / #c4c6d0 | #86948a / #3c4a42 | strong / hairline borders |
-| `primary` / `on-primary` | #10b981 / #fff | #4edea3 / #003824 | accent, active nav, focus |
-| `primary-container` / `on-primary-container` | #6ffbbe / #002114 | #10b981 / #00422b | primary button fill/text |
-| `primary-fixed` / `primary-fixed-dim` | #6ffbbe / #4edea3 | same | console success text, IP values |
-| `secondary-container` / `on-secondary-container` | #dce2f9 / #151b2c | #0b513d / #83c2a9 | active sidebar item |
-| `tertiary` | #81429f | #45dfa4 | speed-test upload bar |
-| `error` / `on-error` | #ba1a1a / #fff | #ffb4ab / #690005 | destructive, invalid |
-| `error-container` / `on-error-container` | #ffdad6 / #410002 | #93000a / #ffdad6 | danger hover fill |
-| `warning` | #d97706 | #fbbf24 | PENDING state (not in Stitch palette) |
-| `inverse-surface` / `inverse-on-surface` | #2e3036 / #eff4ff | #dae2fd / #283044 | theme-preview cards |
+| `paper` | #f3f3f0 | #111214 | page ground |
+| `panel` | #ffffff | #18191c | raised surfaces, cards, inputs |
+| `sunk` | #ebebe7 | #0b0c0d | insets: console, code blocks, hover fill |
+| `ink` / `ink-hover` | #16171a / #33353b | #ecece6 / #ffffff | text, primary button fill, focus ring |
+| `ink-muted` | #595c63 | #a2a5ab | secondary text |
+| `ink-faint` | #8b8e94 | #6c6f76 | placeholders, quiet icons (non-body text) |
+| `on-ink` | #ffffff | #111214 | text on ink fills |
+| `rule` / `rule-strong` | #dcdcd6 / #a6a8a3 | #2a2c30 / #4a4d53 | hairlines / control borders |
+| `ok` / `ok-soft` | #1d7a4a / #e3f1e8 | #52c98b / #15291e | Online, Active, success |
+| `warn` / `warn-soft` | #9a5200 / #f8ecd9 | #f5b453 / #2e2312 | Pending, lossy hop |
+| `danger` / `danger-soft` | #b3261e / #f9e3e1 | #ff8a80 / #331a19 | destructive, invalid, Offline |
+
+**Location lines.** Colour belongs to Location data only. An element that draws a
+Location carries `data-line` + `style={lineStyle(location.id)}` (`$lib/lines.ts`);
+inside it `var(--line)` / `var(--line-ink)` resolve per theme. Roundel text is
+`lineCode(location.name)`.
 
 ### Other tokens
 
-- Fonts: `sans`, `mono`. Radii: `sm`4 `md`8 (base) `lg`12 `xl`16 `full`.
-- Shadows: `glow` (status dot), `glow-md` (primary button), `popup` (menus/dialogs).
-- Animations: `spin`, `fade-in`, `content-in` — use `css({ animation: 'spin' })`.
-- Text styles (`css({ textStyle: '…' })`): `headline-lg` 48/56·700,
-  `headline-md` 32/40·600, `headline-sm` 24/32·600, `headline-mobile` 32/40·700,
-  `body-lg` 18/28, `body-md` 16/24 (body default), `body-sm` 14/20,
-  `label-md` 14/20·600·+0.05em, `label-sm` 12/16·600·+0.05em,
-  `mono-data` 14/22 JetBrains Mono.
-- Spacing: use raw px on the design's 4px grid — common steps 4·8·12·16·24·32·48·64·80.
+- Radii: `none` 0 (panels, cards, dialogs), `sm` 2 (controls), `md` 3, `full`.
+- Shadow: `popup` (menus/dialogs/toasts) only.
+- Animations: `spin`, `fade-in`, `content-in`, `station-in`, `here-pulse`.
+- Text styles: `display` 40/44·800, `display-sm` 28/32·800, `title` 20/26·700,
+  `body` 16/24, `body-sm` 14/20, `label` 13/16·600, `caption` 12/16·500,
+  `code` mono 13/20 tabular, `numeral` 28/32·700 tabular.
+- Spacing: 4px grid — 4·8·12·16·20·24·32·40·48.
 
-### Layout patterns (from the Stitch exports)
+### Layout patterns
 
-- **Page header**: `<h1>` in `headline-lg` (mobile `headline-mobile`) on `on-surface`
-  - a `body-lg` `on-surface-variant` subtitle; actions row on the right at `md`.
-- **Section card**: `background: 'surface-container-low'`, `borderWidth:'1px'`
-  `borderColor:'outline-variant'`, `borderRadius:'xl'`, `padding:'24px'`. Admin section
-  headings use `headline-sm` in `primary`. (This is exactly the `card` recipe / `<Card>`.)
-- **Control panel / metric card**: `background:'surface-container'`, same border, radius
-  `xl`, padding `24px`. Metrics grid: `grid` `grid-cols-2 md:grid-cols-4` gap `24px`.
-- **Data table**: wrap in a `borderRadius:'lg'` `border` `outline-variant` scroller;
-  header row `background:'surface-container'`, cells `label-sm` uppercase
-  `on-surface-variant`; body rows `borderBottom` `surface-bright`, hover
-  `background:'surface-container-high'`; IP/host values in `mono` `primary-fixed-dim`.
-- **Content width**: public diagnostics max `1200px`; admin content max `~1024px`
-  (`max-w-4xl/5xl`), centred, page padding `16px` → `md:32px`.
+- **Admin page**: `adminPage` wrapper, `adminPageHead` (h1 `adminTitle` + `adminLede`
+  left, one primary action right, 3px ink rule under), then sections. All in `$lib/styles.ts`.
+- **Status**: `StatusBadge` draws a 16×4 line segment. `success` solid, `danger`
+  dotted, `warning` solid warn, `neutral` dashed. Size `lg` for Location status.
+- **Lists**: ruled rows inside one square `panel` (hairline `rule` between rows);
+  never a grid of cards.
+- **Sequential sections**: `Tabs` variant `stops` (stops on a line). Location
+  choice: `Tabs` variant `routes` with `{ code, line }` per item.
+- **Content width**: public `1280px`; admin content `1040px`.
 
 ### Icons
 
@@ -141,7 +132,7 @@ Variants `primary|secondary|ghost|danger` (default `primary`); sizes `sm|md|lg|i
 ### Input — `$lib/components/ui/input/index.js`
 
 `import { Input } from '$lib/components/ui/input/index.js'`
-`bind:value`, `invalid` (error border + `aria-invalid`), `mono` (JetBrains face for
+`bind:value`, `invalid` (error border + `aria-invalid`), `mono` (Overpass Mono for
 IPs/ports/CIDR), plus all native `<input>` attrs.
 
 ```svelte
@@ -305,13 +296,13 @@ sun/moon icon. Already placed in the public header.
 
 ## Shells (already built — don't recreate)
 
-- **Public header/footer**: `routes/+layout.svelte`. Header = status dot + site
-  title/logo (left), Diagnostics / Administration nav + ThemeToggle (right;
+- **Public header/footer**: `routes/+layout.svelte`. Header = operator logo or
+  interchange-ring mark + site title (left), Diagnostics / Administration nav + ThemeToggle (right;
   Administration only when `GET /api/admin/me` succeeds). Footer = Terms link +
-  custom content block from public settings. Auth routes (`/login`, `/install`,
-  `/activate*`) render bare (no header/footer) for a centred card.
+  custom content block from public settings (hidden when both are empty). Auth
+  routes (`/login`, `/install`, `/activate*`) render bare: a terminus panel.
 - **Admin shell**: `routes/admin/+layout.svelte`. Fail-closed session gate, persistent
-  sidebar at `md+` (heading "Administration / Network Settings"; Locations,
+  sidebar at `md+` (sections as stations on a vertical line: Locations,
   Administrators, Settings; Log out pinned bottom; **Locations is active on
   `/admin` and `/admin/locations/*`**), and a left **drawer behind a menu button
   below `md`** (Ark Dialog). Admin pages render into the content area only — do not

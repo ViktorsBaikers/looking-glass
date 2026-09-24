@@ -1,10 +1,8 @@
 import { defineConfig } from '@pandacss/dev';
 import { pluginSvelte } from '@pandacss/plugin-svelte';
 
-// Colour values come 1:1 from the Stitch design exports
-// (design/stitch/network-diagnostics.html = dark, network-diagnostics-light.html
-// = light). `base` is the light scheme; `_dark` activates under the `.dark`
-// class that the pre-paint script in app.html toggles on <html>.
+// "Backbone map" world: see DESIGN.md. `base` is the light scheme; `_dark`
+// activates under the `.dark` class the pre-paint script in app.html toggles.
 export default defineConfig({
 	preflight: true,
 	plugins: [pluginSvelte()],
@@ -35,91 +33,110 @@ export default defineConfig({
 			spin: { to: { transform: 'rotate(360deg)' } },
 			'fade-in': { from: { opacity: 0 }, to: { opacity: 1 } },
 			'content-in': {
-				from: { opacity: 0, transform: 'scale(0.96) translateY(4px)' },
-				to: { opacity: 1, transform: 'scale(1) translateY(0)' }
+				from: { opacity: 0, transform: 'translateY(6px)' },
+				to: { opacity: 1, transform: 'translateY(0)' }
+			},
+			// A station arriving on the route: the marker drops in, the row fades up.
+			'station-in': {
+				from: { opacity: 0, transform: 'translateY(-4px)' },
+				to: { opacity: 1, transform: 'translateY(0)' }
+			},
+			// The live "you are here" marker on the newest station.
+			'here-pulse': {
+				'0%': { boxShadow: '0 0 0 0 var(--line-halo)' },
+				'100%': { boxShadow: '0 0 0 10px transparent' }
 			}
 		},
 		tokens: {
 			fonts: {
-				sans: { value: ["'Plus Jakarta Sans Variable'", "'Plus Jakarta Sans'", 'sans-serif'] },
-				mono: { value: ["'JetBrains Mono Variable'", "'JetBrains Mono'", 'monospace'] }
+				sans: { value: ["'Overpass Variable'", "'Overpass'", 'system-ui', 'sans-serif'] },
+				mono: { value: ["'Overpass Mono Variable'", "'Overpass Mono'", 'ui-monospace', 'monospace'] }
 			},
-			// Base radius is 8px (`md`); design exports round cards at 12–16px.
+			// Map grammar: panels are square, controls barely softened, roundels round.
 			radii: {
-				sm: { value: '4px' },
-				md: { value: '8px' },
-				lg: { value: '12px' },
-				xl: { value: '16px' },
+				none: { value: '0' },
+				sm: { value: '2px' },
+				md: { value: '3px' },
 				full: { value: '9999px' }
 			},
 			shadows: {
-				glow: { value: '0 0 8px #10b981' },
-				'glow-md': { value: '0 0 15px rgba(16, 185, 129, 0.3)' },
-				popup: { value: '0 12px 32px rgba(0, 0, 0, 0.35)' }
+				popup: {
+					value: '0 1px 2px rgba(10, 11, 13, 0.08), 0 12px 32px -8px rgba(10, 11, 13, 0.28)'
+				}
+			},
+			easings: {
+				out: { value: 'cubic-bezier(0.16, 1, 0.3, 1)' }
 			},
 			animations: {
 				spin: { value: 'spin 1s linear infinite' },
-				'fade-in': { value: 'fade-in 150ms ease-out' },
-				'content-in': { value: 'content-in 150ms ease-out' }
+				'fade-in': { value: 'fade-in 160ms cubic-bezier(0.16, 1, 0.3, 1)' },
+				'content-in': { value: 'content-in 200ms cubic-bezier(0.16, 1, 0.3, 1)' },
+				'station-in': { value: 'station-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both' },
+				'here-pulse': { value: 'here-pulse 1.4s cubic-bezier(0.16, 1, 0.3, 1) infinite' }
 			}
 		},
+		// Light = the printed map (neutral paper, ink). Dark = the night map
+		// (charcoal, not navy). Colour lives only on data: Location lines, stations,
+		// and the status signals below. Line colours are assigned in lib/lines.ts.
+		// Every value is light-dark(), so any subtree flips theme through
+		// color-scheme alone (`.dark` / `.light`, e.g. the settings previews).
 		semanticTokens: {
 			colors: {
-				background: { value: { base: '#f8f9ff', _dark: '#0b1326' } },
-				surface: { value: { base: '#f8f9ff', _dark: '#0b1326' } },
-				'surface-container-lowest': { value: { base: '#ffffff', _dark: '#060e20' } },
-				'surface-container-low': { value: { base: '#eff4ff', _dark: '#131b2e' } },
-				'surface-container': { value: { base: '#e8ecf8', _dark: '#171f33' } },
-				'surface-container-high': { value: { base: '#e2e7f2', _dark: '#222a3d' } },
-				'surface-container-highest': { value: { base: '#dce1ec', _dark: '#2d3449' } },
-				'surface-variant': { value: { base: '#e1e2ec', _dark: '#2d3449' } },
-				'surface-bright': { value: { base: '#f8f9ff', _dark: '#31394d' } },
-				'surface-dim': { value: { base: '#cbdbf5', _dark: '#0b1326' } },
-				'on-surface': { value: { base: '#191c20', _dark: '#dae2fd' } },
-				'on-surface-variant': { value: { base: '#44474e', _dark: '#bbcabf' } },
-				outline: { value: { base: '#757780', _dark: '#86948a' } },
-				'outline-variant': { value: { base: '#c4c6d0', _dark: '#3c4a42' } },
-				primary: { value: { base: '#10b981', _dark: '#4edea3' } },
-				'on-primary': { value: { base: '#ffffff', _dark: '#003824' } },
-				'primary-container': { value: { base: '#6ffbbe', _dark: '#10b981' } },
-				'on-primary-container': { value: { base: '#002114', _dark: '#00422b' } },
-				'primary-fixed': { value: '#6ffbbe' },
-				'primary-fixed-dim': { value: '#4edea3' },
-				'secondary-container': { value: { base: '#dce2f9', _dark: '#0b513d' } },
-				'on-secondary-container': { value: { base: '#151b2c', _dark: '#83c2a9' } },
-				tertiary: { value: { base: '#81429f', _dark: '#45dfa4' } },
-				error: { value: { base: '#ba1a1a', _dark: '#ffb4ab' } },
-				'on-error': { value: { base: '#ffffff', _dark: '#690005' } },
-				'error-container': { value: { base: '#ffdad6', _dark: '#93000a' } },
-				'on-error-container': { value: { base: '#410002', _dark: '#ffdad6' } },
-				// Not in the Stitch palette; needed for the PENDING badge (spec #52).
-				warning: { value: { base: '#d97706', _dark: '#fbbf24' } },
-				'inverse-surface': { value: { base: '#2e3036', _dark: '#dae2fd' } },
-				'inverse-on-surface': { value: { base: '#eff4ff', _dark: '#283044' } }
+				paper: { value: 'light-dark(#f3f3f0, #111214)' },
+				panel: { value: 'light-dark(#ffffff, #18191c)' },
+				sunk: { value: 'light-dark(#ebebe7, #0b0c0d)' },
+				ink: { value: 'light-dark(#16171a, #ecece6)' },
+				'ink-hover': { value: 'light-dark(#33353b, #ffffff)' },
+				'ink-muted': { value: 'light-dark(#595c63, #a2a5ab)' },
+				'ink-faint': { value: 'light-dark(#8b8e94, #6c6f76)' },
+				'on-ink': { value: 'light-dark(#ffffff, #111214)' },
+				rule: { value: 'light-dark(#dcdcd6, #2a2c30)' },
+				'rule-strong': { value: 'light-dark(#a6a8a3, #4a4d53)' },
+				ok: { value: 'light-dark(#1d7a4a, #52c98b)' },
+				'ok-soft': { value: 'light-dark(#e3f1e8, #15291e)' },
+				warn: { value: 'light-dark(#9a5200, #f5b453)' },
+				'warn-soft': { value: 'light-dark(#f8ecd9, #2e2312)' },
+				danger: { value: 'light-dark(#b3261e, #ff8a80)' },
+				'danger-soft': { value: 'light-dark(#f9e3e1, #331a19)' }
 			}
 		},
+		// One strict scale: 12 · 13 · 14 · 16 · 20 · 28 · 40.
 		textStyles: {
-			'headline-lg': {
-				value: { fontSize: '48px', lineHeight: '56px', fontWeight: 700, letterSpacing: '-0.02em' }
+			display: {
+				value: {
+					fontSize: '40px',
+					lineHeight: '44px',
+					fontWeight: 800,
+					letterSpacing: '-0.03em'
+				}
 			},
-			'headline-md': {
-				value: { fontSize: '32px', lineHeight: '40px', fontWeight: 600, letterSpacing: '-0.01em' }
+			'display-sm': {
+				value: { fontSize: '28px', lineHeight: '32px', fontWeight: 800, letterSpacing: '-0.025em' }
 			},
-			'headline-sm': { value: { fontSize: '24px', lineHeight: '32px', fontWeight: 600 } },
-			'headline-mobile': {
-				value: { fontSize: '32px', lineHeight: '40px', fontWeight: 700, letterSpacing: '-0.01em' }
+			title: {
+				value: { fontSize: '20px', lineHeight: '26px', fontWeight: 700, letterSpacing: '-0.015em' }
 			},
-			'body-lg': { value: { fontSize: '18px', lineHeight: '28px', fontWeight: 400 } },
-			'body-md': { value: { fontSize: '16px', lineHeight: '24px', fontWeight: 400 } },
+			body: { value: { fontSize: '16px', lineHeight: '24px', fontWeight: 400 } },
 			'body-sm': { value: { fontSize: '14px', lineHeight: '20px', fontWeight: 400 } },
-			'label-md': {
-				value: { fontSize: '14px', lineHeight: '20px', fontWeight: 600, letterSpacing: '0.05em' }
+			label: { value: { fontSize: '13px', lineHeight: '16px', fontWeight: 600, letterSpacing: '0' } },
+			caption: { value: { fontSize: '12px', lineHeight: '16px', fontWeight: 500 } },
+			code: {
+				value: {
+					fontFamily: 'mono',
+					fontSize: '13px',
+					lineHeight: '20px',
+					fontWeight: 400,
+					fontVariantNumeric: 'tabular-nums'
+				}
 			},
-			'label-sm': {
-				value: { fontSize: '12px', lineHeight: '16px', fontWeight: 600, letterSpacing: '0.05em' }
-			},
-			'mono-data': {
-				value: { fontFamily: ['mono'], fontSize: '14px', lineHeight: '22px', fontWeight: 400 }
+			numeral: {
+				value: {
+					fontSize: '28px',
+					lineHeight: '32px',
+					fontWeight: 700,
+					letterSpacing: '-0.02em',
+					fontVariantNumeric: 'tabular-nums'
+				}
 			}
 		},
 		recipes: {
@@ -131,48 +148,53 @@ export default defineConfig({
 					justifyContent: 'center',
 					gap: '8px',
 					whiteSpace: 'nowrap',
-					borderRadius: 'md',
-					textStyle: 'label-md',
+					borderRadius: 'sm',
+					fontFamily: 'sans',
+					fontSize: '14px',
+					lineHeight: '16px',
+					fontWeight: 700,
 					cursor: 'pointer',
-					transitionProperty: 'background, color, border-color, box-shadow',
-					transitionDuration: '150ms',
+					transitionProperty: 'background, color, border-color',
+					transitionDuration: '120ms',
+					transitionTimingFunction: 'out',
 					borderStyle: 'solid',
-					borderWidth: '0',
-					_disabled: { opacity: 0.5, cursor: 'not-allowed', pointerEvents: 'none' },
-					_focusVisible: { outline: '2px solid {colors.primary}', outlineOffset: '2px' },
-					'& svg': { width: '20px', height: '20px', flexShrink: 0 }
+					borderWidth: '1px',
+					borderColor: 'transparent',
+					textDecoration: 'none',
+					_disabled: { opacity: 0.45, cursor: 'not-allowed', pointerEvents: 'none' },
+					_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' },
+					'& svg': { width: '18px', height: '18px', flexShrink: 0 }
 				},
 				variants: {
 					variant: {
 						primary: {
-							background: 'primary-container',
-							color: 'on-primary-container',
-							boxShadow: 'glow-md',
-							_hover: { background: 'primary', color: 'on-primary' }
+							background: 'ink',
+							color: 'on-ink',
+							_hover: { background: 'ink-hover' },
+							_active: { transform: 'translateY(1px)' }
 						},
 						secondary: {
-							background: 'surface-container-high',
-							color: 'on-surface',
-							borderWidth: '1px',
-							borderColor: 'outline-variant',
-							_hover: { borderColor: 'primary', color: 'primary' }
+							background: 'panel',
+							color: 'ink',
+							borderColor: 'rule-strong',
+							_hover: { borderColor: 'ink' }
 						},
 						ghost: {
 							background: 'transparent',
-							color: 'on-surface-variant',
-							_hover: { background: 'surface-container-highest', color: 'primary' }
+							color: 'ink-muted',
+							_hover: { color: 'ink', background: 'sunk' }
 						},
 						danger: {
 							background: 'transparent',
-							color: 'error',
-							_hover: { background: 'error-container', color: 'on-error-container' }
+							color: 'danger',
+							_hover: { background: 'danger-soft' }
 						}
 					},
 					size: {
-						sm: { minHeight: '36px', padding: '6px 12px', textStyle: 'label-sm' },
-						md: { minHeight: '44px', padding: '10px 20px' },
-						lg: { minHeight: '48px', padding: '12px 24px' },
-						icon: { minHeight: '40px', minWidth: '40px', padding: '0' }
+						sm: { minHeight: '32px', padding: '0 12px', fontSize: '13px' },
+						md: { minHeight: '40px', padding: '0 16px' },
+						lg: { minHeight: '48px', padding: '0 24px', fontSize: '15px' },
+						icon: { minHeight: '36px', minWidth: '36px', padding: '0' }
 					}
 				},
 				defaultVariants: { variant: 'primary', size: 'md' }
@@ -183,70 +205,67 @@ export default defineConfig({
 					display: 'inline-flex',
 					alignItems: 'center',
 					gap: '6px',
-					borderRadius: 'full',
-					padding: '2px 10px',
-					textStyle: 'label-sm',
-					textTransform: 'uppercase',
+					borderRadius: 'sm',
+					padding: '2px 6px',
+					textStyle: 'caption',
 					fontWeight: 700,
-					borderWidth: '1px',
-					borderStyle: 'solid'
+					whiteSpace: 'nowrap'
 				},
 				variants: {
 					tone: {
-						neutral: {
-							background: 'surface-container-highest',
-							color: 'on-surface-variant',
-							borderColor: 'outline-variant'
-						},
-						success: { background: 'primary/10', color: 'primary', borderColor: 'primary/30' },
-						warning: { background: 'warning/10', color: 'warning', borderColor: 'warning/30' },
-						danger: { background: 'error/10', color: 'error', borderColor: 'error/30' }
+						neutral: { background: 'sunk', color: 'ink-muted' },
+						success: { background: 'ok-soft', color: 'ok' },
+						warning: { background: 'warn-soft', color: 'warn' },
+						danger: { background: 'danger-soft', color: 'danger' }
 					},
-					// `lg` is the Locations card state pill: sentence case, label-md.
+					// `lg`: the Location status signal, no fill, the line segment carries it.
 					size: {
 						sm: {},
-						lg: {
-							gap: '8px',
-							padding: '8px 16px',
-							textStyle: 'label-md',
-							textTransform: 'none',
-							fontWeight: 600
-						}
+						lg: { background: 'transparent', padding: '0', gap: '8px', textStyle: 'label' }
 					}
 				},
+				compoundVariants: [
+					{ size: 'lg', tone: ['success', 'warning', 'danger'], css: { color: 'ink' } },
+					{ size: 'lg', tone: 'neutral', css: { color: 'ink-muted' } }
+				],
 				defaultVariants: { tone: 'neutral', size: 'sm' }
 			},
 			input: {
 				className: 'input',
 				base: {
 					width: '100%',
-					minHeight: '44px',
-					background: 'surface-container-high',
-					color: 'on-surface',
+					minHeight: '40px',
+					background: 'panel',
+					color: 'ink',
 					borderWidth: '1px',
 					borderStyle: 'solid',
-					borderColor: 'outline-variant',
-					borderRadius: 'md',
-					padding: '10px 12px',
-					textStyle: 'body-md',
-					transitionProperty: 'background, border-color, box-shadow',
-					transitionDuration: '150ms',
-					_placeholder: { color: 'on-surface-variant' },
+					borderColor: 'rule-strong',
+					borderRadius: 'sm',
+					padding: '8px 12px',
+					fontFamily: 'sans',
+					fontSize: '15px',
+					lineHeight: '22px',
+					transitionProperty: 'border-color, box-shadow',
+					transitionDuration: '120ms',
+					caretColor: '{colors.ink}',
+					_placeholder: { color: 'ink-faint' },
+					_hover: { borderColor: 'ink-muted' },
 					_focus: {
 						outline: 'none',
-						borderColor: 'primary',
-						boxShadow: '0 0 0 1px {colors.primary}'
+						borderColor: 'ink',
+						boxShadow: 'inset 0 0 0 1px {colors.ink}'
 					},
-					_disabled: { opacity: 0.6, cursor: 'not-allowed' }
+					_disabled: { opacity: 0.55, cursor: 'not-allowed', background: 'sunk' }
 				},
 				variants: {
 					invalid: {
 						true: {
-							borderColor: 'error',
-							_focus: { borderColor: 'error', boxShadow: '0 0 0 1px {colors.error}' }
+							borderColor: 'danger',
+							_hover: { borderColor: 'danger' },
+							_focus: { borderColor: 'danger', boxShadow: 'inset 0 0 0 1px {colors.danger}' }
 						}
 					},
-					mono: { true: { fontFamily: 'mono' } }
+					mono: { true: { fontFamily: 'mono', fontSize: '14px' } }
 				}
 			},
 			checkboxCard: {
@@ -255,16 +274,18 @@ export default defineConfig({
 					display: 'flex',
 					alignItems: 'center',
 					gap: '12px',
-					padding: '12px',
-					borderRadius: 'md',
+					padding: '12px 14px',
+					borderRadius: 'sm',
 					borderWidth: '1px',
 					borderStyle: 'solid',
-					borderColor: 'surface-bright',
-					background: 'surface-container',
+					borderColor: 'rule',
+					background: 'panel',
 					cursor: 'pointer',
-					transitionProperty: 'background, border-color, color',
-					transitionDuration: '150ms',
-					_hover: { background: 'surface-container-high', borderColor: 'primary' }
+					transitionProperty: 'border-color, background',
+					transitionDuration: '120ms',
+					_hover: { borderColor: 'ink-muted' },
+					'&:has([data-state=checked])': { borderColor: 'ink' },
+					'&[data-disabled], &:has([data-disabled])': { opacity: 0.55, cursor: 'not-allowed' }
 				}
 			}
 		},
@@ -273,11 +294,11 @@ export default defineConfig({
 				className: 'field',
 				slots: ['root', 'label', 'control', 'error', 'hint'],
 				base: {
-					root: { display: 'flex', flexDirection: 'column', gap: '4px' },
-					label: { textStyle: 'label-md', color: 'on-surface-variant' },
+					root: { display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '0' },
+					label: { textStyle: 'label', color: 'ink' },
 					control: {},
-					error: { textStyle: 'body-sm', color: 'error' },
-					hint: { textStyle: 'body-sm', color: 'on-surface-variant' }
+					error: { textStyle: 'body-sm', color: 'danger' },
+					hint: { textStyle: 'body-sm', color: 'ink-muted' }
 				}
 			},
 			card: {
@@ -285,19 +306,19 @@ export default defineConfig({
 				slots: ['root', 'header', 'title', 'description', 'content', 'footer'],
 				base: {
 					root: {
-						background: 'surface-container-low',
-						color: 'on-surface',
+						background: 'panel',
+						color: 'ink',
 						borderWidth: '1px',
 						borderStyle: 'solid',
-						borderColor: 'outline-variant',
-						borderRadius: 'xl',
+						borderColor: 'rule',
+						borderRadius: 'none',
 						padding: '24px'
 					},
-					header: { display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '16px' },
-					title: { textStyle: 'headline-sm', color: 'on-surface' },
-					description: { textStyle: 'body-sm', color: 'on-surface-variant' },
+					header: { display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '20px' },
+					title: { textStyle: 'title', color: 'ink' },
+					description: { textStyle: 'body-sm', color: 'ink-muted' },
 					content: {},
-					footer: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px' }
+					footer: { display: 'flex', alignItems: 'center', gap: '12px', marginTop: '24px' }
 				}
 			},
 			dialog: {
@@ -307,7 +328,7 @@ export default defineConfig({
 					backdrop: {
 						position: 'fixed',
 						inset: '0',
-						background: 'black/60',
+						background: 'rgba(10, 11, 13, 0.55)',
 						zIndex: 50,
 						animation: 'fade-in'
 					},
@@ -323,75 +344,165 @@ export default defineConfig({
 					},
 					content: {
 						position: 'relative',
-						background: 'surface-container-low',
-						color: 'on-surface',
-						borderWidth: '1px',
-						borderStyle: 'solid',
-						borderColor: 'outline-variant',
-						borderRadius: 'xl',
-						padding: '24px',
+						background: 'panel',
+						color: 'ink',
+						borderTopWidth: '4px',
+						borderTopStyle: 'solid',
+						borderTopColor: 'ink',
+						borderRadius: 'none',
+						padding: '28px',
 						width: '100%',
-						maxWidth: '512px',
+						maxWidth: '520px',
 						maxHeight: '90vh',
 						overflowY: 'auto',
 						boxShadow: 'popup',
 						outline: 'none',
 						animation: 'content-in'
 					},
-					title: { textStyle: 'headline-sm', marginBottom: '4px' },
-					description: { textStyle: 'body-sm', color: 'on-surface-variant', marginBottom: '16px' },
+					title: { textStyle: 'title', marginBottom: '6px', paddingRight: '32px' },
+					description: { textStyle: 'body-sm', color: 'ink-muted', marginBottom: '20px' },
 					closeTrigger: {
 						position: 'absolute',
-						top: '12px',
-						right: '12px',
+						top: '16px',
+						right: '16px',
 						display: 'flex',
-						padding: '4px',
-						borderRadius: 'md',
-						color: 'on-surface-variant',
+						padding: '6px',
+						borderRadius: 'sm',
+						color: 'ink-muted',
 						cursor: 'pointer',
 						background: 'transparent',
 						border: 'none',
-						_hover: { color: 'on-surface', background: 'surface-container-high' },
-						_focusVisible: { outline: '2px solid {colors.primary}', outlineOffset: '1px' }
+						_hover: { color: 'ink', background: 'sunk' },
+						_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '1px' },
+						'& svg': { width: '18px', height: '18px' }
 					}
 				}
 			},
+			// Two grammars. `stops`: sequential sections drawn as stops on one line
+			// (location editor). `routes`: Location lines, each led by its roundel.
 			tabs: {
 				className: 'tabs',
-				slots: ['root', 'list', 'trigger', 'content'],
+				slots: ['root', 'list', 'trigger', 'meta', 'content'],
 				base: {
 					root: { minWidth: '0' },
-					list: {
-						display: 'flex',
-						gap: '24px',
-						borderBottomWidth: '1px',
-						borderBottomStyle: 'solid',
-						borderColor: 'outline-variant',
-						overflowX: 'auto'
-					},
+					list: { display: 'flex', overflowX: 'auto', scrollbarWidth: 'thin' },
 					trigger: {
-						textStyle: 'label-md',
-						color: 'on-surface-variant',
+						position: 'relative',
+						display: 'inline-flex',
+						alignItems: 'center',
 						background: 'transparent',
 						border: 'none',
-						borderBottomWidth: '2px',
-						borderBottomStyle: 'solid',
-						borderBottomColor: 'transparent',
-						marginBottom: '-1px',
-						padding: '8px 4px',
 						whiteSpace: 'nowrap',
 						cursor: 'pointer',
-						transitionProperty: 'color, border-color',
-						transitionDuration: '150ms',
-						_hover: { color: 'on-surface' },
-						'&[aria-selected=true]': { color: 'primary', borderBottomColor: 'primary', fontWeight: 700 },
-						_focusVisible: { outline: '2px solid {colors.primary}', outlineOffset: '-2px' }
+						color: 'ink-muted',
+						fontFamily: 'sans',
+						transitionProperty: 'color',
+						transitionDuration: '120ms',
+						_hover: { color: 'ink' },
+						'&[aria-selected=true]': { color: 'ink' },
+						_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '-2px' }
 					},
-					content: {
-						paddingTop: '24px',
-						_focusVisible: { outline: 'none' }
+					meta: { fontWeight: 500, color: 'ink-muted', fontVariantNumeric: 'tabular-nums' },
+					content: { _focusVisible: { outline: 'none' } }
+				},
+				variants: {
+					variant: {
+						stops: {
+							list: {
+								position: 'relative',
+								gap: '0',
+								paddingBottom: '2px',
+								// The line the stops sit on, drawn through every marker's centre.
+								_before: {
+									content: '""',
+									position: 'absolute',
+									left: '6px',
+									right: '6px',
+									top: '6px',
+									height: '3px',
+									background: 'rule',
+									pointerEvents: 'none'
+								}
+							},
+							trigger: {
+								flexDirection: 'column',
+								alignItems: 'flex-start',
+								gap: '10px',
+								padding: '0 28px 10px 0',
+								fontSize: '14px',
+								lineHeight: '16px',
+								fontWeight: 600,
+								_before: {
+									content: '""',
+									width: '15px',
+									height: '15px',
+									borderRadius: 'full',
+									background: 'paper',
+									borderWidth: '3px',
+									borderStyle: 'solid',
+									borderColor: 'rule-strong',
+									position: 'relative',
+									zIndex: 1,
+									transitionProperty: 'background, border-color',
+									transitionDuration: '160ms'
+								},
+								_hover: { _before: { borderColor: 'ink' } },
+								'&[aria-selected=true]': {
+									fontWeight: 800,
+									_before: { background: 'ink', borderColor: 'ink' }
+								}
+							},
+							content: { paddingTop: '28px' }
+						},
+						routes: {
+							list: {
+								gap: '4px',
+								borderBottomWidth: '1px',
+								borderBottomStyle: 'solid',
+								borderBottomColor: 'rule'
+							},
+							trigger: {
+								gap: '10px',
+								padding: '10px 14px 12px 4px',
+								marginBottom: '-1px',
+								fontSize: '15px',
+								lineHeight: '20px',
+								fontWeight: 700,
+								borderBottomWidth: '4px',
+								borderBottomStyle: 'solid',
+								borderBottomColor: 'transparent',
+								transitionProperty: 'color, border-color',
+								// The Location roundel: its code set in the line colour. The alt
+								// text after "/" keeps the code out of the accessible name.
+								_before: {
+									content: 'attr(data-code) / ""',
+									display: 'inline-flex',
+									alignItems: 'center',
+									justifyContent: 'center',
+									width: '30px',
+									height: '30px',
+									borderRadius: 'full',
+									background: 'var(--line)',
+									color: 'var(--line-ink)',
+									fontSize: '10px',
+									fontWeight: 800,
+									letterSpacing: '0.02em',
+									flexShrink: 0,
+									opacity: 0.55,
+									transitionProperty: 'opacity',
+									transitionDuration: '160ms'
+								},
+								_hover: { _before: { opacity: 1 } },
+								'&[aria-selected=true]': {
+									borderBottomColor: 'var(--line)',
+									_before: { opacity: 1 }
+								}
+							},
+							content: { paddingTop: '28px' }
+						}
 					}
-				}
+				},
+				defaultVariants: { variant: 'stops' }
 			},
 			checkbox: {
 				className: 'checkbox',
@@ -407,20 +518,20 @@ export default defineConfig({
 						borderRadius: 'sm',
 						borderWidth: '2px',
 						borderStyle: 'solid',
-						borderColor: 'outline',
-						background: 'transparent',
+						borderColor: 'rule-strong',
+						background: 'panel',
 						transitionProperty: 'background, border-color',
-						transitionDuration: '150ms',
+						transitionDuration: '120ms',
 						flexShrink: 0,
 						'&[data-state=checked], &[data-state=indeterminate]': {
-							background: 'primary-container',
-							borderColor: 'primary-container',
-							color: 'on-primary-container'
+							background: 'ink',
+							borderColor: 'ink',
+							color: 'on-ink'
 						},
-						_focusVisible: { outline: '2px solid {colors.primary}', outlineOffset: '2px' }
+						_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' }
 					},
 					indicator: { display: 'flex', color: 'inherit', '& svg': { width: '14px', height: '14px' } },
-					label: { textStyle: 'body-md', color: 'on-surface' }
+					label: { textStyle: 'body', color: 'ink' }
 				}
 			},
 			tooltip: {
@@ -434,21 +545,18 @@ export default defineConfig({
 						background: 'transparent',
 						border: 'none',
 						padding: '2px',
-						borderRadius: 'sm',
-						color: 'on-surface-variant',
+						borderRadius: 'full',
+						color: 'ink-faint',
 						cursor: 'pointer',
-						_hover: { color: 'primary' },
-						_focusVisible: { outline: '2px solid {colors.primary}', outlineOffset: '1px' }
+						_hover: { color: 'ink' },
+						_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '1px' }
 					},
 					positioner: { zIndex: 60 },
 					content: {
-						background: 'surface-container-highest',
-						color: 'on-surface',
-						borderWidth: '1px',
-						borderStyle: 'solid',
-						borderColor: 'outline-variant',
-						borderRadius: 'md',
-						padding: '6px 10px',
+						background: 'ink',
+						color: 'on-ink',
+						borderRadius: 'sm',
+						padding: '8px 10px',
 						textStyle: 'body-sm',
 						maxWidth: '280px',
 						boxShadow: 'popup',
@@ -468,41 +576,44 @@ export default defineConfig({
 						justifyContent: 'space-between',
 						gap: '8px',
 						width: '100%',
-						minHeight: '44px',
-						padding: '10px 12px',
-						background: 'surface-container-high',
-						color: 'on-surface',
+						minHeight: '40px',
+						padding: '8px 10px 8px 12px',
+						background: 'panel',
+						color: 'ink',
 						borderWidth: '1px',
 						borderStyle: 'solid',
-						borderColor: 'outline-variant',
-						borderRadius: 'md',
-						textStyle: 'body-md',
+						borderColor: 'rule-strong',
+						borderRadius: 'sm',
+						fontFamily: 'sans',
+						fontSize: '15px',
+						lineHeight: '22px',
 						cursor: 'pointer',
 						transitionProperty: 'border-color, box-shadow',
-						transitionDuration: '150ms',
-						'&[data-state=open]': { borderColor: 'primary', boxShadow: '0 0 0 1px {colors.primary}' },
-						_focusVisible: { outline: 'none', borderColor: 'primary', boxShadow: '0 0 0 1px {colors.primary}' },
-						_disabled: { opacity: 0.6, cursor: 'not-allowed' },
-						'& svg': { width: '20px', height: '20px', flexShrink: 0, color: 'on-surface-variant' }
+						transitionDuration: '120ms',
+						_hover: { borderColor: 'ink-muted' },
+						'&[data-state=open]': { borderColor: 'ink', boxShadow: 'inset 0 0 0 1px {colors.ink}' },
+						_focusVisible: { outline: 'none', borderColor: 'ink', boxShadow: 'inset 0 0 0 1px {colors.ink}' },
+						_disabled: { opacity: 0.55, cursor: 'not-allowed', background: 'sunk' },
+						'& svg': { width: '20px', height: '20px', flexShrink: 0, color: 'ink-muted' }
 					},
-					indicator: { display: 'flex', color: 'on-surface-variant' },
+					indicator: { display: 'flex', color: 'ink-muted' },
 					valueText: {
 						overflow: 'hidden',
 						textOverflow: 'ellipsis',
 						whiteSpace: 'nowrap',
 						textAlign: 'left',
-						'&[data-placeholder-shown]': { color: 'on-surface-variant' }
+						'&[data-placeholder-shown]': { color: 'ink-faint' }
 					},
 					positioner: { zIndex: 60 },
 					content: {
 						width: '100%',
-						background: 'surface-container-high',
+						background: 'panel',
 						borderWidth: '1px',
 						borderStyle: 'solid',
-						borderColor: 'outline-variant',
-						borderRadius: 'lg',
+						borderColor: 'ink',
+						borderRadius: 'sm',
 						boxShadow: 'popup',
-						padding: '4px',
+						padding: '4px 0',
 						maxHeight: '288px',
 						overflowY: 'auto',
 						animation: 'fade-in',
@@ -514,18 +625,17 @@ export default defineConfig({
 						justifyContent: 'space-between',
 						gap: '8px',
 						padding: '8px 12px',
-						borderRadius: 'md',
-						textStyle: 'body-md',
-						color: 'on-surface',
+						fontSize: '15px',
+						lineHeight: '22px',
+						color: 'ink',
 						cursor: 'pointer',
-						transitionProperty: 'background, color',
-						transitionDuration: '100ms',
-						'&[data-highlighted]': { background: 'surface-variant' },
+						'&[data-highlighted]': { background: 'sunk' },
+						'&[data-state=checked]': { fontWeight: 700 },
 						'&[data-disabled]': { opacity: 0.5, cursor: 'not-allowed' },
 						_focusVisible: { outline: 'none' }
 					},
 					itemText: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-					itemIndicator: { display: 'flex', color: 'primary', '& svg': { width: '18px', height: '18px' } }
+					itemIndicator: { display: 'flex', color: 'ink', '& svg': { width: '18px', height: '18px' } }
 				}
 			},
 			toast: {
@@ -540,20 +650,17 @@ export default defineConfig({
 						gap: '12px',
 						width: '360px',
 						maxWidth: 'calc(100vw - 32px)',
-						padding: '12px 16px',
-						background: 'surface-container-highest',
-						color: 'on-surface',
-						borderWidth: '1px',
-						borderStyle: 'solid',
-						borderColor: 'outline-variant',
-						borderRadius: 'lg',
+						padding: '12px 14px',
+						background: 'ink',
+						color: 'on-ink',
+						borderRadius: 'sm',
 						boxShadow: 'popup',
 						animation: 'content-in',
-						'&[data-type=error]': { borderColor: 'error/50', color: 'error' },
+						'&[data-type=error]': { background: 'danger', color: 'white' },
 						'& svg': { width: '20px', height: '20px', flexShrink: 0 }
 					},
-					title: { textStyle: 'body-sm', fontWeight: 600 },
-					description: { textStyle: 'body-sm', color: 'on-surface-variant' },
+					title: { textStyle: 'body-sm', fontWeight: 700 },
+					description: { textStyle: 'body-sm', opacity: 0.85 },
 					closeTrigger: {
 						marginLeft: 'auto',
 						display: 'flex',
@@ -561,30 +668,50 @@ export default defineConfig({
 						border: 'none',
 						padding: '2px',
 						borderRadius: 'sm',
-						color: 'on-surface-variant',
+						color: 'inherit',
+						opacity: 0.7,
 						cursor: 'pointer',
-						_hover: { color: 'on-surface' }
+						_hover: { opacity: 1 }
 					}
 				}
 			}
 		}
 	},
 	globalCss: {
-		':root': { colorScheme: 'light' },
+		':root, .light': { colorScheme: 'light' },
 		'.dark': { colorScheme: 'dark' },
+		html: { background: 'paper', scrollbarColor: '{colors.rule-strong} transparent' },
 		body: {
-			background: 'background',
-			color: 'on-surface',
+			background: 'paper',
+			color: 'ink',
 			fontFamily: 'sans',
-			textStyle: 'body-md',
-			WebkitFontSmoothing: 'antialiased'
+			textStyle: 'body',
+			WebkitFontSmoothing: 'antialiased',
+			MozOsxFontSmoothing: 'grayscale',
+			textRendering: 'optimizeLegibility',
+			fontFeatureSettings: '"kern", "calt"'
 		},
-		'::selection': { background: 'primary', color: 'on-primary' },
-		'*': { borderColor: 'outline-variant' },
-		'::-webkit-scrollbar': { width: '8px', height: '8px' },
-		'::-webkit-scrollbar-track': { background: 'surface-container-low' },
-		'::-webkit-scrollbar-thumb': { background: 'surface-container-highest', borderRadius: '4px' },
-		'::-webkit-scrollbar-thumb:hover': { background: 'outline-variant' },
+		'::selection': { background: 'ink', color: 'on-ink' },
+		// Location lines (lib/lines.ts): the element declares both themes' colours.
+		'[data-line]': {
+			'--line': 'light-dark(var(--line-light), var(--line-dark))',
+			'--line-ink': 'light-dark(var(--line-ink-light), #111214)',
+			'--line-halo': 'color-mix(in srgb, var(--line) 45%, transparent)'
+		},
+		'*': { borderColor: 'rule' },
+		'a': { textUnderlineOffset: '3px', textDecorationThickness: '1px' },
+		'input, textarea': { caretColor: '{colors.ink}' },
+		'h1, h2, h3': { textWrap: 'balance' },
+		'*:focus-visible': { outlineColor: '{colors.ink}' },
+		'::-webkit-scrollbar': { width: '10px', height: '10px' },
+		'::-webkit-scrollbar-track': { background: 'transparent' },
+		'::-webkit-scrollbar-thumb': {
+			background: 'rule-strong',
+			borderRadius: 'full',
+			border: '3px solid transparent',
+			backgroundClip: 'padding-box'
+		},
+		'::-webkit-scrollbar-thumb:hover': { background: 'ink-muted', backgroundClip: 'padding-box' },
 		'@media (prefers-reduced-motion: reduce)': {
 			'*, *::before, *::after': {
 				animationDuration: '0.01ms !important',

@@ -24,85 +24,99 @@ export const header = css({
 	top: '0',
 	zIndex: 40,
 	width: '100%',
-	background: 'surface',
+	background: 'paper',
 	borderBottomWidth: '1px',
 	borderBottomStyle: 'solid',
-	borderBottomColor: 'outline-variant'
+	borderBottomColor: 'rule'
 });
 export const headerInner = css({
 	display: 'flex',
 	alignItems: 'center',
 	justifyContent: 'space-between',
-	gap: '16px',
-	flexWrap: 'wrap',
+	gap: '8px',
 	width: '100%',
-	maxWidth: '1200px',
+	maxWidth: '1280px',
 	margin: '0 auto',
-	minHeight: '64px',
-	padding: '12px 16px',
-	md: { padding: '12px 32px' }
+	height: '56px',
+	padding: '0 12px',
+	md: { padding: '0 32px', gap: '16px' }
 });
 export const brand = css({
 	display: 'flex',
 	alignItems: 'center',
-	gap: '12px',
+	gap: '10px',
+	minWidth: '0',
 	textDecoration: 'none',
-	color: 'on-surface',
-	textStyle: 'headline-sm',
-	fontWeight: 700
+	color: 'ink',
+	fontSize: '15px',
+	lineHeight: '20px',
+	fontWeight: 800,
+	md: { fontSize: '17px' },
+	letterSpacing: '-0.015em',
+	'& > span:last-child': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '4px' }
 });
-export const statusDot = css({
-	width: '10px',
-	height: '10px',
+/** Fallback mark when no operator logo is set: an interchange ring. */
+export const brandMark = css({
+	width: '18px',
+	height: '18px',
 	borderRadius: 'full',
-	background: 'primary',
-	boxShadow: 'glow',
+	borderWidth: '4px',
+	borderStyle: 'solid',
+	borderColor: 'ink',
+	background: 'paper',
 	flexShrink: 0
 });
-export const logo = css({ width: '28px', height: '28px', objectFit: 'contain' });
-export const nav = css({ display: 'flex', alignItems: 'center', gap: '16px', md: { gap: '24px' } });
+export const logo = css({ height: '28px', width: 'auto', maxWidth: '120px', objectFit: 'contain' });
+export const nav = css({ display: 'flex', alignItems: 'stretch', alignSelf: 'stretch', gap: '4px' });
 export const navLink = css({
-	textStyle: 'label-md',
-	color: 'on-surface-variant',
+	display: 'inline-flex',
+	alignItems: 'center',
+	padding: '0 6px',
+	fontSize: '13px',
+	md: { padding: '0 10px', fontSize: '14px' },
+	fontWeight: 600,
+	color: 'ink-muted',
 	textDecoration: 'none',
-	paddingBottom: '2px',
-	borderBottomWidth: '2px',
+	borderBottomWidth: '3px',
 	borderBottomStyle: 'solid',
 	borderBottomColor: 'transparent',
+	borderTopWidth: '3px',
+	borderTopStyle: 'solid',
+	borderTopColor: 'transparent',
 	transitionProperty: 'color, border-color',
-	transitionDuration: '150ms',
-	_hover: { color: 'primary' },
-	_focusVisible: { outline: '2px solid {colors.primary}', outlineOffset: '2px' }
+	transitionDuration: '120ms',
+	_hover: { color: 'ink' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '-2px' }
 });
-export const navLinkActive = css({ color: 'primary', fontWeight: 700, borderBottomColor: 'primary' });
-export const headerRight = css({ display: 'flex', alignItems: 'center', gap: '8px' });
+export const navLinkActive = css({ color: 'ink', fontWeight: 800, borderBottomColor: 'ink' });
+export const headerRight = css({ display: 'flex', alignItems: 'center', alignSelf: 'stretch', gap: '4px', md: { gap: '8px' } });
 export const mainArea = css({ flex: '1', width: '100%', minWidth: '0' });
 export const footer = css({
 	borderTopWidth: '1px',
 	borderTopStyle: 'solid',
-	borderTopColor: 'outline-variant',
-	background: 'surface'
+	borderTopColor: 'rule'
 });
 export const footerInner = css({
 	display: 'flex',
 	flexDirection: 'column',
-	alignItems: 'center',
-	gap: '8px',
+	gap: '12px',
 	width: '100%',
-	maxWidth: '1200px',
+	maxWidth: '1280px',
 	margin: '0 auto',
-	padding: '24px 16px',
-	textAlign: 'center',
-	md: { padding: '24px 32px' }
+	padding: '24px 16px 32px',
+	md: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', padding: '24px 32px 40px' }
 });
 export const termsLink = css({
 	textStyle: 'body-sm',
-	color: 'primary',
+	fontWeight: 600,
+	color: 'ink',
 	textDecoration: 'underline',
-	textUnderlineOffset: '3px',
-	_hover: { color: 'on-surface' }
+	flexShrink: 0,
+	_hover: { color: 'ink-muted' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' }
 });
-export const customText = css({ textStyle: 'body-sm', color: 'on-surface-variant' });
+export const customText = css({ textStyle: 'body-sm', color: 'ink-muted', maxWidth: '72ch', whiteSpace: 'pre-line' });
 
 // ----- admin shell (routes/admin/+layout.svelte) -----
 export const checking = css({
@@ -110,13 +124,15 @@ export const checking = css({
 	alignItems: 'center',
 	justifyContent: 'center',
 	minHeight: '50vh',
-	color: 'on-surface-variant',
+	color: 'ink-muted',
 	'& svg': { width: '24px', height: '24px' }
 });
 export const adminShell = css({
 	display: 'flex',
 	alignItems: 'flex-start',
 	width: '100%',
+	maxWidth: '1280px',
+	marginInline: 'auto',
 	minHeight: '100%'
 });
 export const sidebar = css({
@@ -124,59 +140,104 @@ export const sidebar = css({
 	md: {
 		display: 'flex',
 		position: 'sticky',
-		top: '64px',
+		top: '56px',
 		alignSelf: 'flex-start',
 		flexDirection: 'column',
-		gap: '8px',
-		width: '240px',
+		width: '220px',
 		flexShrink: 0,
-		height: 'calc(100vh - 64px)',
+		height: 'calc(100vh - 56px)',
 		overflowY: 'auto',
-		padding: '24px 16px',
-		background: 'surface-container-low',
-		borderRightWidth: '1px',
-		borderRightStyle: 'solid',
-		borderRightColor: 'outline-variant'
+		padding: '40px 24px 24px 32px'
 	}
 });
-export const heading = css({ marginBottom: '24px', paddingInline: '12px' });
-export const headingTitle = css({ textStyle: 'headline-sm', color: 'primary', fontWeight: 700 });
-export const headingSub = css({ textStyle: 'body-sm', color: 'on-surface-variant' });
-export const navList = css({ display: 'flex', flexDirection: 'column', gap: '8px', flex: '1' });
+export const heading = css({
+	textStyle: 'caption',
+	fontWeight: 700,
+	color: 'ink-muted',
+	marginBottom: '16px'
+});
+/** Admin sections drawn as stations on one vertical line. */
+export const navList = css({
+	position: 'relative',
+	display: 'flex',
+	flexDirection: 'column',
+	gap: '4px',
+	_before: {
+		content: '""',
+		position: 'absolute',
+		left: '6px',
+		top: '18px',
+		bottom: '18px',
+		width: '3px',
+		background: 'rule'
+	}
+});
 export const navItem = css({
+	position: 'relative',
 	display: 'flex',
 	alignItems: 'center',
-	gap: '12px',
-	padding: '10px 12px',
-	borderRadius: 'lg',
-	textStyle: 'label-md',
+	gap: '14px',
+	minHeight: '36px',
+	fontSize: '15px',
+	fontWeight: 600,
 	textDecoration: 'none',
-	color: 'on-surface-variant',
+	color: 'ink-muted',
 	background: 'transparent',
 	border: 'none',
 	width: '100%',
 	cursor: 'pointer',
 	textAlign: 'left',
-	transitionProperty: 'background, color',
-	transitionDuration: '150ms',
-	_hover: { background: 'surface-container-highest', color: 'primary' },
-	_focusVisible: { outline: '2px solid {colors.primary}', outlineOffset: '-2px' },
-	'& svg': { width: '20px', height: '20px', flexShrink: 0 }
+	transitionProperty: 'color',
+	transitionDuration: '120ms',
+	_before: {
+		content: '""',
+		width: '15px',
+		height: '15px',
+		borderRadius: 'full',
+		borderWidth: '3px',
+		borderStyle: 'solid',
+		borderColor: 'rule-strong',
+		background: 'paper',
+		flexShrink: 0,
+		zIndex: 1,
+		transitionProperty: 'background, border-color',
+		transitionDuration: '160ms'
+	},
+	_hover: { color: 'ink', _before: { borderColor: 'ink' } },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' }
 });
 export const navItemActive = css({
-	background: 'secondary-container',
-	color: 'on-secondary-container',
-	fontWeight: 600,
-	_hover: { background: 'secondary-container', color: 'on-secondary-container' }
+	color: 'ink',
+	fontWeight: 800,
+	_before: { background: 'ink', borderColor: 'ink' }
 });
-export const logoutWrap = css({ marginTop: 'auto', paddingTop: '16px' });
+export const logoutWrap = css({ marginTop: 'auto', paddingTop: '24px' });
+export const logoutBtn = css({
+	display: 'inline-flex',
+	alignItems: 'center',
+	gap: '8px',
+	padding: '6px 0',
+	fontSize: '14px',
+	fontWeight: 600,
+	color: 'ink-muted',
+	background: 'transparent',
+	border: 'none',
+	cursor: 'pointer',
+	_hover: { color: 'ink' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' },
+	'& svg': { width: '18px', height: '18px' }
+});
 export const contentCol = css({ flex: '1', minWidth: '0', display: 'flex', flexDirection: 'column' });
 export const mobileBar = css({
 	display: 'flex',
-	padding: '12px 16px',
+	alignItems: 'center',
+	gap: '8px',
+	padding: '8px 12px',
 	borderBottomWidth: '1px',
 	borderBottomStyle: 'solid',
-	borderBottomColor: 'outline-variant',
+	borderBottomColor: 'rule',
+	fontSize: '14px',
+	fontWeight: 700,
 	md: { display: 'none' }
 });
 export const menuBtn = css({
@@ -185,20 +246,25 @@ export const menuBtn = css({
 	justifyContent: 'center',
 	width: '40px',
 	height: '40px',
-	borderRadius: 'md',
-	color: 'on-surface-variant',
+	borderRadius: 'sm',
+	color: 'ink',
 	background: 'transparent',
 	border: 'none',
 	cursor: 'pointer',
-	_hover: { color: 'primary', background: 'surface-container-high' },
-	_focusVisible: { outline: '2px solid {colors.primary}', outlineOffset: '2px' },
-	'& svg': { width: '24px', height: '24px' }
+	_hover: { background: 'sunk' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' },
+	'& svg': { width: '22px', height: '22px' }
 });
-export const content = css({ flex: '1', minWidth: '0', padding: '24px 16px', md: { padding: '32px' } });
+export const content = css({
+	flex: '1',
+	minWidth: '0',
+	padding: '24px 16px 64px',
+	md: { padding: '40px 32px 80px' }
+});
 export const drawerBackdrop = css({
 	position: 'fixed',
 	inset: '0',
-	background: 'black/60',
+	background: 'rgba(10, 11, 13, 0.55)',
 	zIndex: 50,
 	animation: 'fade-in'
 });
@@ -212,94 +278,116 @@ export const drawerPositioner = css({
 export const drawerContent = css({
 	display: 'flex',
 	flexDirection: 'column',
-	gap: '8px',
 	width: '280px',
 	maxWidth: '85vw',
 	height: '100%',
-	padding: '24px 16px',
-	background: 'surface-container-low',
-	color: 'on-surface',
+	padding: '64px 24px 24px',
+	background: 'paper',
+	color: 'ink',
 	borderRightWidth: '1px',
 	borderRightStyle: 'solid',
-	borderRightColor: 'outline-variant',
+	borderRightColor: 'rule',
+	boxShadow: 'popup',
 	outline: 'none',
-	overflowY: 'auto'
+	overflowY: 'auto',
+	animation: 'content-in'
 });
 export const drawerClose = css({
 	position: 'absolute',
 	top: '12px',
 	right: '12px',
 	display: 'flex',
-	padding: '4px',
-	borderRadius: 'md',
-	color: 'on-surface-variant',
+	padding: '8px',
+	borderRadius: 'sm',
+	color: 'ink-muted',
 	background: 'transparent',
 	border: 'none',
 	cursor: 'pointer',
-	_hover: { color: 'on-surface', background: 'surface-container-high' },
+	_hover: { color: 'ink', background: 'sunk' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' },
 	'& svg': { width: '20px', height: '20px' }
 });
 
+// ----- admin page scaffolding (shared by every admin route) -----
+export const adminPage = css({ display: 'flex', flexDirection: 'column', gap: '32px', maxWidth: '1040px' });
+export const adminPageHead = css({
+	display: 'flex',
+	flexDirection: 'column',
+	gap: '16px',
+	paddingBottom: '24px',
+	borderBottomWidth: '3px',
+	borderBottomStyle: 'solid',
+	borderBottomColor: 'ink',
+	md: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }
+});
+export const adminTitle = css({ textStyle: 'display-sm', color: 'ink', md: { textStyle: 'display' } });
+export const adminLede = css({ textStyle: 'body', color: 'ink-muted', marginTop: '8px', maxWidth: '60ch' });
+export const sectionTitle = css({ textStyle: 'title', color: 'ink' });
+export const sectionLede = css({ textStyle: 'body-sm', color: 'ink-muted', marginTop: '4px' });
+
 // ----- primitive one-offs -----
 export const textareaArea = css({ minHeight: 'auto', resize: 'vertical', lineHeight: '1.5' });
-export const labelStyle = css({ textStyle: 'label-md', color: 'on-surface-variant' });
+export const labelStyle = css({ textStyle: 'label', color: 'ink' });
+/** Status signal: a short line segment (solid, broken, or dashed). */
 export const statusBadgeDot = css({
-	width: '8px',
-	height: '8px',
-	borderRadius: 'full',
+	display: 'inline-block',
+	width: '16px',
+	height: '0',
+	borderTopWidth: '4px',
+	borderRadius: '1px',
 	flexShrink: 0
 });
 export const statusDotTone = {
-	success: css({ background: 'primary', boxShadow: 'glow' }),
-	danger: css({ background: 'error' }),
-	warning: css({ background: 'warning' }),
-	neutral: css({ background: 'outline' })
+	success: css({ borderTopStyle: 'solid', borderTopColor: 'ok' }),
+	danger: css({ borderTopStyle: 'dotted', borderTopColor: 'danger' }),
+	warning: css({ borderTopStyle: 'solid', borderTopColor: 'warn' }),
+	neutral: css({ borderTopStyle: 'dashed', borderTopColor: 'ink-faint' })
 } as const;
-export const selectInvalid = css({ borderColor: 'error' });
+export const selectInvalid = css({ borderColor: 'danger' });
 export const monoLabel = css({ fontFamily: 'mono', fontSize: '14px' });
 export const collapsibleContent = css({ overflow: 'hidden' });
 export const copyBtn = css({
 	display: 'inline-flex',
 	alignItems: 'center',
 	justifyContent: 'center',
-	width: '40px',
-	height: '40px',
-	borderRadius: 'md',
+	width: '32px',
+	height: '32px',
+	borderRadius: 'sm',
 	flexShrink: 0,
-	color: 'on-surface-variant',
+	color: 'ink-muted',
 	background: 'transparent',
 	border: 'none',
 	cursor: 'pointer',
 	transitionProperty: 'background, color',
-	transitionDuration: '150ms',
-	_hover: { color: 'primary', background: 'surface-container-high' },
-	_focusVisible: { outline: '2px solid {colors.primary}', outlineOffset: '2px' },
-	'& svg': { width: '20px', height: '20px' }
+	transitionDuration: '120ms',
+	_hover: { color: 'ink', background: 'sunk' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '1px' },
+	'& svg': { width: '17px', height: '17px' }
 });
-export const copyOk = css({ color: 'primary' });
-export const toastOkIcon = css({ color: 'primary' });
+export const copyOk = css({ color: 'ok', _hover: { color: 'ok' } });
+export const toastOkIcon = css({ color: 'inherit' });
 export const toastBody = css({ minWidth: '0', flex: '1' });
 export const themeToggleBtn = css({
 	display: 'inline-flex',
 	alignItems: 'center',
 	justifyContent: 'center',
-	width: '40px',
-	height: '40px',
+	width: '36px',
+	height: '36px',
 	borderRadius: 'full',
-	color: 'on-surface-variant',
+	color: 'ink-muted',
 	background: 'transparent',
 	border: 'none',
 	cursor: 'pointer',
 	transitionProperty: 'background, color',
-	transitionDuration: '150ms',
-	_hover: { color: 'primary', background: 'surface-variant' },
-	_focusVisible: { outline: '2px solid {colors.primary}', outlineOffset: '2px' },
-	'& svg': { width: '22px', height: '22px' }
+	transitionDuration: '120ms',
+	_hover: { color: 'ink', background: 'sunk' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' },
+	'& svg': { width: '20px', height: '20px' }
 });
 
 export const confirmActions = css({
 	display: 'flex',
 	justifyContent: 'flex-end',
 	gap: '8px',
-	marginTop: '24px'
+	marginTop: '28px'
 });

@@ -3,9 +3,9 @@
 	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import '../app.css';
-	// Self-hosted variable fonts (Plus Jakarta Sans UI, JetBrains Mono code).
-	import '@fontsource-variable/plus-jakarta-sans';
-	import '@fontsource-variable/jetbrains-mono';
+	// Self-hosted variable fonts: Overpass (UI) and Overpass Mono (tool output).
+	import '@fontsource-variable/overpass';
+	import '@fontsource-variable/overpass-mono';
 	import ThemeToggle from '$lib/components/theme-toggle.svelte';
 	import Toaster from '$lib/components/ui/toaster.svelte';
 	import { fetchSetupStatus, getJson } from '$lib/api.js';
@@ -17,7 +17,7 @@
 		header,
 		headerInner,
 		brand,
-		statusDot as dot,
+		brandMark,
 		logo,
 		nav,
 		navLink,
@@ -48,7 +48,7 @@
 	const isAdminRoute = $derived(path === '/admin' || path.startsWith('/admin/'));
 	const isDiagnostics = $derived(path === '/');
 	const showHeader = $derived(!isAuthRoute);
-	const showFooter = $derived(!isAuthRoute && !isAdminRoute);
+	const showFooter = $derived(!isAuthRoute && !isAdminRoute && !!(termsUrl || customBlock));
 
 	// Re-check the session after every navigation so the Administration link
 	// appears right after an in-app sign-in and disappears after log-out.
@@ -81,7 +81,7 @@
 					{#if logoUrl}
 						<img src={logoUrl} alt="" class={logo} />
 					{:else}
-						<span class={dot} aria-hidden="true"></span>
+						<span class={brandMark} aria-hidden="true"></span>
 					{/if}
 					<span>{siteTitle}</span>
 				</a>

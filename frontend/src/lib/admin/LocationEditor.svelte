@@ -13,6 +13,7 @@
 		pageHead,
 		pageTitle,
 		pageSub,
+		headRoundel,
 		panelCard,
 		panelTitle,
 		methodsIntro,
@@ -53,6 +54,9 @@
 		type IperfEndpoint,
 		type TestFile
 	} from './types.js';
+	import StatusBadge from '$lib/components/ui/status-badge.svelte';
+	import { lineCode, lineStyle } from '$lib/lines.js';
+	import { locationState, STATE_LABEL } from './locationList.js';
 	import ArrowBack from '~icons/material-symbols/arrow-back';
 	import Spinner from '~icons/material-symbols/progress-activity';
 
@@ -225,9 +229,20 @@
 {:else if phase === 'error' || !detail}
 	<p class={errorText} role="alert">This location could not be loaded.</p>
 {:else}
-	<header class={pageHead}>
-		<h1 class={pageTitle}>{detail.name}</h1>
-		<p class={pageSub}>{detail.kind} node · {detail.status}</p>
+	{@const state = locationState(detail)}
+	<header class={pageHead} data-line style={lineStyle(detail.id)}>
+		<span class={headRoundel} aria-hidden="true">{lineCode(detail.name)}</span>
+		<div>
+			<h1 class={pageTitle}>{detail.name}</h1>
+			<p class={pageSub}>
+				<StatusBadge
+					tone={state === 'online' ? 'success' : state === 'offline' ? 'danger' : 'neutral'}
+					size="lg">{STATE_LABEL[state]}</StatusBadge
+				>
+				<span>{detail.kind === 'remote' ? 'Remote node' : 'Local node'}</span>
+				{#if detail.asn}<span>AS{detail.asn}</span>{/if}
+			</p>
+		</div>
 	</header>
 
 	<Tabs {tabs} bind:active label="Location sections" contentClass={panelCard}>

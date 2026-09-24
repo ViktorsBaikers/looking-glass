@@ -16,6 +16,7 @@
 	import {
 		authPage,
 		authCard,
+		authTitle,
 		formStack,
 		formErrorText,
 		fullWidth,
@@ -80,7 +81,7 @@
 <div class={authPage}>
 	<Card class={authCard}>
 		<CardHeader>
-			<CardTitle>Activate your account</CardTitle>
+			<CardTitle class={authTitle}>Activate your account</CardTitle>
 			<CardDescription>
 				{phase === 'ready'
 					? 'Choose the password you will sign in with.'

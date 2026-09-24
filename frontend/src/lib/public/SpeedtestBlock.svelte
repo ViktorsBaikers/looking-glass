@@ -1,9 +1,9 @@
 <script lang="ts">
 	import Download from '~icons/material-symbols/download';
 	import Upload from '~icons/material-symbols/upload';
-	import { Button, buttonVariants } from '$lib/components/ui/button/index.js';
+	import { Button } from '$lib/components/ui/button/index.js';
 	import CopyButton from '$lib/components/ui/copy-button.svelte';
-	import { cx } from 'styled-system/css';
+	import { lineStyle } from '$lib/lines.js';
 	import { downloadUrl } from './api.js';
 	import { barWidths, runSpeedTest } from './speedtest.js';
 	import {
@@ -33,8 +33,7 @@
 		panelError,
 		fileLinks,
 		fileLink,
-		fileSize,
-		downloadIcon
+		fileSize
 	} from './styles.js';
 	import type { LocationDetail } from '$lib/admin/types.js';
 
@@ -117,7 +116,7 @@
 	const uploadWidth = $derived(measured ? doneUploadSplit : liveWidths.upload);
 </script>
 
-<section class={speedSection} aria-label="Speed Tests">
+<section class={speedSection} aria-label="Speed Tests" data-line style={lineStyle(location.id)}>
 	<h2 class={speedTitle}>Speed Tests</h2>
 	<div class={speedGrid}>
 		{#if location.iperf.length > 0}
@@ -205,7 +204,7 @@
 						<a
 							href={downloadUrl(location, file)}
 							download={file.label}
-							class={cx(buttonVariants({ variant: 'secondary', size: 'sm' }), fileLink, downloadIcon)}
+							class={fileLink}
 						>
 							<Download aria-hidden="true" />
 							{file.label}

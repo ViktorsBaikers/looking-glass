@@ -14,18 +14,17 @@
 	import { fetchLocations, fetchVisitorIp } from '$lib/public/api.js';
 	import { runnableMethods, targetPlaceholder, targetPreflightError } from '$lib/public/methods.js';
 	import { measureLatency } from '$lib/public/latency.js';
+	import { lineCode, lineStyle } from '$lib/lines.js';
 	import {
 		page,
+		pageHead,
 		pageTitle,
 		pageSubtitle,
+		band,
 		panel as controlPanel,
-		locationPanel,
-		panelLeft,
-		inputsGrid,
-		panelRight,
 		runButton,
 		panelNote,
-		panelError,
+		pageNote,
 		resultsSection
 	} from '$lib/public/styles.js';
 	import type { LocationDetail } from '$lib/admin/types.js';
@@ -37,6 +36,8 @@
 	let selectedId = $state('');
 	let method = $state('');
 	let runMethod = $state('');
+	let runLocation = $state<LocationDetail | null>(null);
+	let outputSection = $state<HTMLElement>();
 	let target = $state('');
 	let requiredTargetError = $state('');
 	let detectedIp = $state<string | null>(null);
@@ -46,7 +47,10 @@
 	const locationTabs = $derived(
 		locations.map((location) => ({
 			id: location.id,
-			label: location.asn ? `${location.name} (AS${location.asn})` : location.name
+			label: location.name,
+			meta: location.asn ? `AS${location.asn}` : undefined,
+			code: lineCode(location.name),
+			line: lineStyle(location.id)
 		}))
 	);
 	const methodOptions = $derived(selected ? runnableMethods(selected) : []);
@@ -97,7 +101,14 @@
 		}
 		if (preflightError || !selected) return;
 		runMethod = method;
+		runLocation = selected;
 		controller.start(selected.id, selected.name, method, trimmed);
+		// On short screens the output starts below the fold: bring it up.
+		const top = outputSection?.getBoundingClientRect().top ?? 0;
+		if (top > window.innerHeight - 120) {
+			const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+			outputSection?.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+		}
 	}
 
 	function onsubmit(event: SubmitEvent) {
@@ -108,72 +119,68 @@
 </script>
 
 <div class={page}>
-	<header>
+	<header class={pageHead}>
 		<h1 class={pageTitle}>Network diagnostics</h1>
 		<p class={pageSubtitle}>Run connectivity and performance tests from any available location.</p>
 	</header>
 
 	{#if phase === 'error'}
-		<p class={panelError} role="alert">Couldn't load locations. Refresh the page to try again.</p>
+		<p class={pageNote} role="alert">Couldn't load locations. Refresh the page to try again.</p>
 	{:else if phase === 'loading'}
-		<p class={panelNote}>Loading locations…</p>
+		<p class={pageNote}>Loading locations…</p>
 	{:else if !hasLocations}
-		<p class={panelNote}>No locations online yet.</p>
+		<p class={pageNote}>No locations online yet.</p>
 	{:else}
-		<Tabs tabs={locationTabs} bind:active={selectedId} label="Location" contentClass={locationPanel}>
-			{#snippet panel()}
-		<form class={controlPanel} onsubmit={onsubmit}>
-			<div class={panelLeft}>
-				<div class={inputsGrid}>
-					<Field label="Method" for="method">
-						<Select
-							id="method"
-							items={methodOptions}
-							bind:value={method}
-							placeholder="Select method"
-							disabled={controller.active || methodOptions.length === 0}
-						/>
-					</Field>
-					<Field label="Target" for="target" error={targetError}>
-						<Input
-							id="target"
-							bind:value={target}
-							mono
-							placeholder={targetPlaceholder(method)}
-							disabled={controller.active}
-							invalid={targetError !== ''}
-							aria-describedby={targetError ? 'target-error' : undefined}
-						/>
-					</Field>
+		<Tabs tabs={locationTabs} bind:active={selectedId} label="Location" variant="routes">
+			{#snippet panel(tab)}
+				<div class={band} data-line style={tab.line}>
+					<form class={controlPanel} onsubmit={onsubmit}>
+						<Field label="Method" for="method">
+							<Select
+								id="method"
+								items={methodOptions}
+								bind:value={method}
+								placeholder="Select method"
+								disabled={controller.active || methodOptions.length === 0}
+							/>
+						</Field>
+						<Field label="Target" for="target" error={targetError}>
+							<Input
+								id="target"
+								bind:value={target}
+								mono
+								placeholder={targetPlaceholder(method)}
+								disabled={controller.active}
+								invalid={targetError !== ''}
+								aria-describedby={targetError ? 'target-error' : undefined}
+							/>
+						</Field>
+						<Button type="submit" class={runButton} disabled={!controller.active && !canRun}>
+							{controller.active ? 'Cancel' : 'Run Diagnostic'}
+						</Button>
+						{#if methodOptions.length === 0}
+							<p class={panelNote}>This location has no runnable methods enabled yet.</p>
+						{/if}
+					</form>
+					{#if selected}
+						<StatusPanel location={selected} {detectedIp} {latencyMs} />
+					{/if}
 				</div>
-				{#if methodOptions.length === 0}
-					<p class={panelNote}>This location has no runnable methods enabled yet.</p>
-				{/if}
-			</div>
-
-			<div class={panelRight}>
-				{#if selected}
-					<StatusPanel location={selected} {detectedIp} {latencyMs} />
-				{/if}
-				<Button type="submit" size="lg" class={runButton} disabled={!controller.active && !canRun}>
-					{controller.active ? 'Cancel' : 'Run Diagnostic'}
-				</Button>
-			</div>
-		</form>
 			{/snippet}
 		</Tabs>
 	{/if}
 
-	<div class={resultsSection}>
+	<section class={resultsSection} aria-label="Output" bind:this={outputSection}>
 		<Console
 			{controller}
 			method={runMethod || method}
 			idleTitle={selected ? `${selected.name} ~ ${method}` : ''}
+			location={runLocation ?? selected ?? null}
 		/>
 		{#if metrics.length > 0}
 			<MetricsGrid {metrics} />
 		{/if}
-	</div>
+	</section>
 
 	{#if selected}
 		<SpeedtestBlock location={selected} />

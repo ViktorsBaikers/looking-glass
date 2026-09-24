@@ -8,7 +8,8 @@
 	import Select from '$lib/components/ui/select.svelte';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card/index.js';
 	import { toast } from '$lib/toast.svelte.js';
-	import { spin, statusDot } from '$lib/styles.js';
+	import { spin, adminPage, adminPageHead, adminTitle, adminLede } from '$lib/styles.js';
+	import { lineStyle } from '$lib/lines.js';
 	import { getSettings, saveSettings } from '$lib/admin/api.js';
 	import { isDirty, toPayload, type SettingsDraft } from '$lib/admin/settings.js';
 	import * as s from '$lib/admin/settings-styles.js';
@@ -43,7 +44,6 @@
 	const dirty = $derived(saved !== null && form !== null && isDirty(saved, form));
 	const hasLogo = $derived(!!form?.logo_url && form.logo_url.trim() !== '');
 	const hasTerms = $derived(!!form?.terms_url && form.terms_url.trim() !== '');
-	const lettermark = $derived(form ? (form.site_title.trim().charAt(0) || 'L').toUpperCase() : 'L');
 	const message = $derived(
 		form && form.custom_block && form.custom_block.trim() !== ''
 			? form.custom_block
@@ -68,30 +68,28 @@
 
 {#snippet previewCard(dark: boolean)}
 	{#if form}
-		<div class={dark ? s.previewCardDark : s.previewCardLight}>
-			<div class={s.previewHead}>
-				<span class={statusDot} aria-hidden="true"></span>
+		<div class={cx(s.previewCard, dark ? 'dark' : 'light')}>
+			<div class={s.previewBar}>
 				{#if hasLogo}
 					<img src={form.logo_url ?? ''} alt="" class={s.previewLogo} />
 				{:else}
-					<span
-						class={cx(s.previewMark, dark ? s.previewMarkDark : s.previewMarkLight)}
-						aria-hidden="true">{lettermark}</span
-					>
+					<span class={s.previewMark} aria-hidden="true"></span>
 				{/if}
-				<div>
-					<div class={s.previewTitle}>{form.site_title}</div>
-					<div class={cx(s.previewCaption, dark ? s.previewMutedDark : s.previewMutedLight)}>
-						{dark ? 'Dark theme' : 'Light theme'}
-					</div>
-				</div>
+				<span class={s.previewTitle}>{form.site_title}</span>
+				<span class={s.previewNav} aria-hidden="true">Diagnostics</span>
 			</div>
-			<p class={cx(s.previewMessage, dark ? s.previewMutedDark : s.previewMutedLight)}>{message}</p>
-			<p class={cx(s.previewMeta, dark ? s.previewMutedDark : s.previewMutedLight)}>
-				<span>{hasLogo ? 'Custom logo' : 'Lettermark logo'}</span> •
-				<span>{hasTerms ? 'Terms link' : 'No terms link'}</span> •
-				<span>Default: {form.default_theme}</span>
-			</p>
+			<div class={s.previewBody}>
+				<div class={s.previewLine} data-line style={lineStyle('preview')} aria-hidden="true">
+					<span class={s.previewRoundel}>LG</span>
+				</div>
+				<p class={s.previewMessage}>{message}</p>
+				<p class={s.previewMeta}>
+					<span class={s.previewScheme}>{dark ? 'Dark theme' : 'Light theme'}</span> ·
+					<span>{hasLogo ? 'Custom logo' : 'Default mark'}</span> ·
+					<span>{hasTerms ? 'Terms link' : 'No terms link'}</span> ·
+					<span>Default: {form.default_theme}</span>
+				</p>
+			</div>
 		</div>
 	{/if}
 {/snippet}
@@ -109,11 +107,14 @@
 		</CardContent>
 	</Card>
 {:else if form}
-	<header class={s.pageHead}>
-		<h1 class={s.pageTitle}>Settings</h1>
-		<p class={s.pageSub}>
-			Preview branding and appearance, then publish them with the limits every run must follow.
-		</p>
+	<div class={adminPage}>
+	<header class={adminPageHead}>
+		<div>
+			<h1 class={adminTitle}>Settings</h1>
+			<p class={adminLede}>
+				Preview branding and appearance, then publish them with the limits every run must follow.
+			</p>
+		</div>
 	</header>
 
 	<div class={s.pageGrid}>
@@ -194,5 +195,6 @@
 			{@render previewCard(false)}
 			{@render previewCard(true)}
 		</aside>
+	</div>
 	</div>
 {/if}
