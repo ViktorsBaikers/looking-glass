@@ -59,6 +59,11 @@ pub enum AdministratorStatus {
 /// pending — the password is set at activation, never by the creating peer. The
 /// activation token itself is never stored: only its SHA-256 hash and absolute
 /// expiry, and regenerating replaces both, which is what invalidates the old link.
+/// `session_generation` is the credential epoch: every password rotation bumps
+/// it inside the same write transaction, and the session extractor refuses any
+/// session stamped with an older value — so a session record resurrected by an
+/// overlapping request cannot survive the rotation. The serde default keeps
+/// rows written before the field (and the sessions minted from them) valid.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Administrator {
     pub id: String,
@@ -68,6 +73,8 @@ pub struct Administrator {
     pub created_at: u64,
     pub activation_token_hash: Option<String>,
     pub activation_expires_at: Option<u64>,
+    #[serde(default)]
+    pub session_generation: u64,
 }
 
 /// The legacy single-admin row shape, decoded only by the open-time migration.
@@ -404,6 +411,22 @@ fn backend<E: std::fmt::Display>(e: E) -> StoreError {
     StoreError::Backend(e.to_string())
 }
 
+/// Why [`Store::remove_administrator`] refused — the spec #1 guard rails,
+/// checked inside the delete transaction itself.
+#[derive(Debug)]
+pub enum RemoveAdministratorError {
+    NotFound,
+    CannotRemoveSelf,
+    LastActive,
+    Backend(StoreError),
+}
+
+impl From<StoreError> for RemoveAdministratorError {
+    fn from(error: StoreError) -> Self {
+        Self::Backend(error)
+    }
+}
+
 pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -546,6 +569,7 @@ impl Store {
                     created_at: legacy.created_at,
                     activation_token_hash: None,
                     activation_expires_at: None,
+                    session_generation: 0,
                 };
                 let encoded = serde_json::to_vec(&admin).map_err(backend)?;
                 admins
@@ -649,6 +673,7 @@ impl Store {
                 created_at: unix_now(),
                 activation_token_hash: None,
                 activation_expires_at: None,
+                session_generation: 0,
             };
             let encoded = serde_json::to_vec(&admin).map_err(backend)?;
             admins
@@ -774,8 +799,82 @@ impl Store {
         Ok(activated)
     }
 
-    pub fn delete_administrator(&self, id: &str) -> Result<bool, StoreError> {
-        self.remove_record(ADMINISTRATOR, id)
+    /// Remove one administrator under the spec #1 guard rails — enforced inside
+    /// the same redb write transaction as the delete, so two peers concurrently
+    /// removing each other can never both pass the last-active check (redb
+    /// serializes writers; the loser re-reads the winner's committed table).
+    pub fn remove_administrator(
+        &self,
+        caller_id: &str,
+        target_id: &str,
+    ) -> Result<(), RemoveAdministratorError> {
+        let txn = self.db.begin_write().map_err(backend)?;
+        {
+            let mut admins = txn.open_table(ADMINISTRATOR).map_err(backend)?;
+            let target: Administrator = match admins.get(target_id).map_err(backend)? {
+                Some(guard) => serde_json::from_slice(guard.value()).map_err(backend)?,
+                None => return Err(RemoveAdministratorError::NotFound),
+            };
+            if target.id == caller_id {
+                return Err(RemoveAdministratorError::CannotRemoveSelf);
+            }
+            if target.status == AdministratorStatus::Active {
+                let mut active = 0usize;
+                for entry in admins.iter().map_err(backend)? {
+                    let (_key, value) = entry.map_err(backend)?;
+                    let admin: Administrator =
+                        serde_json::from_slice(value.value()).map_err(backend)?;
+                    if admin.status == AdministratorStatus::Active {
+                        active += 1;
+                    }
+                }
+                if active <= 1 {
+                    return Err(RemoveAdministratorError::LastActive);
+                }
+            }
+            admins.remove(target_id).map_err(backend)?;
+        }
+        txn.commit().map_err(backend)?;
+        Ok(())
+    }
+
+    /// Conditional password rotation: one write transaction that requires the
+    /// row to still exist, still be active, and still carry the exact hash the
+    /// handler verified against — so a removal (or a second rotation) racing
+    /// the Argon2 work can never be undone by this write, and the row is never
+    /// re-created. On success stores `new_hash`, bumps `session_generation`
+    /// (revoking every session stamped with an older value), and returns the
+    /// new generation; `Ok(None)` when any precondition broke.
+    pub fn rotate_password(
+        &self,
+        id: &str,
+        expected_hash: &str,
+        new_hash: String,
+    ) -> Result<Option<u64>, StoreError> {
+        let txn = self.db.begin_write().map_err(backend)?;
+        let generation = {
+            let mut admins = txn.open_table(ADMINISTRATOR).map_err(backend)?;
+            let current: Option<Administrator> = match admins.get(id).map_err(backend)? {
+                Some(guard) => Some(serde_json::from_slice(guard.value()).map_err(backend)?),
+                None => None,
+            };
+            let eligible = current.filter(|admin| {
+                admin.status == AdministratorStatus::Active
+                    && admin.password_hash.as_deref() == Some(expected_hash)
+            });
+            match eligible {
+                Some(mut admin) => {
+                    admin.password_hash = Some(new_hash);
+                    admin.session_generation += 1;
+                    let encoded = serde_json::to_vec(&admin).map_err(backend)?;
+                    admins.insert(id, encoded.as_slice()).map_err(backend)?;
+                    Some(admin.session_generation)
+                }
+                None => None,
+            }
+        };
+        txn.commit().map_err(backend)?;
+        Ok(generation)
     }
 
     pub(crate) fn persist_settings(&self, settings: &GlobalSettings) -> Result<(), StoreError> {
