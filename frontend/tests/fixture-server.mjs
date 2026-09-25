@@ -731,6 +731,22 @@ createServer(async (request, response) => {
 			return json(response, location, 201);
 		}
 	}
+	// Mirrors central's reorder: the ids must be every location exactly once.
+	if (method === 'PUT' && path === '/api/admin/locations/order') {
+		if (!signedIn()) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
+		const { ids } = await readJson(request);
+		const valid =
+			Array.isArray(ids) &&
+			ids.length === locations.length &&
+			new Set(ids).size === ids.length &&
+			locations.every((location) => ids.includes(location.id));
+		if (!valid) {
+			return json(response, { error: 'stale_order', message: 'The location list changed. Reload it and try again.' }, 409);
+		}
+		locations.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+		response.writeHead(204);
+		return response.end();
+	}
 	const adminLocation = /^\/api\/admin\/locations\/([^/]+)$/.exec(path);
 	if (adminLocation) {
 		if (!signedIn()) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);

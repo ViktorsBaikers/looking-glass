@@ -34,6 +34,7 @@ pub fn admin_routes() -> Router<AppState> {
             "/api/admin/locations",
             get(list_locations).post(create_location),
         )
+        .route("/api/admin/locations/order", put(reorder_locations))
         .route(
             "/api/admin/locations/{id}",
             get(get_location)
@@ -384,6 +385,32 @@ async fn delete_location(
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound)
+    }
+}
+
+#[derive(Deserialize)]
+struct LocationOrderInput {
+    ids: Vec<String>,
+}
+
+/// Replace the location order (the public tab order). The body must list every
+/// location exactly once, so a client working from a stale list gets a 409
+/// instead of silently dropping a location a peer just added.
+async fn reorder_locations(
+    State(state): State<AppState>,
+    _admin: AdminSession,
+    headers: HeaderMap,
+    Json(body): Json<LocationOrderInput>,
+) -> Result<StatusCode, ApiError> {
+    if state.store.reorder_locations(&body.ids)? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        log_validation_rejected(&correlation_id(&headers), "admin.location", "stale_order");
+        Err(ApiError::Coded(
+            StatusCode::CONFLICT,
+            "stale_order",
+            "The location list changed. Reload it and try again.",
+        ))
     }
 }
 

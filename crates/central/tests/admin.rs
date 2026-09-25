@@ -14,54 +14,9 @@ use std::net::SocketAddr;
 
 use central::AppState;
 use common::{
-    assert_status, body_string, secure_request, send, session_cookie, temp_db_path, test_state,
-    test_state_at, SETUP_TOKEN, TRUSTED_PROXY,
+    assert_status, authed, body_string, json_body, send, setup_and_login, temp_db_path, test_state,
+    test_state_at, TRUSTED_PROXY,
 };
-
-const PASSWORD: &str = "correct-horse-battery-staple";
-
-async fn setup_and_login(state: &AppState) -> String {
-    let install = send(
-        central::build(state.clone()),
-        secure_request(
-            "POST",
-            "/api/setup",
-            &json!({ "setup_token": SETUP_TOKEN, "username": "alice", "password": PASSWORD })
-                .to_string(),
-        ),
-    )
-    .await;
-    assert_status(&install, StatusCode::CREATED);
-
-    let login = send(
-        central::build(state.clone()),
-        secure_request(
-            "POST",
-            "/api/auth/login",
-            &json!({ "username": "alice", "password": PASSWORD }).to_string(),
-        ),
-    )
-    .await;
-    assert_status(&login, StatusCode::NO_CONTENT);
-    session_cookie(&login).expect("session cookie from login")
-}
-
-/// A trusted-proxy admin request carrying the session cookie.
-fn authed(method: &str, uri: &str, cookie: &str, json: &str) -> Request<Body> {
-    Request::builder()
-        .method(method)
-        .uri(uri)
-        .header("content-type", "application/json")
-        .header("x-forwarded-proto", "https")
-        .header("cookie", cookie)
-        .extension(ConnectInfo(SocketAddr::new(TRUSTED_PROXY, 40000)))
-        .body(Body::from(json.to_string()))
-        .unwrap()
-}
-
-async fn json_body(response: axum::http::Response<Body>) -> Value {
-    serde_json::from_str(&body_string(response).await).expect("json body")
-}
 
 // AC4/AC23: the admin surface is fail-closed — an admin route with no session is
 // refused, never served.
@@ -363,6 +318,49 @@ async fn public_names(state: &AppState) -> Vec<String> {
         .iter()
         .map(|loc| loc["name"].as_str().unwrap().to_string())
         .collect()
+}
+
+/// The reorder route reaches its handler (not `PUT /locations/{id}` with
+/// id "order"), drives the public order, and refuses a stale id set.
+#[tokio::test]
+async fn reordering_locations_drives_the_public_order() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let mut ids = Vec::new();
+    for name in ["Alpha", "Bravo", "Charlie"] {
+        let created = send(
+            central::build(state.clone()),
+            authed(
+                "POST",
+                "/api/admin/locations",
+                &cookie,
+                &json!({ "name": name, "geo_label": "", "kind": "local", "offered_methods": ["ping"] })
+                    .to_string(),
+            ),
+        )
+        .await;
+        assert_status(&created, StatusCode::CREATED);
+        ids.push(json_body(created).await["id"].as_str().unwrap().to_string());
+    }
+
+    let order = json!({ "ids": [&ids[2], &ids[0], &ids[1]] }).to_string();
+    let reordered = send(
+        central::build(state.clone()),
+        authed("PUT", "/api/admin/locations/order", &cookie, &order),
+    )
+    .await;
+    assert_status(&reordered, StatusCode::NO_CONTENT);
+    assert_eq!(public_names(&state).await, ["Charlie", "Alpha", "Bravo"]);
+
+    let stale = json!({ "ids": [&ids[0], &ids[1]] }).to_string();
+    let refused = send(
+        central::build(state.clone()),
+        authed("PUT", "/api/admin/locations/order", &cookie, &stale),
+    )
+    .await;
+    assert_status(&refused, StatusCode::CONFLICT);
+    assert_eq!(json_body(refused).await["error"], "stale_order");
+    assert_eq!(public_names(&state).await, ["Charlie", "Alpha", "Bravo"]);
 }
 
 // AC7 (online) / AC17 / FR-026: a remote whose agent is heartbeating (recent
