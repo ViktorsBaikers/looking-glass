@@ -15,7 +15,7 @@
 //! channel.
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -387,6 +387,7 @@ fn pinned_client_config(fingerprint: &str) -> Result<ClientConfig, TunnelError> 
     let algorithms = provider.signature_verification_algorithms;
     let verifier = Arc::new(PinnedCentral {
         pinned_fingerprint: fingerprint.to_string(),
+        captured_identity: None,
         algorithms,
     });
     let config = ClientConfig::builder_with_provider(provider)
@@ -404,9 +405,11 @@ fn pinned_client_config(fingerprint: &str) -> Result<ClientConfig, TunnelError> 
 /// signature against that certificate's key, so pinning does not weaken the TLS
 /// proof of possession.
 #[derive(Debug)]
-struct PinnedCentral {
-    pinned_fingerprint: String,
-    algorithms: WebPkiSupportedAlgorithms,
+pub(crate) struct PinnedCentral {
+    pub(crate) pinned_fingerprint: String,
+    /// Set by enrollment, which keeps the identity it verified.
+    pub(crate) captured_identity: Option<Arc<Mutex<Option<Vec<u8>>>>>,
+    pub(crate) algorithms: WebPkiSupportedAlgorithms,
 }
 
 impl ServerCertVerifier for PinnedCentral {
@@ -418,13 +421,15 @@ impl ServerCertVerifier for PinnedCentral {
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        verify_pinned_identity(end_entity.as_ref(), &self.pinned_fingerprint)
-            .map(|()| ServerCertVerified::assertion())
-            .map_err(|_| {
-                rustls::Error::General(
-                    "central identity does not match the pinned fingerprint".to_string(),
-                )
-            })
+        verify_pinned_identity(end_entity.as_ref(), &self.pinned_fingerprint).map_err(|_| {
+            rustls::Error::General(
+                "central identity does not match the pinned fingerprint".to_string(),
+            )
+        })?;
+        if let Some(Ok(mut captured)) = self.captured_identity.as_ref().map(|c| c.lock()) {
+            *captured = Some(end_entity.as_ref().to_vec());
+        }
+        Ok(ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(

@@ -15,18 +15,18 @@ use std::net::IpAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::WebPkiSupportedAlgorithms;
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
+use rustls::pki_types::ServerName;
+use rustls::ClientConfig;
 use serde::{Deserialize, Serialize};
 use shared::protocol::{
-    constant_time_eq, fingerprint, verify_pinned_identity, EnrollRequest, EnrollResponse,
-    ENV_CENTRAL_FINGERPRINT, ENV_CENTRAL_URL, ENV_ENROLL_TOKEN, ENV_TUNNEL_URL, PROTOCOL_VERSION,
+    constant_time_eq, fingerprint, EnrollRequest, EnrollResponse, ENV_CENTRAL_FINGERPRINT,
+    ENV_CENTRAL_URL, ENV_ENROLL_TOKEN, ENV_TUNNEL_URL, PROTOCOL_VERSION,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
+
+use crate::tunnel::PinnedCentral;
 
 /// The three values the install command bakes in, recovered from the agent's
 /// environment: where central is, the fingerprint to pin it by, and the token.
@@ -198,9 +198,9 @@ impl HttpsEnrollConnector {
 impl CentralConnector for HttpsEnrollConnector {
     async fn exchange(&self, request: EnrollRequest) -> Result<PresentedEnrollment, EnrollError> {
         let captured_identity = Arc::new(Mutex::new(None));
-        let verifier = Arc::new(PinnedEnrollCentral {
+        let verifier = Arc::new(PinnedCentral {
             pinned_fingerprint: self.pinned_fingerprint.clone(),
-            captured_identity: Arc::clone(&captured_identity),
+            captured_identity: Some(Arc::clone(&captured_identity)),
             algorithms: rustls::crypto::ring::default_provider().signature_verification_algorithms,
         });
         let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -273,59 +273,6 @@ fn split_http_response(bytes: &[u8]) -> Result<(&[u8], &[u8]), EnrollError> {
         ));
     }
     Ok((headers, body))
-}
-
-#[derive(Debug)]
-struct PinnedEnrollCentral {
-    pinned_fingerprint: String,
-    captured_identity: Arc<Mutex<Option<Vec<u8>>>>,
-    algorithms: WebPkiSupportedAlgorithms,
-}
-
-impl ServerCertVerifier for PinnedEnrollCentral {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        verify_pinned_identity(end_entity.as_ref(), &self.pinned_fingerprint)
-            .map(|()| {
-                if let Ok(mut captured) = self.captured_identity.lock() {
-                    *captured = Some(end_entity.as_ref().to_vec());
-                }
-                ServerCertVerified::assertion()
-            })
-            .map_err(|_| {
-                rustls::Error::General(
-                    "central identity does not match the pinned fingerprint".to_string(),
-                )
-            })
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.algorithms.supported_schemes()
-    }
 }
 
 /// The credential an agent keeps after a verified enrollment. Persisted to the node

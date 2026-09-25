@@ -379,7 +379,11 @@ impl LivenessBatch {
                 self.flushing.store(false, Ordering::Release);
                 // A record landing between the drain and the flag drop found the
                 // flag still set and did not spawn: reclaim and keep draining.
-                let idle = self.pending.lock().unwrap_or_else(|p| p.into_inner()).is_empty();
+                let idle = self
+                    .pending
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_empty();
                 if idle || self.flushing.swap(true, Ordering::AcqRel) {
                     return;
                 }

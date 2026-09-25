@@ -8,7 +8,7 @@
 
 use std::io;
 use std::net::SocketAddr;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,6 +20,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::StreamExt;
 use serde_json::json;
+use shared::files::resolve_within;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tower_http::cors::{Any, CorsLayer};
@@ -166,24 +167,6 @@ async fn count_upload(body: Body) -> Response {
         }
     }
     (StatusCode::OK, Json(json!({ "bytes": total }))).into_response()
-}
-
-fn resolve_within(root: &Path, source_ref: &str) -> Option<PathBuf> {
-    let relative = Path::new(source_ref);
-    if relative
-        .components()
-        .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return None;
-    }
-
-    let candidate = root.join(relative);
-    match (candidate.canonicalize(), root.canonicalize()) {
-        (Ok(resolved), Ok(canonical_root)) => {
-            resolved.starts_with(canonical_root).then_some(candidate)
-        }
-        _ => Some(candidate),
-    }
 }
 
 #[cfg(test)]
