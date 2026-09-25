@@ -41,6 +41,9 @@ export const createLocation = (body: LocationInput) =>
 export const updateLocation = (id: string, body: LocationInput) =>
 	putJson<Location>(`/api/admin/locations/${id}`, body);
 export const deleteLocation = (id: string) => del(`/api/admin/locations/${id}`);
+/** Set the public tab order; `ids` must list every location exactly once (409 otherwise). */
+export const reorderLocations = (ids: string[]) =>
+	putJson<undefined>('/api/admin/locations/order', { ids });
 export const revokeAgent = (id: string) =>
 	postJsonReturning<Location>(`/api/admin/locations/${id}/agent/revoke`, {});
 

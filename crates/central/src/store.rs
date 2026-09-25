@@ -5,6 +5,7 @@
 //! restart lives here. redb has no SQL, so relations and the location cascade are
 //! hand-rolled Rust over serde-encoded rows keyed by id (the redb-hold decision).
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,6 +34,10 @@ pub(crate) const SESSION_COOKIE_KEY: TableDefinition<&str, &[u8]> =
     TableDefinition::new(SESSION_COOKIE_KEY_TABLE_NAME);
 pub(crate) const SETTINGS: TableDefinition<&str, &[u8]> = TableDefinition::new("settings");
 pub(crate) const LOCATION: TableDefinition<&str, &[u8]> = TableDefinition::new("location");
+/// One row (`ORDER_KEY`) holding the admin-chosen location order as a list of ids.
+/// Ids absent from it (older volumes, fresh creates) sort after it by `created_at`.
+pub(crate) const LOCATION_ORDER: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("location_order");
 pub(crate) const TEST_IP: TableDefinition<&str, &[u8]> = TableDefinition::new("test_ip");
 pub(crate) const IPERF: TableDefinition<&str, &[u8]> = TableDefinition::new("iperf_endpoint");
 pub(crate) const TEST_FILE: TableDefinition<&str, &[u8]> = TableDefinition::new("test_file");
@@ -43,6 +48,7 @@ pub(crate) const ENROLLMENT_TOKEN: TableDefinition<&str, &[u8]> =
 const LEGACY_ADMIN_KEY: &str = "admin";
 const SETUP_KEY: &str = "state";
 const SETTINGS_KEY: &str = "global";
+const ORDER_KEY: &str = "ids";
 const SESSION_COOKIE_KEY_ID: &str = "signing";
 const SESSION_COOKIE_KEY_LEN: usize = 64;
 
@@ -478,6 +484,7 @@ impl Store {
         txn.open_table(SETUP).map_err(backend)?;
         txn.open_table(SESSION).map_err(backend)?;
         txn.open_table(LOCATION).map_err(backend)?;
+        txn.open_table(LOCATION_ORDER).map_err(backend)?;
         txn.open_table(TEST_IP).map_err(backend)?;
         txn.open_table(IPERF).map_err(backend)?;
         txn.open_table(TEST_FILE).map_err(backend)?;
@@ -881,10 +888,54 @@ impl Store {
         self.write_record(SETTINGS, SETTINGS_KEY, settings)
     }
 
+    /// Every location in the admin-chosen order (the public tab order).
     pub fn list_locations(&self) -> Result<Vec<Location>, StoreError> {
         let mut locations: Vec<Location> = self.read_all(LOCATION)?;
-        locations.sort_by_key(|location| location.created_at);
+        let order: Vec<String> = self
+            .read_record(LOCATION_ORDER, ORDER_KEY)?
+            .unwrap_or_default();
+        let rank: HashMap<&str, usize> = order
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (id.as_str(), index))
+            .collect();
+        locations.sort_by_key(|location| {
+            (
+                rank.get(location.id.as_str())
+                    .copied()
+                    .unwrap_or(usize::MAX),
+                location.created_at,
+            )
+        });
         Ok(locations)
+    }
+
+    /// Persist a new location order. `ids` must name every current location
+    /// exactly once; otherwise (a stale client, a concurrent create or delete)
+    /// nothing is written and `false` comes back.
+    pub fn reorder_locations(&self, ids: &[String]) -> Result<bool, StoreError> {
+        let txn = self.db.begin_write().map_err(backend)?;
+        {
+            let locations = txn.open_table(LOCATION).map_err(backend)?;
+            let mut current = HashSet::new();
+            for entry in locations.iter().map_err(backend)? {
+                current.insert(entry.map_err(backend)?.0.value().to_string());
+            }
+            let requested: HashSet<&str> = ids.iter().map(String::as_str).collect();
+            if requested.len() != ids.len()
+                || requested.len() != current.len()
+                || !current.iter().all(|id| requested.contains(id.as_str()))
+            {
+                return Ok(false);
+            }
+            let encoded = serde_json::to_vec(ids).map_err(backend)?;
+            txn.open_table(LOCATION_ORDER)
+                .map_err(backend)?
+                .insert(ORDER_KEY, encoded.as_slice())
+                .map_err(backend)?;
+        }
+        txn.commit().map_err(backend)?;
+        Ok(true)
     }
 
     pub fn get_location(&self, id: &str) -> Result<Option<Location>, StoreError> {
@@ -1089,7 +1140,9 @@ impl Store {
                 {
                     agent.last_seen = Some(*ts);
                     let encoded = serde_json::to_vec(&agent).map_err(backend)?;
-                    table.insert(id.as_str(), encoded.as_slice()).map_err(backend)?;
+                    table
+                        .insert(id.as_str(), encoded.as_slice())
+                        .map_err(backend)?;
                 }
             }
         }
@@ -1270,6 +1323,47 @@ mod tests {
             status: LocationStatus::Online,
             created_at: 0,
         }
+    }
+
+    #[test]
+    fn reorder_sets_list_order_and_rejects_stale_sets() {
+        let store = temp_store();
+        for (id, created_at) in [("a", 1), ("b", 2), ("c", 3)] {
+            let mut row = location(id, NodeKind::Local, vec![]);
+            row.created_at = created_at;
+            store.put_location(&row).unwrap();
+        }
+        let ids = |store: &Store| -> Vec<String> {
+            store
+                .list_locations()
+                .unwrap()
+                .into_iter()
+                .map(|l| l.id)
+                .collect()
+        };
+        assert_eq!(ids(&store), ["a", "b", "c"]); // no order yet: created_at
+
+        let order = ["c", "a", "b"].map(String::from);
+        assert!(store.reorder_locations(&order).unwrap());
+        assert_eq!(ids(&store), order);
+
+        // Missing, duplicated or unknown ids write nothing.
+        assert!(!store
+            .reorder_locations(&["a", "b"].map(String::from))
+            .unwrap());
+        assert!(!store
+            .reorder_locations(&["a", "a", "b"].map(String::from))
+            .unwrap());
+        assert!(!store
+            .reorder_locations(&["a", "b", "x"].map(String::from))
+            .unwrap());
+        assert_eq!(ids(&store), order);
+
+        // A location created after the last reorder goes last.
+        let mut late = location("d", NodeKind::Local, vec![]);
+        late.created_at = 0;
+        store.put_location(&late).unwrap();
+        assert_eq!(ids(&store), ["c", "a", "b", "d"]);
     }
 
     fn seed_full_location(store: &Store, id: &str) {
@@ -1599,7 +1693,10 @@ mod tests {
         store.put_agent(&agent("a1", "loc", None, false)).unwrap();
         store.touch_agent_last_seen("a1", 2000).unwrap();
         store.touch_agent_last_seen("a1", 1999).unwrap();
-        assert_eq!(store.get_agent("a1").unwrap().unwrap().last_seen, Some(2000));
+        assert_eq!(
+            store.get_agent("a1").unwrap().unwrap().last_seen,
+            Some(2000)
+        );
     }
 
     #[test]

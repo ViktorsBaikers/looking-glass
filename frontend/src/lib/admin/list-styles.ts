@@ -41,17 +41,21 @@ export const legend = css({
 	color: 'ink-muted'
 });
 export const legendItem = css({ display: 'inline-flex', alignItems: 'center', gap: '8px' });
+export const reorderNote = css({ textStyle: 'body-sm', color: 'ink-muted', marginBottom: '12px' });
 
 // ----- the line index -----
 export const list = css({
+	position: 'relative',
 	listStyle: 'none',
 	background: 'panel',
 	borderWidth: '1px',
 	borderStyle: 'solid',
 	borderColor: 'rule'
 });
-// Fixed tracks so every row's cells line up under the head row.
-const columns = '56px minmax(0, 1fr) 124px 96px 156px 292px';
+// Fixed tracks so every row's cells line up under the head row. The first
+// track widens when rows carry a reorder handle (see `reorderable`); the
+// methods track fits its longest label ("8 methods offered", the cap) tightly.
+const columns = 'var(--mark-track, 56px) minmax(0, 1fr) 124px 96px 128px 292px';
 export const headRow = css({
 	display: 'none',
 	lg: {
@@ -68,7 +72,7 @@ export const headRow = css({
 });
 export const row = css({
 	display: 'grid',
-	gridTemplateColumns: '56px minmax(0, 1fr)',
+	gridTemplateColumns: 'var(--mark-track, 56px) minmax(0, 1fr)',
 	gap: '12px 16px',
 	alignItems: 'center',
 	padding: '18px 16px',
@@ -77,6 +81,41 @@ export const row = css({
 	'& + &': { borderTopWidth: '1px', borderTopStyle: 'solid', borderTopColor: 'rule' },
 	_hover: { background: 'color-mix(in srgb, {colors.sunk} 45%, transparent)' },
 	lg: { gridTemplateColumns: columns, padding: '16px 20px' }
+});
+/** Wraps the head row and list while rows can be dragged into public order. */
+export const reorderable = css({ '--mark-track': '84px' });
+/** The row being dragged floats above the list: ink-edged so it reads in both
+ *  themes (a shadow alone vanishes on the night map). */
+export const rowDragging = css({
+	position: 'relative',
+	zIndex: 1,
+	background: 'panel',
+	boxShadow: 'popup',
+	outline: '1px solid {colors.ink}',
+	outlineOffset: '-1px',
+	_hover: { background: 'panel' }
+});
+/** While a drag is live the whole list shows the grabbing hand. */
+export const listDragging = css({ cursor: 'grabbing', userSelect: 'none', '& *': { cursor: 'grabbing' } });
+/** Grip before the roundel: drag it, or focus it and use the arrow keys. */
+export const dragHandle = css({
+	display: 'inline-flex',
+	alignItems: 'center',
+	justifyContent: 'center',
+	width: '24px',
+	height: '40px',
+	marginInlineEnd: '4px',
+	flexShrink: 0,
+	borderRadius: 'sm',
+	color: 'ink-faint',
+	cursor: 'grab',
+	touchAction: 'none',
+	transitionProperty: 'color, background',
+	transitionDuration: '120ms',
+	_hover: { color: 'ink', background: 'sunk' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '1px', color: 'ink' },
+	'&[data-dragging]': { cursor: 'grabbing', color: 'ink', background: 'sunk' },
+	'& svg': { width: '20px', height: '20px' }
 });
 /** Roundel plus a short stub of the Location's line, drawn in its state. */
 export const lineMark = css({

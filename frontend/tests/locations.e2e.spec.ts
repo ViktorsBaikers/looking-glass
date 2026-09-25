@@ -79,7 +79,8 @@ test('locations.e2e sorts by name, status and recency', async ({ page }) => {
 		await expect(sort).toHaveText(label);
 	};
 
-	await expect(firstCard).toContainText('Frankfurt'); // default: name
+	await expect(sort).toHaveText('Public order'); // default: the public tab order
+	await expect(firstCard).toContainText('Frankfurt');
 
 	await pick('recent', 'Recent');
 	await expect(firstCard).toContainText('Vienna'); // only heartbeat is Vienna's
@@ -91,6 +92,62 @@ test('locations.e2e sorts by name, status and recency', async ({ page }) => {
 
 	await pick('name', 'Name');
 	await expect(firstCard).toContainText('Frankfurt');
+});
+
+test('locations.e2e reorders by keyboard and the public tabs follow', async ({ page }) => {
+	await signIn(page, `locations-reorder-keys-${crypto.randomUUID()}`);
+	const rows = page.getByRole('listitem');
+	await expect(rows.first()).toContainText('Frankfurt');
+
+	const saved = page.waitForResponse(
+		(response) => response.url().endsWith('/api/admin/locations/order') && response.status() === 204
+	);
+	await page.getByRole('button', { name: 'Reorder Frankfurt' }).focus();
+	await page.keyboard.press('ArrowDown');
+	await saved;
+	await expect(rows.nth(0)).toContainText('Vienna');
+	await expect(rows.nth(1)).toContainText('Frankfurt');
+	await expect(page.getByRole('button', { name: 'Reorder Frankfurt' })).toBeFocused();
+	await expect(page.getByText('Frankfurt moved to position 2 of 6.')).toBeAttached();
+
+	// The order survives a reload and drives the visitor page's tab order.
+	await page.reload();
+	await expect(rows.first()).toContainText('Vienna');
+	await page.goto(`${APP}/`);
+	const tabs = page.getByRole('tab');
+	await expect(tabs.nth(0)).toContainText('Vienna');
+	await expect(tabs.nth(1)).toContainText('Frankfurt');
+});
+
+test('locations.e2e reorders by dragging a grip', async ({ page }) => {
+	await signIn(page, `locations-reorder-drag-${crypto.randomUUID()}`);
+	const rows = page.getByRole('listitem');
+	const grip = await page.getByRole('button', { name: 'Reorder Frankfurt' }).boundingBox();
+	const third = await rows.nth(2).boundingBox();
+	if (!grip || !third) throw new Error('rows not laid out');
+
+	const saved = page.waitForResponse(
+		(response) => response.url().endsWith('/api/admin/locations/order') && response.status() === 204
+	);
+	await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+	await page.mouse.down();
+	await page.mouse.move(grip.x + grip.width / 2, third.y + third.height * 0.75, { steps: 12 });
+	await page.mouse.up();
+	await saved;
+	await expect(rows.nth(2)).toContainText('Frankfurt');
+	await page.reload();
+	await expect(rows.nth(2)).toContainText('Frankfurt');
+});
+
+test('locations.e2e hides reorder grips outside the full public order', async ({ page }) => {
+	await signIn(page, `locations-reorder-gate-${crypto.randomUUID()}`);
+	await expect(page.getByRole('button', { name: /^Reorder / })).toHaveCount(6);
+	await page.getByLabel('Search locations').fill('vienna');
+	await expect(page.getByRole('button', { name: /^Reorder / })).toHaveCount(0);
+	await expect(page.getByText('Clear the search to reorder locations.')).toBeVisible();
+	await page.getByLabel('Search locations').fill('');
+	await page.locator('select').first().selectOption('name');
+	await expect(page.getByRole('button', { name: /^Reorder / })).toHaveCount(0);
 });
 
 test('locations.e2e adds a remote location and lands on its enrollment tab', async ({ page }) => {

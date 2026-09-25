@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
+	import { flip } from 'svelte/animate';
 	import { cx } from 'styled-system/css';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -29,9 +30,14 @@
 		sortField,
 		legend,
 		legendItem,
+		reorderNote,
+		reorderable,
+		dragHandle,
 		list,
 		headRow,
 		row,
+		rowDragging,
+		listDragging,
 		lineMark,
 		roundel,
 		stub,
@@ -56,6 +62,7 @@
 		listLocations,
 		createLocation,
 		deleteLocation,
+		reorderLocations,
 		revokeAgent,
 		type LocationInput
 	} from '$lib/admin/api.js';
@@ -63,6 +70,7 @@
 	import {
 		filterLocations,
 		locationState,
+		moveItem,
 		sortLocations,
 		STATE_LABEL,
 		type LocationState,
@@ -75,11 +83,12 @@
 	import Pencil from '~icons/material-symbols/edit';
 	import Trash from '~icons/material-symbols/delete';
 	import LinkOff from '~icons/material-symbols/link-off';
+	import DragIndicator from '~icons/material-symbols/drag-indicator';
 
 	let phase = $state<'loading' | 'ready' | 'error'>('loading');
 	let locations = $state<Location[]>([]);
 	let query = $state('');
-	let sortValue = $state('name');
+	let sortValue = $state('order');
 
 	// Ticks once a minute so the relative last-seen labels stay current without a
 	// per-second re-render; the online/offline state itself comes from the API.
@@ -92,6 +101,81 @@
 	const visible = $derived(
 		sortLocations(filterLocations(locations, query), sortValue as SortKey)
 	);
+	// Rows reorder only in the full public order: a filtered or re-sorted list has
+	// no single position to drop into.
+	const canReorder = $derived(sortValue === 'order' && query.trim() === '');
+
+	let listEl = $state<HTMLUListElement>();
+	let dragId = $state<string | null>(null);
+	let dragStartIds: string[] = [];
+	let announcement = $state('');
+	// Saves run one after another so a burst of arrow-key moves lands in order.
+	let saving: Promise<unknown> = Promise.resolve();
+	const flipDuration = () =>
+		matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 160;
+
+	const ids = () => locations.map((location) => location.id);
+
+	function announceMove(id: string) {
+		const index = locations.findIndex((location) => location.id === id);
+		announcement = `${locations[index].name} moved to position ${index + 1} of ${locations.length}.`;
+	}
+
+	async function saveOrder() {
+		const run = saving.then(() => reorderLocations(ids()));
+		saving = run;
+		const result = await run;
+		if (!result.ok) {
+			toast.error(result.message);
+			// The server's order is the truth; show it rather than a guess.
+			const fresh = await listLocations();
+			if (fresh.ok) locations = fresh.data;
+		}
+	}
+
+	function startDrag(event: PointerEvent, id: string) {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		dragId = id;
+		dragStartIds = ids();
+	}
+
+	function drag(event: PointerEvent) {
+		if (!dragId || !listEl) return;
+		// offsetTop ignores the flip transforms, so rows mid-animation still
+		// report their settled slot and the drop point does not jitter.
+		const y = event.clientY - listEl.getBoundingClientRect().top - listEl.clientTop;
+		const from = locations.findIndex((location) => location.id === dragId);
+		const rows = [...listEl.children] as HTMLElement[];
+		const to = rows.filter(
+			(rowEl, index) => index !== from && y > rowEl.offsetTop + rowEl.offsetHeight / 2
+		).length;
+		if (to !== from) locations = moveItem(locations, from, to);
+	}
+
+	async function endDrag() {
+		if (!dragId) return;
+		const id = dragId;
+		dragId = null;
+		if (ids().join() === dragStartIds.join()) return;
+		announceMove(id);
+		await saveOrder();
+	}
+
+	async function moveByKey(event: KeyboardEvent, id: string) {
+		const step = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+		if (!step || dragId) return;
+		event.preventDefault();
+		const from = locations.findIndex((location) => location.id === id);
+		const to = from + step;
+		if (to < 0 || to >= locations.length) return;
+		locations = moveItem(locations, from, to);
+		announceMove(id);
+		// A keyed move can detach the focused node; put focus back on its grip.
+		await tick();
+		listEl?.querySelector<HTMLElement>(`[data-reorder="${id}"]`)?.focus();
+		await saveOrder();
+	}
 
 	const tone: Record<LocationState, 'success' | 'danger' | 'neutral'> = {
 		online: 'success',
@@ -116,6 +200,7 @@
 		{ label: 'Remote (enrolled agent)', value: 'remote' }
 	];
 	const sortItems = [
+		{ label: 'Public order', value: 'order' },
 		{ label: 'Name', value: 'name' },
 		{ label: 'Status', value: 'status' },
 		{ label: 'Recent', value: 'recent' }
@@ -203,6 +288,10 @@
 	}
 </script>
 
+<!-- The window, not the grip, tracks the drag: a keyed move re-inserts the
+     dragged row, which would drop a pointer capture set on its grip. -->
+<svelte:window onpointermove={drag} onpointerup={endDrag} onpointercancel={endDrag} />
+
 <div class={adminPage}>
 	<header class={adminPageHead}>
 		<div>
@@ -234,7 +323,7 @@
 		</div>
 	</section>
 
-	<div>
+	<div class={canReorder ? reorderable : undefined}>
 		{#if phase === 'loading'}
 			<div class={skeletonList} aria-hidden="true">
 				{#each { length: 4 } as _, i (i)}
@@ -261,6 +350,13 @@
 				<Button variant="secondary" onclick={() => (query = '')}>Clear search</Button>
 			</div>
 		{:else}
+			{#if sortValue === 'order'}
+				<p class={reorderNote} id="reorder-hint">
+					{canReorder
+						? 'Visitors see online locations as tabs in this order. Drag a row by its grip, or focus the grip and press the Up and Down arrow keys.'
+						: 'Clear the search to reorder locations.'}
+				</p>
+			{/if}
 			<div class={headRow} aria-hidden="true">
 				<span>Line</span>
 				<span>Location</span>
@@ -269,13 +365,32 @@
 				<span>Methods</span>
 				<span></span>
 			</div>
-			<ul class={list}>
+			<ul class={cx(list, dragId && listDragging)} bind:this={listEl}>
 				{#each visible as location (location.id)}
 					{@const state = locationState(location)}
-					<li class={row} data-line style={lineStyle(location.id)}>
-						<span class={lineMark} aria-hidden="true">
-							<span class={roundel}>{lineCode(location.name)}</span>
-							<span class={cx(stub, stubState[state])}></span>
+					<li
+						class={cx(row, dragId === location.id && rowDragging)}
+						data-line
+						style={lineStyle(location.id)}
+						animate:flip={{ duration: flipDuration }}
+					>
+						<span class={lineMark}>
+							{#if canReorder}
+								<button
+									type="button"
+									class={dragHandle}
+									data-reorder={location.id}
+									data-dragging={dragId === location.id || undefined}
+									aria-label="Reorder {location.name}"
+									aria-describedby="reorder-hint"
+									onpointerdown={(event) => startDrag(event, location.id)}
+									onkeydown={(event) => moveByKey(event, location.id)}
+								>
+									<DragIndicator aria-hidden="true" />
+								</button>
+							{/if}
+							<span class={roundel} aria-hidden="true">{lineCode(location.name)}</span>
+							<span class={cx(stub, stubState[state])} aria-hidden="true"></span>
 						</span>
 						<div class={nameCell}>
 							<h2 class={rowTitle}>{location.name}</h2>
@@ -357,6 +472,7 @@
 		<span class={legendItem}><span class={cx(statusBadgeDot, statusDotTone.danger)}></span>Dotted line: offline</span>
 		<span class={legendItem}><span class={cx(statusBadgeDot, statusDotTone.neutral)}></span>Dashed line: not enrolled</span>
 	</div>
+	<p class={srOnly} aria-live="polite">{announcement}</p>
 </div>
 
 <Dialog bind:open={showCreate} title="Add location" description="Name it; configure it next.">
