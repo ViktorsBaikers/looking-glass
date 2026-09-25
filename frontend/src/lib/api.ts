@@ -1,5 +1,5 @@
 export type ApiFailure = { ok: false; error: string; message: string };
-export type ApiResult = { ok: true } | ApiFailure;
+type ApiResult = { ok: true } | ApiFailure;
 
 async function failureFrom(response: Response): Promise<ApiFailure> {
 	const body = await response.json().catch(() => ({}) as Record<string, unknown>);

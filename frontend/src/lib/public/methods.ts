@@ -6,7 +6,7 @@
 
 import type { LocationDetail } from '$lib/admin/types.js';
 
-export interface MethodOption {
+interface MethodOption {
 	value: string;
 	label: string;
 }

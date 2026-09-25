@@ -22,7 +22,6 @@ export const page = css({
 export const pageHead = css({ display: 'flex', flexDirection: 'column', gap: '8px' });
 export const pageTitle = css({ textStyle: 'display-sm', color: 'ink', md: { textStyle: 'display' } });
 export const pageSubtitle = css({ textStyle: 'body', color: 'ink-muted', maxWidth: '60ch' });
-export const locations = css({ display: 'flex', flexDirection: 'column', gap: '0' });
 
 // ----- the selected Location's band: its line, the command row, the facts -----
 export const band = css({
@@ -627,4 +626,3 @@ export const fileLink = css({
 	'& svg': { width: '18px', height: '18px', color: 'ink-muted' }
 });
 export const fileSize = css({ fontFamily: 'mono', fontSize: '13px', color: 'ink-muted', marginLeft: 'auto' });
-export const downloadIcon = css({});

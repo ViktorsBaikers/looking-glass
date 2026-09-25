@@ -48,7 +48,7 @@ import { button /* , card, dialog, … */ } from 'styled-system/recipes';
 
 - Recipes/slot-recipes already exist for every primitive (see each entry). Use the
   component; only reach for a raw recipe when styling a bare element (e.g. a download
-  `<a>` via `buttonVariants`).
+  `<a>` via `button({ variant, size })` from `styled-system/recipes`).
 
 ### Semantic colour tokens
 
@@ -121,7 +121,7 @@ parent, or a `class`). Common: `search` `add` `edit` `delete` `close` `check`
 
 ### Button — `$lib/components/ui/button/index.js`
 
-`import { Button, buttonVariants } from '$lib/components/ui/button/index.js'`
+`import { Button } from '$lib/components/ui/button/index.js'`
 Variants `primary|secondary|ghost|danger` (default `primary`); sizes `sm|md|lg|icon`
 (default `md`); `loading` shows a spinner + sets `aria-busy` + disables.
 
@@ -129,8 +129,8 @@ Variants `primary|secondary|ghost|danger` (default `primary`); sizes `sm|md|lg|i
 <Button onclick={save} loading={saving}>Save location</Button>
 <Button variant="secondary" size="sm">Edit</Button>
 <Button variant="danger" size="icon" aria-label="Delete"><Trash /></Button>
-<!-- non-button element styled as a button: -->
-<a class={buttonVariants({ variant: 'secondary', size: 'sm' })} href={url} download>Download</a>
+<!-- non-button element styled as a button (raw recipe from styled-system/recipes): -->
+<a class={button({ variant: 'secondary', size: 'sm' })} href={url} download>Download</a>
 ```
 
 ### Input — `$lib/components/ui/input/index.js`
@@ -170,7 +170,7 @@ tooltip explains the field (hover or keyboard focus; screen readers get "About {
 
 ### Card — `$lib/components/ui/card/index.js`
 
-`import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '$lib/components/ui/card/index.js'`
+`import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '$lib/components/ui/card/index.js'`
 `Card` is the section-card surface; `CardTitle` renders an `<h2>`. All accept `class`.
 
 ```svelte
@@ -180,7 +180,6 @@ tooltip explains the field (hover or keyboard focus; screen readers get "About {
     <CardDescription>Site identity shown in the header and footer.</CardDescription>
   </CardHeader>
   <CardContent>…fields…</CardContent>
-  <CardFooter><Button>Save</Button></CardFooter>
 </Card>
 ```
 

@@ -19,7 +19,9 @@ export function downloadUrl(location: LocationDetail, file: TestFile): string {
 	return `/api/locations/${location.id}/files/${file.id}/download`;
 }
 
-function safeOrigin(value: string): string | null {
+/// A data-plane origin, or `null` unless it is a bare http(s) origin (no
+/// credentials, path, query or fragment).
+export function safeOrigin(value: string): string | null {
 	try {
 		const url = new URL(value);
 		if (

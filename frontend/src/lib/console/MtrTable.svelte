@@ -13,15 +13,12 @@
 		mtrTdLoss,
 		routeRow,
 		stationCell,
-		originRoundel,
-		originName,
-		originNote,
 		station,
 		stationEnd,
 		stationLossy
 	} from '$lib/public/styles.js';
 	import { srOnly } from '$lib/styles.js';
-	import { lineCode } from '$lib/lines.js';
+	import OriginRow from './OriginRow.svelte';
 	import type { MtrRow } from './mtr.js';
 
 	/** `origin`: the run's Location name, drawn as the line's first stop. */
@@ -53,15 +50,7 @@
 	</thead>
 	<tbody>
 		{#if origin}
-			<tr class={routeRow}>
-				<td class={stationCell} aria-hidden="true">
-					<span class={originRoundel}>{lineCode(origin)}</span>
-				</td>
-				<td class={cx(mtrTd, mtrTdHop)}></td>
-				<td class={cx(mtrTd, mtrTdHost)} colspan={columns.length}>
-					<span class={originName}>{origin}</span><span class={originNote}>origin</span>
-				</td>
-			</tr>
+			<OriginRow {origin} span={columns.length} />
 		{/if}
 		{#each rows as row, index (row.hop)}
 			<tr class={routeRow} style="animation-delay: {index * 60}ms">

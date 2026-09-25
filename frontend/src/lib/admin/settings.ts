@@ -1,5 +1,6 @@
 // Pure helpers for the admin Settings form: payload coercion and unsaved-changes
 // detection. Kept out of the page so vitest can exercise them without a DOM.
+import { nullIfBlank } from './editor.js';
 import type { GlobalSettings, Theme } from './types.js';
 
 /** The form's working copy; the theme select binds a plain string. */
@@ -14,10 +15,6 @@ export interface SettingsDraft {
 	exec_max_output_kib: number;
 	exec_rate_max: number;
 	exec_rate_window_secs: number;
-}
-
-export function nullIfBlank(value: string | null): string | null {
-	return value && value.trim() !== '' ? value : null;
 }
 
 /** Coerce the draft into the server DTO: blanks become null, texts become ints. */
