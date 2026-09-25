@@ -304,8 +304,10 @@ async fn serve_spa(uri: Uri) -> Response {
     if let Some(file) = Spa::get(requested) {
         return embedded_response(requested, file);
     }
-    match Spa::get("index.html") {
-        Some(file) => embedded_response("index.html", file),
+    // `index.html` is the prerendered `/`; other client routes get the
+    // route-agnostic shell so they don't preload the homepage's chunks.
+    match Spa::get("200.html") {
+        Some(file) => embedded_response("200.html", file),
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }

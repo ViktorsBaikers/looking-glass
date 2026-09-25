@@ -79,7 +79,7 @@ async fn unmatched_non_api_path_serves_the_spa_shell() {
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
         body_string(response).await.contains("Looking Glass"),
-        "client-side routes must fall through to index.html"
+        "client-side routes must fall through to the 200.html shell"
     );
 }
 
@@ -90,8 +90,10 @@ async fn spa_assets_are_compressed_and_cached_by_kind() {
     let shell = request("/", app()).await;
     assert_eq!(shell.headers()["cache-control"], "no-cache");
     let html = body_string(shell).await;
+    // The prerendered `/` links assets relatively (`./_app/...`).
     let asset = html
         .split('"')
+        .map(|part| part.trim_start_matches('.'))
         .find(|part| part.starts_with("/_app/immutable/") && part.ends_with(".js"))
         .expect("the shell links a fingerprinted script")
         .to_string();
