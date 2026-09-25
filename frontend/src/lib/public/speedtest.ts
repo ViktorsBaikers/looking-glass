@@ -63,7 +63,7 @@ export interface SpeedSample {
 	progress: number;
 }
 
-export interface SpeedResult {
+interface SpeedResult {
 	downloadMbps: number;
 	uploadMbps: number;
 	/// True when the test-file download was refused (a 404 or other

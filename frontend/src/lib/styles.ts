@@ -340,8 +340,6 @@ export const adminPageHead = css({
 });
 export const adminTitle = css({ textStyle: 'display-sm', color: 'ink', md: { textStyle: 'display' } });
 export const adminLede = css({ textStyle: 'body', color: 'ink-muted', marginTop: '8px', maxWidth: '60ch' });
-export const sectionTitle = css({ textStyle: 'title', color: 'ink' });
-export const sectionLede = css({ textStyle: 'body-sm', color: 'ink-muted', marginTop: '4px' });
 
 // ----- primitive one-offs -----
 export const textareaArea = css({ minHeight: 'auto', resize: 'vertical', lineHeight: '1.5' });

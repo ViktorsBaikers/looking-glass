@@ -36,6 +36,7 @@ export function formatCountdown(remainingMs: number): string {
 	return `${mm}:${ss}`;
 }
 
-export function nullIfBlank(value: string): string | null {
-	return value.trim() === '' ? null : value;
+/** Optional text fields: empty or whitespace-only (or already null) → null. */
+export function nullIfBlank(value: string | null): string | null {
+	return value && value.trim() !== '' ? value : null;
 }

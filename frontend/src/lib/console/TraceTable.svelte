@@ -13,9 +13,6 @@
 		traceAddr,
 		routeRow,
 		stationCell,
-		originRoundel,
-		originName,
-		originNote,
 		stationSilent,
 		station,
 		stationEnd,
@@ -24,7 +21,7 @@
 		stationLive
 	} from '$lib/public/styles.js';
 	import { srOnly } from '$lib/styles.js';
-	import { lineCode } from '$lib/lines.js';
+	import OriginRow from './OriginRow.svelte';
 	import type { TraceRow } from './trace.js';
 
 	/** `live`: the run is still streaming, so the newest hop is "you are here". */
@@ -49,15 +46,7 @@
 	</thead>
 	<tbody>
 		{#if origin}
-			<tr class={routeRow}>
-				<td class={stationCell} aria-hidden="true">
-					<span class={originRoundel}>{lineCode(origin)}</span>
-				</td>
-				<td class={cx(mtrTd, mtrTdHop)}></td>
-				<td class={cx(mtrTd, mtrTdHost)} colspan={probes + 1}>
-					<span class={originName}>{origin}</span><span class={originNote}>origin</span>
-				</td>
-			</tr>
+			<OriginRow {origin} span={probes + 1} />
 		{/if}
 		{#each rows as row, index (row.hop)}
 			{@const last = index === rows.length - 1}

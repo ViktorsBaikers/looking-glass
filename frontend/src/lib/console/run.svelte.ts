@@ -4,7 +4,7 @@
 
 export type RunStatus = 'idle' | 'connecting' | 'streaming' | 'done' | 'error' | 'canceled';
 
-export type ConsoleLine = { kind: 'out' | 'error' | 'meta'; text: string };
+type ConsoleLine = { kind: 'out' | 'error' | 'meta'; text: string };
 
 type DonePayload = { status: string; success: boolean; elapsed_ms: number };
 

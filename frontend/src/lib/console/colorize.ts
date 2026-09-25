@@ -2,9 +2,9 @@
 // counts and RTT values the design colours ("64 bytes", "time=12.3 ms").
 // Pure so the console template stays a flat render.
 
-export type Tone = 'plain' | 'bytes' | 'time';
+type Tone = 'plain' | 'bytes' | 'time';
 
-export interface Segment {
+interface Segment {
 	text: string;
 	tone: Tone;
 }
