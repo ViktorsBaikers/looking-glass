@@ -9,68 +9,18 @@ mod common;
 use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString};
 use axum::body::Body;
 use axum::extract::ConnectInfo;
-use axum::http::{Request, Response, StatusCode};
+use axum::http::{Request, StatusCode};
 use redb::{Database, TableDefinition};
 use serde_json::{json, Value};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use central::AppState;
 use common::{
-    assert_status, body_string, secure_request, send, session_cookie, temp_db_path, test_state,
-    test_state_at, CENTRAL_URL, SETUP_TOKEN, TRUSTED_PROXY,
+    assert_status, authed, json_body, login, secure_request, send, setup_and_login, temp_db_path,
+    test_state, test_state_at, CENTRAL_URL, PASSWORD,
 };
 
-const PASSWORD: &str = "correct-horse-battery-staple";
 const PEER_PASSWORD: &str = "peer-passphrase-long-enough";
-
-async fn setup_and_login(state: &AppState) -> String {
-    let install = send(
-        central::build(state.clone()),
-        secure_request(
-            "POST",
-            "/api/setup",
-            &json!({ "setup_token": SETUP_TOKEN, "username": "alice", "password": PASSWORD })
-                .to_string(),
-        ),
-    )
-    .await;
-    assert_status(&install, StatusCode::CREATED);
-    login(state, "alice", PASSWORD)
-        .await
-        .expect("alice session cookie")
-}
-
-/// Sign in and return the session cookie, or `None` when the login is refused.
-async fn login(state: &AppState, username: &str, password: &str) -> Option<String> {
-    let response = send(
-        central::build(state.clone()),
-        secure_request(
-            "POST",
-            "/api/auth/login",
-            &json!({ "username": username, "password": password }).to_string(),
-        ),
-    )
-    .await;
-    (response.status() == StatusCode::NO_CONTENT)
-        .then(|| session_cookie(&response).expect("session cookie from an accepted login"))
-}
-
-/// A trusted-proxy admin request carrying the session cookie.
-fn authed(method: &str, uri: &str, cookie: &str, json: &str) -> Request<Body> {
-    Request::builder()
-        .method(method)
-        .uri(uri)
-        .header("content-type", "application/json")
-        .header("x-forwarded-proto", "https")
-        .header("cookie", cookie)
-        .extension(ConnectInfo(SocketAddr::new(TRUSTED_PROXY, 40000)))
-        .body(Body::from(json.to_string()))
-        .unwrap()
-}
-
-async fn json_body(response: Response<Body>) -> Value {
-    serde_json::from_str(&body_string(response).await).expect("json body")
-}
 
 /// Create a pending peer through the admin API; returns the 201 activation-link body.
 async fn create_pending(state: &AppState, cookie: &str, username: &str) -> Value {

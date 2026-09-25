@@ -7,57 +7,15 @@
 mod common;
 
 use axum::body::Body;
-use axum::extract::ConnectInfo;
 use axum::http::{header::COOKIE, Request, StatusCode};
 use serde_json::{json, Value};
-use std::net::SocketAddr;
 
 use central::{AppState, EnrollConfig, EnrollmentToken};
 use common::{
-    assert_status, body_string, captured_logs, cleartext_request, secure_request, send,
-    session_cookie, test_state, CENTRAL_IDENTITY, CENTRAL_URL, SETUP_TOKEN, TRUSTED_PROXY,
+    assert_status, authed, body_string, captured_logs, cleartext_request, json_body,
+    secure_request, send, setup_and_login, test_state, CENTRAL_IDENTITY, CENTRAL_URL,
 };
 use shared::protocol::{fingerprint, sha256_hex, PROTOCOL_VERSION};
-
-const PASSWORD: &str = "correct-horse-battery-staple";
-
-async fn setup_and_login(state: &AppState) -> String {
-    let install = send(
-        central::build(state.clone()),
-        secure_request(
-            "POST",
-            "/api/setup",
-            &json!({ "setup_token": SETUP_TOKEN, "username": "alice", "password": PASSWORD })
-                .to_string(),
-        ),
-    )
-    .await;
-    assert_status(&install, StatusCode::CREATED);
-
-    let login = send(
-        central::build(state.clone()),
-        secure_request(
-            "POST",
-            "/api/auth/login",
-            &json!({ "username": "alice", "password": PASSWORD }).to_string(),
-        ),
-    )
-    .await;
-    assert_status(&login, StatusCode::NO_CONTENT);
-    session_cookie(&login).expect("session cookie from login")
-}
-
-fn authed(method: &str, uri: &str, cookie: &str, body: &str) -> Request<Body> {
-    Request::builder()
-        .method(method)
-        .uri(uri)
-        .header("content-type", "application/json")
-        .header("x-forwarded-proto", "https")
-        .header("cookie", cookie)
-        .extension(ConnectInfo(SocketAddr::new(TRUSTED_PROXY, 40000)))
-        .body(Body::from(body.to_string()))
-        .unwrap()
-}
 
 fn cleartext_authed(method: &str, uri: &str, cookie: &str, body: &str) -> Request<Body> {
     let mut request = cleartext_request(method, uri, body);
@@ -65,10 +23,6 @@ fn cleartext_authed(method: &str, uri: &str, cookie: &str, body: &str) -> Reques
         .headers_mut()
         .insert(COOKIE, cookie.parse().expect("valid session cookie"));
     request
-}
-
-async fn json_body(response: axum::http::Response<Body>) -> Value {
-    serde_json::from_str(&body_string(response).await).expect("json body")
 }
 
 /// Create a remote location and mint an enrollment ticket for it. Returns the ticket
