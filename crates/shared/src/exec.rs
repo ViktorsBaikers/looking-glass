@@ -427,6 +427,25 @@ mod tests {
         !process_alive(pid)
     }
 
+    /// The first line a tree-kill test's command prints: its backgrounded descendant's pid.
+    async fn descendant_pid(events: &mut mpsc::Receiver<ExecEvent>) -> i32 {
+        match events.recv().await.unwrap() {
+            ExecEvent::Line(line) => line.trim().parse().expect("descendant pid"),
+            other => panic!("expected the descendant pid line, got {other:?}"),
+        }
+    }
+
+    /// Drain events until the run's terminal status (a closed channel reads as Canceled).
+    async fn final_status(events: &mut mpsc::Receiver<ExecEvent>) -> ExecStatus {
+        loop {
+            match events.recv().await {
+                Some(ExecEvent::Done { status, .. }) => break status,
+                Some(_) => {}
+                None => break ExecStatus::Canceled,
+            }
+        }
+    }
+
     async fn collect(mut handle: ExecHandle) -> (Vec<String>, ExecStatus) {
         let mut lines = Vec::new();
         loop {
@@ -499,19 +518,10 @@ mod tests {
             .unwrap();
         let mut events = handle.events;
 
-        let child_pid: i32 = match events.recv().await.unwrap() {
-            ExecEvent::Line(line) => line.trim().parse().expect("descendant pid"),
-            other => panic!("expected the descendant pid line, got {other:?}"),
-        };
+        let child_pid = descendant_pid(&mut events).await;
         assert!(process_alive(child_pid), "the descendant should be running");
 
-        let status = loop {
-            match events.recv().await {
-                Some(ExecEvent::Done { status, .. }) => break status,
-                Some(_) => {}
-                None => break ExecStatus::Canceled,
-            }
-        };
+        let status = final_status(&mut events).await;
         assert_eq!(status, ExecStatus::TimedOut);
         assert!(
             wait_until_dead(child_pid).await,
@@ -532,10 +542,7 @@ mod tests {
             .unwrap();
         let mut events = handle.events;
 
-        let child_pid: i32 = match events.recv().await.unwrap() {
-            ExecEvent::Line(line) => line.trim().parse().expect("descendant pid"),
-            other => panic!("expected the descendant pid line, got {other:?}"),
-        };
+        let child_pid = descendant_pid(&mut events).await;
         assert!(process_alive(child_pid));
 
         // Simulate the browser closing the EventSource / pressing Cancel.
@@ -692,19 +699,10 @@ mod tests {
             .unwrap();
         let mut events = handle.events;
 
-        let child_pid: i32 = match events.recv().await.unwrap() {
-            ExecEvent::Line(line) => line.trim().parse().expect("descendant pid"),
-            other => panic!("expected the descendant pid line, got {other:?}"),
-        };
+        let child_pid = descendant_pid(&mut events).await;
         assert!(process_alive(child_pid), "the descendant should be running");
 
-        let status = loop {
-            match events.recv().await {
-                Some(ExecEvent::Done { status, .. }) => break status,
-                Some(_) => {}
-                None => break ExecStatus::Canceled,
-            }
-        };
+        let status = final_status(&mut events).await;
         assert_eq!(
             status,
             ExecStatus::Completed { success: true },
