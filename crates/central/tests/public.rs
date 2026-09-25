@@ -17,54 +17,11 @@ use serde_json::{json, Value};
 
 use central::{Agent, AppState};
 use common::{
-    assert_status, body_string, complete_setup, secure_request, send, session_cookie, test_state,
-    SETUP_TOKEN, TRUSTED_PROXY,
+    assert_status, authed, body_string, complete_setup, json_body, send, setup_and_login,
+    test_state, TRUSTED_PROXY,
 };
 
-const PASSWORD: &str = "correct-horse-battery-staple";
 const UNTRUSTED_PEER: IpAddr = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7));
-
-async fn setup_and_login(state: &AppState) -> String {
-    let install = send(
-        central::build(state.clone()),
-        secure_request(
-            "POST",
-            "/api/setup",
-            &json!({ "setup_token": SETUP_TOKEN, "username": "alice", "password": PASSWORD })
-                .to_string(),
-        ),
-    )
-    .await;
-    assert_status(&install, StatusCode::CREATED);
-
-    let login = send(
-        central::build(state.clone()),
-        secure_request(
-            "POST",
-            "/api/auth/login",
-            &json!({ "username": "alice", "password": PASSWORD }).to_string(),
-        ),
-    )
-    .await;
-    assert_status(&login, StatusCode::NO_CONTENT);
-    session_cookie(&login).expect("session cookie from login")
-}
-
-fn authed(method: &str, uri: &str, cookie: &str, json: &str) -> Request<Body> {
-    Request::builder()
-        .method(method)
-        .uri(uri)
-        .header("content-type", "application/json")
-        .header("x-forwarded-proto", "https")
-        .header("cookie", cookie)
-        .extension(ConnectInfo(SocketAddr::new(TRUSTED_PROXY, 40000)))
-        .body(Body::from(json.to_string()))
-        .unwrap()
-}
-
-async fn json_body(response: axum::http::Response<Body>) -> Value {
-    serde_json::from_str(&body_string(response).await).expect("json body")
-}
 
 /// Create a local (online) location offering `methods`; returns its id.
 async fn create_local_location(state: &AppState, cookie: &str, methods: Value) -> String {
