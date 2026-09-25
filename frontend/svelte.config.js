@@ -8,7 +8,9 @@ const config = {
 		adapter: adapter({
 			pages: 'build',
 			assets: 'build',
-			fallback: 'index.html',
+			// `/` is prerendered to index.html (its route chunks preload with the
+			// entry); every other route gets this route-agnostic shell.
+			fallback: '200.html',
 			precompress: false
 		}),
 		alias: {
