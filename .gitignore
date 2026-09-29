@@ -7,3 +7,5 @@
 .playwright-mcp
 .tokensave
 .omp/mcp.json
+# Local agent files
+AGENTS.md
