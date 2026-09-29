@@ -64,10 +64,21 @@ export interface TestFile {
 	source_ref: string;
 }
 
+/** A remote node's data-plane HTTPS certificate as its agent reported it:
+ * issued/expires are unix seconds; `last_error` is the last issuance
+ * or renewal failure, cleared by the next success. */
+export interface CertificateStatus {
+	issued_at: number | null;
+	expires_at: number | null;
+	last_error: string | null;
+}
+
 export interface LocationDetail extends Location {
 	test_ips: TestIp[];
 	iperf: IperfEndpoint[];
 	files: TestFile[];
+	/** Admin location read only: null until the agent reports one. */
+	certificate?: CertificateStatus | null;
 }
 
 /** What the admin gets after minting an enrollment token for a remote location

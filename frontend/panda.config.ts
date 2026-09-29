@@ -1,8 +1,9 @@
 import { defineConfig } from '@pandacss/dev';
 import { pluginSvelte } from '@pandacss/plugin-svelte';
 
-// "Backbone map" world: see DESIGN.md. `base` is the light scheme; `_dark`
-// activates under the `.dark` class the pre-paint script in app.html toggles.
+// "Backbone map" world: see DESIGN.md. Every semantic colour is light-dark(), so
+// theme follows color-scheme: `:root`/`.light` light, `.dark` (the class the
+// pre-paint script in app.html toggles) dark. No `_dark` conditions.
 export default defineConfig({
 	preflight: true,
 	plugins: [pluginSvelte()],
@@ -120,7 +121,7 @@ export default defineConfig({
 				'ink-faint': { value: 'light-dark(#8b8e94, #6c6f76)' },
 				'on-ink': { value: 'light-dark(#ffffff, #111214)' },
 				rule: { value: 'light-dark(#dcdcd6, #2a2c30)' },
-				'rule-strong': { value: 'light-dark(#a6a8a3, #4a4d53)' },
+				'rule-strong': { value: 'light-dark(#8a8c87, #686b72)' },
 				ok: { value: 'light-dark(#1d7a4a, #52c98b)' },
 				'ok-soft': { value: 'light-dark(#e3f1e8, #15291e)' },
 				warn: { value: 'light-dark(#9a5200, #f5b453)' },
@@ -294,7 +295,8 @@ export default defineConfig({
 					transitionProperty: 'border-color, box-shadow',
 					transitionDuration: '120ms',
 					caretColor: '{colors.ink}',
-					_placeholder: { color: 'ink-faint' },
+					// ink-muted: placeholders carry format examples, so they need 4.5:1.
+					_placeholder: { color: 'ink-muted' },
 					_hover: { borderColor: 'ink-muted' },
 					_focus: {
 						outline: 'none',
@@ -498,7 +500,16 @@ export default defineConfig({
 								_hover: { _before: { borderColor: 'ink' } },
 								'&[aria-selected=true]': {
 									fontWeight: 800,
-									_before: { background: 'ink', borderColor: 'ink' }
+									// Forced colours repaint the ink fill like the other stops.
+									_before: {
+										background: 'ink',
+										borderColor: 'ink',
+										_highContrast: {
+											forcedColorAdjust: 'none',
+											background: 'Highlight',
+											borderColor: 'Highlight'
+										}
+									}
 								}
 							},
 							content: { paddingTop: '28px' }
@@ -520,9 +531,15 @@ export default defineConfig({
 								borderBottomWidth: '4px',
 								borderBottomStyle: 'solid',
 								borderBottomColor: 'transparent',
+								// Forced colours paint a transparent border CanvasText, so every
+								// tab would look selected: name the colours explicitly there.
+								_highContrast: { borderBottomColor: 'Canvas' },
 								transitionProperty: 'color, border-color',
 								// The Location roundel: its code set in the line colour. The alt
 								// text after "/" keeps the code out of the accessible name.
+								// Unselected it is a ring in the line colour around a code in the
+								// label's ink (a dimmed disc read below 4.5:1, F-261); the selected
+								// and hovered roundel fills.
 								_before: {
 									content: 'attr(data-code) / ""',
 									display: 'inline-flex',
@@ -531,20 +548,23 @@ export default defineConfig({
 									width: '30px',
 									height: '30px',
 									borderRadius: 'full',
-									background: 'var(--line)',
-									color: 'var(--line-ink)',
+									borderWidth: '2px',
+									borderStyle: 'solid',
+									borderColor: 'var(--line)',
+									background: 'transparent',
+									color: 'ink-muted',
 									fontSize: '10px',
 									fontWeight: 800,
 									letterSpacing: '0.02em',
 									flexShrink: 0,
-									opacity: 0.55,
-									transitionProperty: 'opacity',
+									transitionProperty: 'background, color',
 									transitionDuration: '160ms'
 								},
-								_hover: { _before: { opacity: 1 } },
+								_hover: { _before: { background: 'var(--line)', color: 'var(--line-ink)' } },
 								'&[aria-selected=true]': {
 									borderBottomColor: 'var(--line)',
-									_before: { opacity: 1 }
+									_highContrast: { borderBottomColor: 'Highlight' },
+									_before: { background: 'var(--line)', color: 'var(--line-ink)' }
 								}
 							},
 							content: { paddingTop: '28px' }
@@ -655,7 +675,7 @@ export default defineConfig({
 						textOverflow: 'ellipsis',
 						whiteSpace: 'nowrap',
 						textAlign: 'left',
-						'&[data-placeholder-shown]': { color: 'ink-faint' }
+						'&[data-placeholder-shown]': { color: 'ink-muted' }
 					},
 					positioner: { zIndex: 60 },
 					content: {
@@ -685,7 +705,17 @@ export default defineConfig({
 						lineHeight: '22px',
 						color: 'ink',
 						cursor: 'pointer',
-						'&[data-highlighted]': { background: 'sunk' },
+						'&[data-highlighted]': {
+							background: 'sunk',
+							// Opt out of the forced repaint so no Canvas backplate hides the
+							// HighlightText label; the check mark follows the label.
+							_highContrast: {
+								forcedColorAdjust: 'none',
+								background: 'Highlight',
+								color: 'HighlightText',
+								'& svg': { color: 'HighlightText' }
+							}
+						},
 						'&[data-state=checked]': { fontWeight: 700 },
 						'&[data-disabled]': { opacity: 0.5, cursor: 'not-allowed' },
 						_focusVisible: { outline: 'none' }
@@ -723,7 +753,7 @@ export default defineConfig({
 						transitionDuration: '360ms',
 						transitionTimingFunction: 'out',
 						_closed: { transitionDuration: '200ms' },
-						'&[data-type=error]': { background: 'danger', color: 'white' },
+						'&[data-type=error]': { background: 'danger', color: 'on-ink' },
 						'& svg': { width: '20px', height: '20px', flexShrink: 0 }
 					},
 					title: { textStyle: 'body-sm', fontWeight: 700 },
@@ -748,6 +778,12 @@ export default defineConfig({
 		':root, .light': { colorScheme: 'light' },
 		'.dark': { colorScheme: 'dark' },
 		html: { background: 'paper', scrollbarColor: '{colors.rule-strong} transparent' },
+		// A sticky bottom bar (Settings' Save row) would cover fields focused
+		// beneath it; focus scrolling keeps them above it.
+		'html:has([data-sticky-actions])': { scrollPaddingBottom: '88px' },
+		// Likewise the sticky site header (56px + 1px rule) at the top; auth
+		// pages have no header.
+		'html:has(header)': { scrollPaddingTop: '65px' },
 		body: {
 			background: 'paper',
 			color: 'ink',

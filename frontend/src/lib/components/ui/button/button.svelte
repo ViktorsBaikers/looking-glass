@@ -17,23 +17,36 @@
 		loading = false,
 		disabled = false,
 		class: className,
+		onclick,
 		children,
 		...rest
 	}: Omit<HTMLButtonAttributes, 'class'> & {
 		class?: string;
 		variant?: ButtonVariant;
 		size?: ButtonSize;
-		/** Shows a spinner and disables the button (sets aria-busy). */
+		/** Shows a spinner and makes the button busy and inert (aria-busy + aria-disabled). */
 		loading?: boolean;
 		children?: Snippet;
 	} = $props();
 </script>
 
+<!-- Loading is busy, not `disabled`: disabling the focused button drops focus
+     to <body>. aria-disabled gives the recipe's dimmed look; pointer-events
+     stays on so a press lands here and is swallowed (no click, no submit, and
+     no implicit submission from Enter in a field) instead of falling through.
+     Loading wins over an explicit disabled: forms pass disabled={!canSubmit}
+     with !submitting inside canSubmit. -->
 <button
 	class={cx(button({ variant, size }), className)}
-	disabled={disabled || loading}
+	disabled={disabled && !loading}
 	aria-busy={loading || undefined}
+	aria-disabled={loading || undefined}
+	style={loading ? 'pointer-events: auto' : undefined}
 	{...rest}
+	onclick={(event) => {
+		if (loading) event.preventDefault();
+		else onclick?.(event);
+	}}
 >
 	{#if loading}
 		<Spinner class={spin} aria-hidden="true" />

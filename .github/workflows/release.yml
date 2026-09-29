@@ -100,7 +100,7 @@ jobs:
             "$lg_installer_sha256" assets/install-agent.sh \
             "$lg_agent_sha256" assets/lg-agent-x86_64-unknown-linux-gnu \
             | /usr/bin/sha256sum --check --strict
-          /usr/bin/gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes assets/install-agent.sh assets/lg-agent-x86_64-unknown-linux-gnu
+          /usr/bin/gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes assets/install-agent.sh assets/lg-agent-x86_64-unknown-linux-gnu THIRD_PARTY_NOTICES.md
 
   image:
     runs-on: ubuntu-latest

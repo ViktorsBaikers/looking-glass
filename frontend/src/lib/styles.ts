@@ -98,12 +98,20 @@ export const navLink = css({
 	borderTopWidth: '3px',
 	borderTopStyle: 'solid',
 	borderTopColor: 'transparent',
+	// Forced colours paint a transparent border CanvasText, so every link
+	// would show both bars: name the colours explicitly there.
+	_highContrast: { borderTopColor: 'Canvas', borderBottomColor: 'Canvas' },
 	transitionProperty: 'color, border-color',
 	transitionDuration: '120ms',
 	_hover: { color: 'ink' },
 	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '-2px' }
 });
-export const navLinkActive = css({ color: 'ink', fontWeight: 800, borderBottomColor: 'ink' });
+export const navLinkActive = css({
+	color: 'ink',
+	fontWeight: 800,
+	borderBottomColor: 'ink',
+	_highContrast: { borderBottomColor: 'Highlight' }
+});
 export const headerRight = css({ display: 'flex', alignItems: 'center', alignSelf: 'stretch', gap: '4px', md: { gap: '8px' } });
 export const mainArea = css({ flex: '1', width: '100%', minWidth: '0' });
 export const footer = css({
@@ -182,7 +190,9 @@ export const navList = css({
 		top: '18px',
 		bottom: '18px',
 		width: '3px',
-		background: 'rule'
+		background: 'rule',
+		// Forced colours would repaint the line as Canvas and hide it.
+		_highContrast: { forcedColorAdjust: 'none', background: 'CanvasText' }
 	}
 });
 export const navItem = css({
@@ -222,7 +232,14 @@ export const navItem = css({
 export const navItemActive = css({
 	color: 'ink',
 	fontWeight: 800,
-	_before: { background: 'ink', borderColor: 'ink' }
+	// Forced colours repaint the ink fill like the other stations.
+	_before: {
+		background: 'ink',
+		borderColor: 'ink',
+		_highContrast: { forcedColorAdjust: 'none', background: 'Highlight', borderColor: 'Highlight' }
+	},
+	// navItem's hover ring would otherwise replace the Highlight ring (F-325).
+	_hover: { _before: { _highContrast: { borderColor: 'Highlight' } } }
 });
 export const logoutWrap = css({ marginTop: 'auto', paddingTop: '24px' });
 export const logoutBtn = css({

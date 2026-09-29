@@ -86,12 +86,14 @@ test('locations.e2e sorts by name, status and recency', async ({ page }) => {
 	await expect(firstCard).toContainText('Vienna'); // only heartbeat is Vienna's
 	await expect(page.getByRole('listitem').last()).toContainText('Singapore'); // never-seen tie-break by name
 
-	await pick('status', 'Status');
-	await expect(firstCard).toContainText('Frankfurt');
-	await expect(page.getByRole('listitem').last()).toContainText('San Francisco Hub');
+	// Public order is Frankfurt, Vienna, London, New York, Singapore, San Francisco Hub:
+	// both expected orders differ from it, so a sort that does nothing fails here.
+	const names = page.getByRole('listitem').getByRole('heading');
+	await pick('status', 'Status'); // online by name, then not enrolled
+	await expect(names).toHaveText(['Frankfurt', 'London', 'New York', 'Singapore', 'Vienna', 'San Francisco Hub']);
 
 	await pick('name', 'Name');
-	await expect(firstCard).toContainText('Frankfurt');
+	await expect(names).toHaveText(['Frankfurt', 'London', 'New York', 'San Francisco Hub', 'Singapore', 'Vienna']);
 });
 
 test('locations.e2e reorders by keyboard and the public tabs follow', async ({ page }) => {
@@ -117,6 +119,33 @@ test('locations.e2e reorders by keyboard and the public tabs follow', async ({ p
 	const tabs = page.getByRole('tab');
 	await expect(tabs.nth(0)).toContainText('Vienna');
 	await expect(tabs.nth(1)).toContainText('Frankfurt');
+});
+
+// A peer's change makes the list stale; central answers 409 and the
+// optimistic move gives way to the server's list.
+test('locations.e2e rolls a stale reorder back to the server list', async ({ page }) => {
+	const bucket = `locations-reorder-stale-${crypto.randomUUID()}`;
+	await signIn(page, bucket);
+	const rows = page.getByRole('listitem');
+	await expect(rows).toHaveCount(6);
+
+	const added = await page.request.post(`${APP}/api/admin/locations`, {
+		headers: { 'x-looking-glass-fixture': bucket },
+		data: { name: 'Oslo', geo_label: 'Oslo, NO', kind: 'local', offered_methods: [] }
+	});
+	expect(added.status()).toBe(201);
+
+	const refused = page.waitForResponse(
+		(response) => response.url().endsWith('/api/admin/locations/order') && response.status() === 409
+	);
+	await page.getByRole('button', { name: 'Reorder Frankfurt' }).focus();
+	await page.keyboard.press('ArrowDown');
+	await refused;
+	await expect(page.getByText('The location list changed. Reload it and try again.')).toBeVisible();
+	await expect(rows).toHaveCount(7);
+	await expect(rows.nth(0)).toContainText('Frankfurt');
+	await expect(rows.nth(1)).toContainText('Vienna');
+	await expect(rows.last()).toContainText('Oslo');
 });
 
 test('locations.e2e reorders by dragging a grip', async ({ page }) => {
@@ -154,6 +183,9 @@ test('locations.e2e adds a remote location and lands on its enrollment tab', asy
 	await signIn(page, `locations-add-remote-${crypto.randomUUID()}`);
 
 	await page.getByRole('button', { name: 'Add location' }).first().click();
+	// Initial focus (Close) lands a frame after the dialog opens; typing first can lose the text.
+	const dialog = page.getByRole('dialog', { name: 'Add location' });
+	await expect(dialog.getByRole('button', { name: 'Close dialog' })).toBeFocused();
 	await page.getByLabel('Display name').fill('Oslo');
 	await page.getByLabel('Geographic label').fill('Oslo, NO');
 	await page.getByLabel('Node kind').click();
@@ -167,6 +199,9 @@ test('locations.e2e adds a local location and lands on its settings tab', async 
 	await signIn(page, `locations-add-local-${crypto.randomUUID()}`);
 
 	await page.getByRole('button', { name: 'Add location' }).first().click();
+	// Initial focus (Close) lands a frame after the dialog opens; typing first can lose the text.
+	const dialog = page.getByRole('dialog', { name: 'Add location' });
+	await expect(dialog.getByRole('button', { name: 'Close dialog' })).toBeFocused();
 	await page.getByLabel('Display name').fill('Oslo Local');
 	await page.getByLabel('Node kind').click();
 	await page.getByRole('option', { name: 'Local (built-in node)' }).click();

@@ -60,10 +60,10 @@ Reference by bare name (e.g. `background: 'panel'`).
 | `panel` | #ffffff | #18191c | raised surfaces, cards, inputs |
 | `sunk` | #ebebe7 | #0b0c0d | insets: console, code blocks, hover fill |
 | `ink` / `ink-hover` | #16171a / #33353b | #ecece6 / #ffffff | text, primary button fill, focus ring |
-| `ink-muted` | #595c63 | #a2a5ab | secondary text |
-| `ink-faint` | #8b8e94 | #6c6f76 | placeholders, quiet icons (non-body text) |
+| `ink-muted` | #595c63 | #a2a5ab | secondary text, placeholders (4.5:1) |
+| `ink-faint` | #8b8e94 | #6c6f76 | quiet icons (non-body text) |
 | `on-ink` | #ffffff | #111214 | text on ink fills |
-| `rule` / `rule-strong` | #dcdcd6 / #a6a8a3 | #2a2c30 / #4a4d53 | hairlines / control borders |
+| `rule` / `rule-strong` | #dcdcd6 / #8a8c87 | #2a2c30 / #686b72 | hairlines / control borders |
 | `ok` / `ok-soft` | #1d7a4a / #e3f1e8 | #52c98b / #15291e | Online, Active, success |
 | `warn` / `warn-soft` | #9a5200 / #f8ecd9 | #f5b453 / #2e2312 | Pending, lossy hop |
 | `danger` / `danger-soft` | #b3261e / #f9e3e1 | #ff8a80 / #331a19 | destructive, invalid, Offline |
@@ -123,7 +123,8 @@ parent, or a `class`). Common: `search` `add` `edit` `delete` `close` `check`
 
 `import { Button } from '$lib/components/ui/button/index.js'`
 Variants `primary|secondary|ghost|danger` (default `primary`); sizes `sm|md|lg|icon`
-(default `md`); `loading` shows a spinner + sets `aria-busy` + disables.
+(default `md`); `loading` shows a spinner and makes the button busy (`aria-busy` +
+`aria-disabled`) but not `disabled`, so focus stays on it; presses are swallowed.
 
 ```svelte
 <Button onclick={save} loading={saving}>Save location</Button>
@@ -154,7 +155,7 @@ Same props as Input (`bind:value`, `invalid`, `mono`) + native `<textarea>` attr
 ### Label — `$lib/components/ui/label/index.js`
 
 `import { Label } from '$lib/components/ui/label/index.js'` — styled `<label>`
-(`label-md`, `on-surface-variant`). Pass `for`.
+(textStyle `label`, colour `ink`). Pass `for`.
 
 ### Field — `$lib/components/ui/field.svelte` (default)
 
@@ -185,10 +186,11 @@ tooltip explains the field (hover or keyboard focus; screen readers get "About {
 
 ### Badge / StatusBadge — `$lib/components/ui/badge.svelte`, `status-badge.svelte` (defaults)
 
-`tone: 'neutral'|'success'|'warning'|'danger'` (default `neutral`). `StatusBadge`
-prefixes a coloured dot (used for Online/Offline/Not-enrolled, Active/Pending) and
-takes `size: 'sm'|'lg'` (default `sm`, uppercase tag; `lg` is the sentence-case
-Locations card pill).
+`tone: 'neutral'|'success'|'warning'|'danger'` (default `neutral`): a small tinted
+tag in textStyle `key`, sentence case (no uppercase). `StatusBadge` prefixes the
+16×4 status line segment (see Layout patterns; used for Online/Offline/Not-enrolled,
+Active/Pending) and takes `size: 'sm'|'lg'` (default `sm`, the tinted tag; `lg` is
+the Location status: no fill, no padding, textStyle `label`).
 
 ```svelte
 import StatusBadge from '$lib/components/ui/status-badge.svelte';
@@ -203,7 +205,9 @@ import StatusBadge from '$lib/components/ui/status-badge.svelte';
 Ark listbox (typeahead, arrow keys, ARIA). `items: { label, value }[]` (**stable
 array** — hoist it or `$derived`, don't inline a fresh literal each render),
 `bind:value` (the selected `value` string), `placeholder`, `disabled`, `invalid`,
-`name`, `id`, `aria-label`. Pair with an external `<Label for={id}>`.
+`name`, `id`, `aria-label`, `portaled` (default `true`). Inside a modal `Dialog`, set
+`portaled={false}`: a portalled listbox lands outside the dialog, where its focus
+trap inerts it. Pair with an external `<Label for={id}>`.
 
 ```svelte
 const methods = $derived(offered.map((m) => ({ label: m, value: m })));
@@ -213,12 +217,17 @@ const methods = $derived(offered.map((m) => ({ label: m, value: m })));
 ### Tabs — `$lib/components/ui/tabs.svelte` (default)
 
 Ark Tabs machine → arrow-key nav + `role=tablist/tab` + `aria-selected` for free.
-This is a **controlled tablist only**: `tabs: { id, label }[]`, `bind:active` (the id).
-Render panels yourself keyed off `active` (so the active tab can live in a URL query).
+`tabs: { id, label }[]`, `bind:active` (the id, so it can live in a URL query), and a
+`panel` snippet that receives each tab and renders inside Ark `Tabs.Content`, so every
+trigger's `aria-controls` points at a real tabpanel. Branch on the snippet's tab, not
+on `active`: the outgoing panel stays mounted for one pass after a switch.
 
 ```svelte
-<Tabs tabs={[{ id: 'settings', label: 'Settings' }, { id: 'methods', label: 'Methods' }]} bind:active />
-{#if active === 'settings'} …panel… {/if}
+<Tabs tabs={[{ id: 'settings', label: 'Settings' }, { id: 'methods', label: 'Methods' }]} bind:active>
+  {#snippet panel(tab)}
+    {#if tab.id === 'settings'} …panel… {:else} …panel… {/if}
+  {/snippet}
+</Tabs>
 ```
 
 ### Dialog / ConfirmDialog — `$lib/components/ui/dialog.svelte`, `confirm-dialog.svelte` (defaults)
@@ -250,23 +259,25 @@ Ark Checkbox as a whole-card control for the Methods grid. `bind:checked`, `disa
 
 ### Tooltip — `$lib/components/ui/tooltip.svelte` (default)
 
-Ark Tooltip (hover/focus/Escape, portal). `content` (string); `children` is the trigger
-(must be focusable — wrap an icon in a `<button>`/`<span tabindex=0>` if needed).
+Ark Tooltip (hover/focus/Escape, portal). `content` (string); `children` renders inside
+the trigger, which is already a `<button type="button">`. Pass plain content, never a
+focusable element (no nested `<button>`, no `tabindex`); give an icon an `srOnly` name.
 
 ```svelte
 <Tooltip content="Average round-trip time across all replies.">
-  <span tabindex="0"><Info aria-hidden="true" /></span>
+  <span><Info aria-hidden="true" /><span class={srOnly}>About RTT</span></span>
 </Tooltip>
 ```
 
 ### Collapsible — `$lib/components/ui/collapsible.svelte` (default)
 
 Ark Collapsible disclosure. `bind:open`, `trigger` (snippet, the always-visible
-control), `children` (the body).
+control: it receives a `props` getter and must spread `{...props()}` onto its
+button, which then is the trigger), `children` (the body).
 
 ```svelte
 <Collapsible bind:open={showMore}>
-  {#snippet trigger()}<Button variant="ghost" size="sm">More test IPs</Button>{/snippet}
+  {#snippet trigger(props)}<Button {...props()} variant="ghost" size="sm">More test IPs</Button>{/snippet}
   <ul>…extra IPs…</ul>
 </Collapsible>
 ```

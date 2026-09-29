@@ -51,6 +51,7 @@
 	} from './styles.js';
 
 	const MIN_PASSWORD = 12;
+	const MAX_PASSWORD = 512;
 
 	let meId = $state('');
 	let admins = $state<Administrator[]>([]);
@@ -76,10 +77,31 @@
 	let confirmNext = $state('');
 	let changing = $state(false);
 
+	// Central counts UTF-8 bytes, so a character beyond ASCII counts as 2 to 4.
+	const nextBytes = $derived(new TextEncoder().encode(next).length);
+	const byteNote = $derived(nextBytes > next.length ? ' Accented letters, other scripts and emoji count as 2 to 4 each.' : '');
 	const nextError = $derived(
-		next.length > 0 && next.length < MIN_PASSWORD ? `At least ${MIN_PASSWORD} characters.` : ''
+		nextBytes > MAX_PASSWORD
+			? `At most ${MAX_PASSWORD} characters.${byteNote}`
+			: nextBytes > 0 && nextBytes < MIN_PASSWORD
+				? `At least ${MIN_PASSWORD} characters.${byteNote}`
+				: ''
 	);
 	const confirmError = $derived(confirmNext.length > 0 && confirmNext !== next ? 'Passwords do not match.' : '');
+	// A rule is a hint while its field is being typed in; leaving the field or
+	// submitting shows it as an error. Empty fields are reported on submit only.
+	// Editing New password makes the match rule a hint again until it is left.
+	// Typing resets in the capture phase: a delegated oninput runs after
+	// bind:value has already rendered the alert (F-260).
+	let shown = $state({ next: false, confirm: false });
+	let submitted = $state(false);
+	const currentShown = $derived(submitted && current.length === 0 ? 'Enter your current password.' : '');
+	const nextShown = $derived(
+		shown.next ? nextError || (submitted && next.length === 0 ? 'Enter a new password.' : '') : ''
+	);
+	const confirmShown = $derived(
+		shown.confirm ? confirmError || (submitted && confirmNext.length === 0 ? 'Confirm the new password.' : '') : ''
+	);
 
 	const countLabel = $derived(`${admins.length} account${admins.length === 1 ? '' : 's'}`);
 
@@ -115,6 +137,9 @@
 		}
 		newUsername = '';
 		link = result.data;
+		// The emptied field disables the create button, so the link dialog
+		// returns focus to the field instead (F-170).
+		document.getElementById('new-admin-username')?.focus();
 		showLink = true;
 		await reload();
 	}
@@ -163,7 +188,10 @@
 
 	async function submitPassword(event: SubmitEvent) {
 		event.preventDefault();
-		if (changing || current.length === 0 || nextError || confirmError || confirmNext !== next) return;
+		if (changing) return;
+		submitted = true;
+		shown = { next: true, confirm: true };
+		if (current.length === 0 || next.length === 0 || nextError || confirmNext.length === 0 || confirmNext !== next) return;
 		changing = true;
 		const result = await changePassword(current, next);
 		changing = false;
@@ -174,6 +202,8 @@
 		current = '';
 		next = '';
 		confirmNext = '';
+		submitted = false;
+		shown = { next: false, confirm: false };
 		toast.success('Password changed.');
 	}
 </script>
@@ -192,7 +222,7 @@
 			<CardDescription>They choose their password from the one-time activation link.</CardDescription>
 		</CardHeader>
 		<CardContent>
-			<form class={addRow} onsubmit={submitCreate}>
+			<form class={addRow} onsubmit={submitCreate} aria-busy={creating || undefined}>
 				<div class={addField}>
 					<Field label="Username" for="new-admin-username">
 						<Input
@@ -200,7 +230,8 @@
 							placeholder="Enter username"
 							autocomplete="off"
 							bind:value={newUsername}
-							disabled={creating}
+							readonly={creating}
+							aria-disabled={creating || undefined}
 							required
 						/>
 					</Field>
@@ -264,37 +295,55 @@
 			<CardDescription>Your current password is required.</CardDescription>
 		</CardHeader>
 		<CardContent>
-			<form onsubmit={submitPassword} novalidate>
+			<form onsubmit={submitPassword} novalidate aria-busy={changing || undefined}>
 				<div class={passwordGrid}>
-					<Field label="Current password" for="current-password">
+					<Field label="Current password" for="current-password" error={currentShown}>
 						<Input
 							id="current-password"
 							type="password"
 							autocomplete="current-password"
 							bind:value={current}
-							disabled={changing}
+							readonly={changing}
+							aria-disabled={changing || undefined}
+							invalid={!!currentShown}
 							required
 						/>
 					</Field>
-					<Field label="New password" for="new-password" error={nextError}>
+					<Field
+						label="New password"
+						for="new-password"
+						error={nextShown}
+						hint={nextShown ? undefined : nextError}
+					>
 						<Input
 							id="new-password"
 							type="password"
 							autocomplete="new-password"
 							bind:value={next}
-							disabled={changing}
-							invalid={!!nextError}
+							readonly={changing}
+							aria-disabled={changing || undefined}
+							invalid={!!nextShown}
+							oninputcapture={() => (shown = { next: false, confirm: shown.confirm && !confirmNext })}
+							onblur={() => (shown = { next: shown.next || next.length > 0, confirm: shown.confirm || confirmNext.length > 0 })}
 							required
 						/>
 					</Field>
-					<Field label="Confirm new password" for="confirm-password" error={confirmError}>
+					<Field
+						label="Confirm new password"
+						for="confirm-password"
+						error={confirmShown}
+						hint={confirmShown ? undefined : confirmError}
+					>
 						<Input
 							id="confirm-password"
 							type="password"
 							autocomplete="new-password"
 							bind:value={confirmNext}
-							disabled={changing}
-							invalid={!!confirmError}
+							readonly={changing}
+							aria-disabled={changing || undefined}
+							invalid={!!confirmShown}
+							oninputcapture={() => (shown.confirm = false)}
+							onblur={() => (shown.confirm ||= confirmNext.length > 0)}
 							required
 						/>
 					</Field>

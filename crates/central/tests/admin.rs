@@ -12,10 +12,10 @@ use axum::http::{Request, StatusCode};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 
-use central::AppState;
+use central::{AppState, EnrollConfig};
 use common::{
     assert_status, authed, body_string, json_body, send, setup_and_login, temp_db_path, test_state,
-    test_state_at, TRUSTED_PROXY,
+    test_state_at, CENTRAL_IDENTITY, CENTRAL_URL, TRUSTED_PROXY,
 };
 
 // AC4/AC23: the admin surface is fail-closed — an admin route with no session is
@@ -147,8 +147,10 @@ async fn public_api_hides_offline_locations() {
     assert_eq!(names, vec!["Live-Local"], "only live locations are public");
 }
 
+// The agent serves its data plane over HTTPS on :443 with a certificate it
+// obtains through TLS-ALPN-01, so only an https origin on port 443 is accepted.
 #[tokio::test]
-async fn remote_data_plane_origin_must_be_an_http_origin() {
+async fn remote_data_plane_origin_must_be_an_https_origin_on_port_443() {
     let state = test_state();
     let cookie = setup_and_login(&state).await;
 
@@ -160,6 +162,11 @@ async fn remote_data_plane_origin_must_be_an_http_origin() {
         "https://remote.example.test?x=1",
         "https://remote.example.test#frag",
         "https://user@remote.example.test",
+        "http://remote.example.test",
+        "http://remote.example.test:443",
+        "https://remote.example.test:9443",
+        "https://remote.example.test:80",
+        "https://[2001:db8::10]:8443",
     ] {
         let response = send(
             central::build(state.clone()),
@@ -178,30 +185,110 @@ async fn remote_data_plane_origin_must_be_an_http_origin() {
             ),
         )
         .await;
-        assert_status(&response, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "data-plane origin {origin:?} must be refused"
+        );
     }
 
-    let valid = send(
-        central::build(state),
+    for origin in [
+        "https://remote.example.test",
+        "https://remote.example.test:443",
+        "https://203.0.113.10",
+        "https://[2001:db8::10]",
+    ] {
+        let valid = send(
+            central::build(state.clone()),
+            authed(
+                "POST",
+                "/api/admin/locations",
+                &cookie,
+                &json!({
+                    "name": "Remote",
+                    "geo_label": "DE",
+                    "kind": "remote",
+                    "data_plane_origin": origin,
+                    "offered_methods": []
+                })
+                .to_string(),
+            ),
+        )
+        .await;
+        assert_status(&valid, StatusCode::CREATED);
+        assert_eq!(json_body(valid).await["data_plane_origin"], origin);
+    }
+}
+
+// The certificate the remote agent reports over the tunnel reaches the
+// admin location editor (issued, expires, last error), and never the public API.
+#[tokio::test]
+async fn the_admin_location_shows_the_remote_certificate_status() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let loc_id = create_remote_location(&state, &cookie, json!(["ping"])).await;
+    let mut location = state.store.get_location(&loc_id).unwrap().unwrap();
+    location.data_plane_origin = Some("https://node.example.test".to_string());
+    assert!(state.store.update_location(&location).unwrap().is_some());
+    state
+        .store
+        .put_agent(&central::Agent {
+            id: "agent-cert".to_string(),
+            location_id: loc_id.clone(),
+            credential_hash: "$argon2id$stub".to_string(),
+            enrolled_at: 0,
+            last_seen: Some(unix_now()),
+            revoked: false,
+        })
+        .unwrap();
+    assert!(state
+        .store
+        .put_certificate_status(
+            &loc_id,
+            "https://node.example.test",
+            &shared::protocol::CertificateStatus {
+                issued_at: Some(1_790_000_000),
+                expires_at: Some(1_790_518_400),
+                last_error: Some("rate limited".to_string()),
+            },
+        )
+        .unwrap());
+
+    let admin = send(
+        central::build(state.clone()),
         authed(
-            "POST",
-            "/api/admin/locations",
+            "GET",
+            &format!("/api/admin/locations/{loc_id}"),
             &cookie,
-            &json!({
-                "name": "Remote",
-                "geo_label": "DE",
-                "kind": "remote",
-                "data_plane_origin": "https://remote.example.test:9443",
-                "offered_methods": []
-            })
-            .to_string(),
+            "",
         ),
     )
     .await;
-    assert_status(&valid, StatusCode::CREATED);
+    assert_status(&admin, StatusCode::OK);
     assert_eq!(
-        json_body(valid).await["data_plane_origin"],
-        "https://remote.example.test:9443"
+        json_body(admin).await["certificate"],
+        json!({"issued_at": 1_790_000_000u64, "expires_at": 1_790_518_400u64, "last_error": "rate limited"}),
+        "the editor must see the agent's certificate status"
+    );
+
+    let public = send(
+        central::build(state),
+        Request::builder()
+            .uri("/api/locations")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let body = json_body(public).await;
+    let remote = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|loc| loc["id"] == json!(loc_id))
+        .expect("the online remote is public");
+    assert!(
+        remote.get("certificate").is_none(),
+        "certificate status is admin-only: {remote}"
     );
 }
 
@@ -251,13 +338,160 @@ async fn local_locations_do_not_persist_or_expose_data_plane_origins() {
     assert!(local["data_plane_origin"].is_null());
 }
 
+// An origin stored before the https-on-443 rule (http://, or another port) is
+// withheld from visitors, and the admin editor says why, so the admin re-saves it.
+#[tokio::test]
+async fn a_stored_origin_the_rule_now_refuses_is_withheld_and_flagged() {
+    for legacy in ["http://node.example.test", "https://node.example.test:8443"] {
+        let state = test_state();
+        let cookie = setup_and_login(&state).await;
+        let loc_id = create_remote_location(&state, &cookie, json!(["ping"])).await;
+        let mut location = state.store.get_location(&loc_id).unwrap().unwrap();
+        location.data_plane_origin = Some(legacy.to_string());
+        assert!(state.store.update_location(&location).unwrap().is_some());
+        state
+            .store
+            .put_agent(&central::Agent {
+                id: "agent-legacy".to_string(),
+                location_id: loc_id.clone(),
+                credential_hash: "$argon2id$stub".to_string(),
+                enrolled_at: 0,
+                last_seen: Some(unix_now()),
+                revoked: false,
+            })
+            .unwrap();
+        // The agent got a certificate on 443 for the host: not a healthy origin.
+        assert!(state
+            .store
+            .put_certificate_status(
+                &loc_id,
+                legacy,
+                &shared::protocol::CertificateStatus {
+                    issued_at: Some(1_790_000_000),
+                    expires_at: Some(1_790_518_400),
+                    last_error: None,
+                },
+            )
+            .unwrap());
+
+        let public = send(
+            central::build(state.clone()),
+            Request::builder()
+                .uri("/api/locations")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        let body = json_body(public).await;
+        let remote = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|loc| loc["id"] == json!(loc_id))
+            .expect("the online remote is public");
+        assert!(
+            remote["data_plane_origin"].is_null(),
+            "{legacy:?} must not reach visitors: {remote}"
+        );
+
+        let admin = send(
+            central::build(state),
+            authed(
+                "GET",
+                &format!("/api/admin/locations/{loc_id}"),
+                &cookie,
+                "",
+            ),
+        )
+        .await;
+        assert_status(&admin, StatusCode::OK);
+        let admin = json_body(admin).await;
+        assert_eq!(
+            admin["data_plane_origin"], legacy,
+            "the editor keeps the stored value to re-save"
+        );
+        let certificate = &admin["certificate"];
+        assert!(
+            certificate["issued_at"].is_null()
+                && certificate["last_error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("Re-save")),
+            "{legacy:?} must be flagged to the admin: {certificate}"
+        );
+    }
+}
+
+// F-215: a valid remote origin reaches visitors, or remote speed tests and files break.
+#[tokio::test]
+async fn a_valid_remote_origin_reaches_visitors() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let origin = "https://node.example.test";
+    let created = send(
+        central::build(state.clone()),
+        authed(
+            "POST",
+            "/api/admin/locations",
+            &cookie,
+            &json!({
+                "name": "Remote",
+                "geo_label": "DE",
+                "kind": "remote",
+                "data_plane_origin": origin,
+                "offered_methods": ["ping"]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_status(&created, StatusCode::CREATED);
+    let loc_id = json_body(created).await["id"].as_str().unwrap().to_string();
+    state
+        .store
+        .put_agent(&central::Agent {
+            id: "agent-origin".to_string(),
+            location_id: loc_id.clone(),
+            credential_hash: "$argon2id$stub".to_string(),
+            enrolled_at: 0,
+            last_seen: Some(unix_now()),
+            revoked: false,
+        })
+        .unwrap();
+
+    let public = send(
+        central::build(state),
+        Request::builder()
+            .uri("/api/locations")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let body = json_body(public).await;
+    let remote = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|loc| loc["id"] == json!(loc_id))
+        .expect("the online remote is public");
+    assert_eq!(remote["data_plane_origin"], origin, "{remote}");
+}
+
 #[tokio::test]
 async fn remote_test_file_source_ref_refuses_browser_normalizing_paths() {
     let state = test_state();
     let cookie = setup_and_login(&state).await;
     let loc_id = create_remote_location(&state, &cookie, json!(["ping"])).await;
 
-    for source_ref in ["../secret.bin", "sub/../secret.bin", "/probe.bin"] {
+    // The SPA refuses empty and `.` segments, so the server must too, or
+    // the saved file has a dead download link.
+    for source_ref in [
+        "../secret.bin",
+        "sub/../secret.bin",
+        "/probe.bin",
+        "a//b",
+        "a/./b",
+        "a/",
+    ] {
         let response = send(
             central::build(state.clone()),
             authed(
@@ -274,6 +508,34 @@ async fn remote_test_file_source_ref_refuses_browser_normalizing_paths() {
         )
         .await;
         assert_status(&response, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+}
+
+// F-256: the refusal above stays narrow: a plain relative path is saved.
+#[tokio::test]
+async fn remote_test_file_source_ref_accepts_a_relative_path() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let loc_id = create_remote_location(&state, &cookie, json!(["ping"])).await;
+
+    for source_ref in ["probe.bin", "sub/probe.bin"] {
+        let response = send(
+            central::build(state.clone()),
+            authed(
+                "POST",
+                &format!("/api/admin/locations/{loc_id}/files"),
+                &cookie,
+                &json!({
+                    "label": "Probe",
+                    "declared_size": "16 B",
+                    "source_ref": source_ref
+                })
+                .to_string(),
+            ),
+        )
+        .await;
+        assert_status(&response, StatusCode::CREATED);
+        assert_eq!(json_body(response).await["source_ref"], source_ref);
     }
 }
 
@@ -685,20 +947,40 @@ async fn mismatched_ip_family_is_rejected() {
     )
     .await;
     let id = json_body(created).await["id"].as_str().unwrap().to_string();
-
-    let rejected = send(
-        central::build(state),
+    let stored = send(
+        central::build(state.clone()),
         authed(
             "POST",
             &format!("/api/admin/locations/{id}/test-ips"),
             &cookie,
-            // A v6 address declared as v4.
-            &json!({ "family": "v4", "address": "2001:db8::1" }).to_string(),
+            &json!({ "family": "v4", "address": "192.0.2.1" }).to_string(),
         ),
     )
     .await;
-    assert_status(&rejected, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(body_string(rejected).await.contains("family"));
+    assert_status(&stored, StatusCode::CREATED);
+    let stored = json_body(stored).await;
+    let stored_id = stored["id"].as_str().unwrap();
+
+    // A v6 address declared as v4, as a new row and as an edit of the stored one.
+    let mismatched = json!({ "family": "v4", "address": "2001:db8::1" }).to_string();
+    for (method, path) in [
+        ("POST", format!("/api/admin/locations/{id}/test-ips")),
+        ("PUT", format!("/api/admin/test-ips/{stored_id}")),
+    ] {
+        let rejected = send(
+            central::build(state.clone()),
+            authed(method, &path, &cookie, &mismatched),
+        )
+        .await;
+        assert_status(&rejected, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(body_string(rejected).await.contains("family"));
+    }
+
+    assert_eq!(
+        serde_json::to_value(state.store.list_test_ips(&id).unwrap()).unwrap(),
+        json!([stored]),
+        "a refused test IP must leave the stored test IPs unchanged"
+    );
 }
 
 // AC25: a settings change persists and reads back — including the exec params
@@ -738,8 +1020,12 @@ async fn settings_are_editable_and_persist() {
     let body = json_body(read).await;
     assert_eq!(body["site_title"], "My Looking Glass");
     assert_eq!(body["default_theme"], "dark");
+    assert_eq!(body["terms_url"], "https://example.test/terms");
     assert_eq!(body["exec_max_concurrent"], 4);
+    assert_eq!(body["exec_timeout_secs"], 20);
+    assert_eq!(body["exec_max_output_kib"], 128);
     assert_eq!(body["exec_rate_max"], 10);
+    assert_eq!(body["exec_rate_window_secs"], 30);
 }
 
 #[tokio::test]
@@ -750,6 +1036,16 @@ async fn settings_reject_non_https_branding_urls_before_persisting() {
     for (field, value) in [
         ("logo_url", "http://example.test/logo.svg"),
         ("terms_url", "javascript:alert(1)"),
+        // The strict check the SPA and enroll share.
+        ("logo_url", "https://cdn.example.test:99999/logo.svg"),
+        ("terms_url", "https://[not-ip]/terms"),
+        // Shapes http's parser lets through and the SPA's URL parser refuses.
+        ("logo_url", "https://[2001:db8::1]x:443/logo.png"),
+        ("terms_url", "https://x[::1]:443/terms"),
+        ("logo_url", "https://cdn.example.test:+443/logo.svg"),
+        ("terms_url", "https://256.1.1.1/terms"),
+        // Only IPv6 goes inside brackets.
+        ("logo_url", "https://[192.0.2.1]/logo.png"),
     ] {
         let rejected = send(
             central::build(state.clone()),
@@ -775,13 +1071,35 @@ async fn settings_reject_non_https_branding_urls_before_persisting() {
     }
 
     let settings = send(
-        central::build(state),
+        central::build(state.clone()),
         authed("GET", "/api/admin/settings", &cookie, ""),
     )
     .await;
     let body = json_body(settings).await;
     assert_eq!(body["logo_url"], Value::Null);
     assert_eq!(body["terms_url"], Value::Null);
+
+    let accepted = send(
+        central::build(state),
+        authed(
+            "PUT",
+            "/api/admin/settings",
+            &cookie,
+            &json!({
+                "site_title": "Looking Glass",
+                "default_theme": "system",
+                "logo_url": "https://[2001:db8::1]:8443/logo.png",
+                "exec_max_concurrent": 8,
+                "exec_timeout_secs": 30,
+                "exec_max_output_kib": 256,
+                "exec_rate_max": 20,
+                "exec_rate_window_secs": 60
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_status(&accepted, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -789,6 +1107,19 @@ async fn updated_run_limits_apply_without_restart() {
     let mut state = test_state();
     state.run = central::RunService::for_test(0, std::time::Duration::from_secs(30), 100);
     let cookie = setup_and_login(&state).await;
+    // A run without `location` is gated on the local location's offered set (F-212).
+    let local = send(
+        central::build(state.clone()),
+        authed(
+            "POST",
+            "/api/admin/locations",
+            &cookie,
+            &json!({"name": "Local", "geo_label": "DE", "kind": "local", "offered_methods": ["ping"]})
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_status(&local, StatusCode::CREATED);
 
     let updated = send(
         central::build(state.clone()),
@@ -992,4 +1323,288 @@ async fn invalid_asn_values_are_refused_with_invalid_asn() {
         0,
         "a rejected ASN wrote nothing"
     );
+}
+
+// The editor reads the detail route, so it must carry last_seen like the
+// list does, or an enrolled-but-offline remote shows "Not enrolled".
+#[tokio::test]
+async fn location_detail_carries_last_seen() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let loc_id = create_remote_location(&state, &cookie, json!(["ping"])).await;
+    state
+        .store
+        .put_agent(&central::Agent {
+            id: "agent-lapsed".to_string(),
+            location_id: loc_id.clone(),
+            credential_hash: "$argon2id$stub".to_string(),
+            enrolled_at: 0,
+            last_seen: Some(1000),
+            revoked: false,
+        })
+        .unwrap();
+
+    let detail = send(
+        central::build(state),
+        authed(
+            "GET",
+            &format!("/api/admin/locations/{loc_id}"),
+            &cookie,
+            "",
+        ),
+    )
+    .await;
+    assert_status(&detail, StatusCode::OK);
+    let body = json_body(detail).await;
+    assert_eq!(body["status"], "offline");
+    assert_eq!(body["last_seen"], json!(1000));
+}
+
+// facility_url is a public link href, so it gets the same strict
+// https check as the logo and terms URLs, on create and on edit.
+#[tokio::test]
+async fn facility_url_must_be_a_strict_https_url() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let location = |facility_url: &str| {
+        json!({
+            "name": "Frankfurt",
+            "geo_label": "DE",
+            "kind": "local",
+            "offered_methods": ["ping"],
+            "facility_url": facility_url
+        })
+        .to_string()
+    };
+
+    let created = send(
+        central::build(state.clone()),
+        authed(
+            "POST",
+            "/api/admin/locations",
+            &cookie,
+            &location("https://dc.example.test/fra1"),
+        ),
+    )
+    .await;
+    assert_status(&created, StatusCode::CREATED);
+    let id = json_body(created).await["id"].as_str().unwrap().to_string();
+
+    for bad in [
+        "javascript:alert(document.domain)",
+        "http://dc.example.test/fra1",
+        "https://dc.example.test:99999/fra1",
+        "https://[not-ip]/fra1",
+        "https://[2001:db8::1]x:443/fra1",
+        "https://x[::1]:443/fra1",
+        "https://dc.example.test:+443/fra1",
+        "https://dc.example.123/fra1",
+        "https://[192.0.2.1]/fra1",
+    ] {
+        for (method, uri) in [
+            ("POST", "/api/admin/locations".to_string()),
+            ("PUT", format!("/api/admin/locations/{id}")),
+        ] {
+            let rejected = send(
+                central::build(state.clone()),
+                authed(method, &uri, &cookie, &location(bad)),
+            )
+            .await;
+            assert_status(&rejected, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+    }
+
+    let list = send(
+        central::build(state.clone()),
+        authed("GET", "/api/admin/locations", &cookie, ""),
+    )
+    .await;
+    let list = json_body(list).await;
+    assert_eq!(
+        list.as_array().unwrap().len(),
+        1,
+        "no rejected create wrote"
+    );
+    assert_eq!(list[0]["facility_url"], "https://dc.example.test/fra1");
+
+    let bracketed_v6 = send(
+        central::build(state),
+        authed(
+            "PUT",
+            &format!("/api/admin/locations/{id}"),
+            &cookie,
+            &location("https://[2001:db8::1]:8443/fra1"),
+        ),
+    )
+    .await;
+    assert_status(&bracketed_v6, StatusCode::OK);
+}
+
+// The enroll asset URLs share the strict check, so a bracketed IPv4
+// host is refused there too while a bracketed IPv6 host with a port is not.
+#[tokio::test]
+async fn enrollment_asset_urls_accept_only_ipv6_in_brackets() {
+    for (agent_url, expected) in [
+        (
+            "https://[192.0.2.1]/lg-agent",
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        ("https://[2001:db8::1]:8443/lg-agent", StatusCode::OK),
+    ] {
+        let mut state = test_state();
+        state.enroll = EnrollConfig::for_test_with_agent(
+            CENTRAL_URL,
+            CENTRAL_IDENTITY.to_vec(),
+            agent_url,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "https://downloads.example/install-agent.sh",
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        );
+        let cookie = setup_and_login(&state).await;
+        let id = create_remote_location(&state, &cookie, json!([])).await;
+        let response = send(
+            central::build(state),
+            authed(
+                "POST",
+                &format!("/api/admin/locations/{id}/enroll"),
+                &cookie,
+                "",
+            ),
+        )
+        .await;
+        assert_status(&response, expected);
+    }
+}
+
+// A body the JSON extractor refuses answers the {error, message}
+// envelope the SPA parses, keeping axum's status.
+#[tokio::test]
+async fn body_extractor_rejections_answer_the_json_envelope() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let loc_id = create_remote_location(&state, &cookie, json!(["ping"])).await;
+
+    for (uri, body, status) in [
+        (
+            format!("/api/admin/locations/{loc_id}/iperf"),
+            json!({ "label": "x", "host": "h", "port": 70000, "cmd_incoming": "a", "cmd_outgoing": "b" })
+                .to_string(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "/api/admin/locations".to_string(),
+            "{".to_string(),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let rejected = send(
+            central::build(state.clone()),
+            authed("POST", &uri, &cookie, &body),
+        )
+        .await;
+        assert_status(&rejected, status);
+        assert_eq!(
+            rejected
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json"),
+            "{uri}"
+        );
+        let body = json_body(rejected).await;
+        assert_eq!(body["error"], "invalid_input");
+        assert!(body["message"].as_str().is_some_and(|m| !m.is_empty()));
+    }
+}
+
+// A child edit that answers 200 must also persist: the edit/delete race tests
+// only expect 404, so a row check that refused every live child would pass them.
+#[tokio::test]
+async fn child_edits_answer_ok_and_persist() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let created = send(
+        central::build(state.clone()),
+        authed(
+            "POST",
+            "/api/admin/locations",
+            &cookie,
+            &json!({ "name": "Frankfurt", "geo_label": "DE", "kind": "local", "offered_methods": [] })
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_status(&created, StatusCode::CREATED);
+    let loc_id = json_body(created).await["id"].as_str().unwrap().to_string();
+
+    for (route, list, create, edit, field, edited) in [
+        (
+            "test-ips",
+            "test_ips",
+            json!({ "family": "v4", "address": "203.0.113.10", "label": "a" }),
+            json!({ "family": "v4", "address": "203.0.113.20", "label": "a" }),
+            "address",
+            "203.0.113.20",
+        ),
+        (
+            "iperf",
+            "iperf",
+            json!({ "label": "a", "host": "h1", "port": 5201, "cmd_incoming": "i", "cmd_outgoing": "o" }),
+            json!({ "label": "a", "host": "h2", "port": 5201, "cmd_incoming": "i", "cmd_outgoing": "o" }),
+            "host",
+            "h2",
+        ),
+        (
+            "files",
+            "files",
+            json!({ "label": "a", "declared_size": "1 MB", "source_ref": "one.bin" }),
+            json!({ "label": "b", "declared_size": "1 MB", "source_ref": "one.bin" }),
+            "label",
+            "b",
+        ),
+    ] {
+        let created = send(
+            central::build(state.clone()),
+            authed(
+                "POST",
+                &format!("/api/admin/locations/{loc_id}/{route}"),
+                &cookie,
+                &create.to_string(),
+            ),
+        )
+        .await;
+        assert_status(&created, StatusCode::CREATED);
+        let id = json_body(created).await["id"].as_str().unwrap().to_string();
+
+        let edited_response = send(
+            central::build(state.clone()),
+            authed(
+                "PUT",
+                &format!("/api/admin/{route}/{id}"),
+                &cookie,
+                &edit.to_string(),
+            ),
+        )
+        .await;
+        assert_status(&edited_response, StatusCode::OK);
+        let body = json_body(edited_response).await;
+        assert_eq!(body["id"], id.as_str(), "{route}: edit keeps the id");
+        assert_eq!(body[field], edited, "{route}: edit answers the new value");
+
+        let detail = send(
+            central::build(state.clone()),
+            authed(
+                "GET",
+                &format!("/api/admin/locations/{loc_id}"),
+                &cookie,
+                "",
+            ),
+        )
+        .await;
+        let detail = json_body(detail).await;
+        let rows = detail[list].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{route}: the edit replaced, not added");
+        assert_eq!(rows[0]["id"], id.as_str(), "{route}: same row");
+        assert_eq!(rows[0][field], edited, "{route}: the edit persisted");
+    }
 }

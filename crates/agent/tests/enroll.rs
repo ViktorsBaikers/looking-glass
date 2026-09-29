@@ -13,8 +13,8 @@ use agent::tunnel::TunnelClientConfig;
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
 use shared::protocol::{
-    fingerprint, EnrollRequest, EnrollResponse, ENV_CENTRAL_FINGERPRINT, ENV_CENTRAL_URL,
-    ENV_ENROLL_TOKEN, ENV_TUNNEL_URL, PROTOCOL_VERSION,
+    fingerprint, sha256_hex, EnrollRequest, EnrollResponse, ENV_CENTRAL_FINGERPRINT,
+    ENV_CENTRAL_URL, ENV_ENROLL_TOKEN, ENV_TUNNEL_URL, PROTOCOL_VERSION,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -156,8 +156,6 @@ async fn mismatched_central_identity_aborts_with_no_credential() {
         matches!(result, Err(EnrollError::IdentityMismatch)),
         "a central whose identity fails the pin must be refused, got {result:?}"
     );
-    // No credential is produced to store — the fail-closed guarantee (AC35).
-    assert!(result.is_err());
 }
 
 #[tokio::test]
@@ -293,6 +291,178 @@ async fn production_https_enrollment_posts_to_api_enroll_and_verifies_the_pin() 
         request.contains(r#""token":"enrollment-token""#),
         "the one-time token travels only in the TLS request body"
     );
+}
+
+/// Serve one TLS connection with `config`, answer it with an enrollment, and
+/// return the HTTP request the agent sent, or `None` when the TLS handshake failed
+/// (the agent refused the peer).
+async fn serve_one_enrollment(listener: TcpListener, config: ServerConfig) -> Option<String> {
+    let (tcp, _) = listener.accept().await.unwrap();
+    let mut tls = TlsAcceptor::from(std::sync::Arc::new(config))
+        .accept(tcp)
+        .await
+        .ok()?;
+    let request = read_http_request(&mut tls).await;
+    let body = format!(
+        r#"{{"protocol_version":{PROTOCOL_VERSION},"agent_id":"agent-xyz","credential":"cred-abc123"}}"#
+    );
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    tls.write_all(response.as_bytes()).await.unwrap();
+    tls.shutdown().await.unwrap();
+    Some(request)
+}
+
+/// Enroll against `config` on a local port with `pin`; return the enrollment
+/// result and whatever request reached the server.
+async fn enroll_against(
+    config: ServerConfig,
+    pin: String,
+) -> (Result<AgentCredential, EnrollError>, Option<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_one_enrollment(listener, config));
+    let command = PinnedCommand {
+        central_url: format!("https://{addr}"),
+        tunnel_url: "https://tunnel.central.test:8443".to_string(),
+        fingerprint: pin,
+        token: "enrollment-token".to_string(),
+    };
+    let connector = HttpsEnrollConnector::new(&command.central_url, &command.fingerprint).unwrap();
+    let result = enroll(&command, &connector).await;
+    (result, server.await.unwrap())
+}
+
+fn test_certs() -> Vec<CertificateDer<'static>> {
+    CertificateDer::pem_slice_iter(TEST_CERT.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+/// SHA-256 over the leaf's DER SubjectPublicKeyInfo — the pin central mints.
+fn public_key_pin(cert: &CertificateDer<'_>) -> String {
+    let parsed = rustls::server::ParsedCertificate::try_from(cert).unwrap();
+    sha256_hex(parsed.subject_public_key_info().as_ref())
+}
+
+// Install commands carry the SHA-256 of central's public key, so the
+// production HTTPS enrollment accepts that pin and stores it.
+#[tokio::test]
+async fn production_https_enrollment_accepts_the_public_key_pin() {
+    let key = PrivateKeyDer::from_pem_slice(TEST_KEY.as_bytes()).unwrap();
+    let config = ServerConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(test_certs(), key)
+    .unwrap();
+    let pin = public_key_pin(&test_certs()[0]);
+
+    let (result, request) = enroll_against(config, pin.clone()).await;
+
+    let credential = result.expect("the public-key pin enrolls");
+    assert_eq!(credential.fingerprint, pin);
+    assert!(request.is_some(), "the pinned central receives the token");
+}
+
+// The production verifier refuses a certificate that does not match the
+// pin during the TLS handshake, so the one-time token is never sent to it.
+#[tokio::test]
+async fn production_https_enrollment_refuses_a_mismatched_pin_before_sending_the_token() {
+    let key = PrivateKeyDer::from_pem_slice(TEST_KEY.as_bytes()).unwrap();
+    let config = ServerConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(test_certs(), key)
+    .unwrap();
+
+    let (result, request) = enroll_against(config, fingerprint(b"a-different-central")).await;
+
+    assert!(result.is_err(), "an unpinned central must not enroll");
+    assert_eq!(
+        request, None,
+        "the token must not reach an unpinned central"
+    );
+}
+
+/// A signing key that presents central's real certificate but cannot sign for
+/// it: every handshake signature covers other bytes, as an impostor replaying
+/// central's public certificate without its private key would produce.
+#[derive(Debug)]
+struct WithoutTheKey(std::sync::Arc<dyn rustls::sign::SigningKey>);
+
+#[derive(Debug)]
+struct WrongTranscript(Box<dyn rustls::sign::Signer>);
+
+impl rustls::sign::SigningKey for WithoutTheKey {
+    fn choose_scheme(
+        &self,
+        offered: &[rustls::SignatureScheme],
+    ) -> Option<Box<dyn rustls::sign::Signer>> {
+        let signer = self.0.choose_scheme(offered)?;
+        Some(Box::new(WrongTranscript(signer)))
+    }
+
+    fn algorithm(&self) -> rustls::SignatureAlgorithm {
+        self.0.algorithm()
+    }
+}
+
+impl rustls::sign::Signer for WrongTranscript {
+    fn sign(&self, _message: &[u8]) -> Result<Vec<u8>, rustls::Error> {
+        self.0.sign(b"not this handshake")
+    }
+
+    fn scheme(&self) -> rustls::SignatureScheme {
+        self.0.scheme()
+    }
+}
+
+// The pin covers only central's public certificate, so the handshake
+// signature is what proves central holds its key. A peer presenting the pinned
+// certificate without the key is refused over TLS 1.3 and TLS 1.2 alike, and
+// never receives the token.
+#[tokio::test]
+async fn production_https_enrollment_refuses_the_pinned_certificate_without_its_key() {
+    let certs = test_certs();
+    // The public-key pin is proven by the handshake signature just the same.
+    for pin in [fingerprint(certs[0].as_ref()), public_key_pin(&certs[0])] {
+        for version in [&rustls::version::TLS13, &rustls::version::TLS12] {
+            let key = PrivateKeyDer::from_pem_slice(TEST_KEY.as_bytes()).unwrap();
+            let signing = rustls::crypto::ring::sign::any_supported_type(&key).unwrap();
+            let impostor = rustls::sign::CertifiedKey::new(
+                certs.clone(),
+                std::sync::Arc::new(WithoutTheKey(signing)),
+            );
+            let config = ServerConfig::builder_with_provider(std::sync::Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_protocol_versions(&[version])
+            .unwrap()
+            .with_no_client_auth()
+            .with_cert_resolver(std::sync::Arc::new(
+                rustls::sign::SingleCertAndKey::from(impostor),
+            ));
+
+            let (result, request) = enroll_against(config, pin.clone()).await;
+
+            assert!(
+                result.is_err(),
+                "{version:?}: a keyless peer must not enroll"
+            );
+            assert_eq!(
+                request, None,
+                "{version:?}: the token reached a keyless peer"
+            );
+        }
+    }
 }
 
 #[test]
@@ -532,18 +702,29 @@ fn tunnel_config_uses_stored_tunnel_url_not_api_url() {
 
 #[tokio::test]
 async fn a_missing_install_parameter_fails_closed() {
-    // No LG_* vars set for these keys → from_env refuses rather than enrolling
-    // against an unpinned central.
-    for key in [
+    // Each LG_* var missing on its own → from_env refuses rather than enrolling
+    // against an unpinned central. This is the only test in this binary that touches
+    // these vars, so setting them here races no other test.
+    let keys = [
         ENV_CENTRAL_URL,
         ENV_TUNNEL_URL,
         ENV_CENTRAL_FINGERPRINT,
         ENV_ENROLL_TOKEN,
-    ] {
+    ];
+    for missing in keys {
+        for key in keys {
+            std::env::set_var(key, "set");
+        }
+        std::env::remove_var(missing);
+        let result = PinnedCommand::from_env();
+        assert!(
+            matches!(result, Err(EnrollError::MissingParam(key)) if key == missing),
+            "{missing} missing must fail closed, got {result:?}"
+        );
+    }
+    for key in keys {
         std::env::remove_var(key);
     }
-    let result = PinnedCommand::from_env();
-    assert!(matches!(result, Err(EnrollError::MissingParam(_))));
 }
 
 async fn read_http_request<T>(tls: &mut T) -> String

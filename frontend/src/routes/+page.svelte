@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { cx } from 'styled-system/css';
 	import Tabs from '$lib/components/ui/tabs.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -32,6 +32,9 @@
 	import type { LocationDetail } from '$lib/admin/types.js';
 
 	const controller = new RunController();
+	// In-app navigation unmounts this page but not an open EventSource: close it
+	// so the node stops the run instead of finishing it for nobody.
+	onDestroy(() => controller.cancel());
 
 	let phase = $state<'loading' | 'ready' | 'error'>('loading');
 	let locations = $state<LocationDetail[]>([]);
@@ -160,9 +163,14 @@
 								bind:value={target}
 								mono
 								placeholder={targetPlaceholder(method)}
-								disabled={controller.active}
+								readonly={controller.active}
+								aria-disabled={controller.active || undefined}
+								onkeydown={(event) => {
+									// Busy, not disabled: disabling the focused field drops focus
+									// to <body>. Enter must not reach the Cancel button either.
+									if (controller.active && event.key === 'Enter') event.preventDefault();
+								}}
 								invalid={targetError !== ''}
-								aria-describedby={targetError ? 'target-error' : undefined}
 							/>
 						</Field>
 						<Button type="submit" class={runButton} disabled={!controller.active && !canRun}>

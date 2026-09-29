@@ -16,9 +16,10 @@ use serde::{Deserialize, Serialize};
 use shared::protocol::sha256_hex;
 use tower_sessions::Session;
 
-use crate::admin_api::first_message;
+use crate::admin_api::{first_message, AdminJson};
 use crate::auth::{
-    hash_password, random_hex, random_id, verify_password, AdminSession, ApiError, ClientContext,
+    argon2_off_runtime, hash_password, random_hex, random_id, verify_password, AdminSession,
+    ApiError, ClientContext,
 };
 use crate::installer::username_allowed;
 use crate::observability::{correlation_id, log_validation_rejected};
@@ -148,7 +149,7 @@ async fn create_administrator(
     State(state): State<AppState>,
     _admin: AdminSession,
     headers: HeaderMap,
-    Json(body): Json<CreateAdministratorRequest>,
+    AdminJson(body): AdminJson<CreateAdministratorRequest>,
 ) -> Result<(StatusCode, Json<ActivationLink>), ApiError> {
     let correlation_id = correlation_id(&headers);
     if let Err(report) = body.validate() {
@@ -283,7 +284,15 @@ async fn remove_administrator(
     RedbSessionStore::new(&state.store)
         .delete_for_admin(&id, None)
         .await
-        .map_err(|_| ApiError::Internal)?;
+        .map_err(|error| {
+            tracing::error!(
+                event = "admin.administrators",
+                correlation_id = %correlation_id,
+                %error,
+                "session purge failed"
+            );
+            ApiError::Internal
+        })?;
     tracing::info!(
         event = "admin.administrators",
         correlation_id = %correlation_id,
@@ -309,7 +318,7 @@ async fn change_password(
     session: Session,
     ctx: ClientContext,
     headers: HeaderMap,
-    Json(body): Json<ChangePasswordRequest>,
+    AdminJson(body): AdminJson<ChangePasswordRequest>,
 ) -> Result<StatusCode, ApiError> {
     let correlation_id = correlation_id(&headers);
     // A password change carries the current AND the new password, so it refuses
@@ -332,10 +341,11 @@ async fn change_password(
         .store
         .get_administrator(&admin.admin_id)?
         .ok_or(ApiError::Unauthorized)?;
-    let verified_hash = row
-        .password_hash
-        .as_deref()
-        .filter(|hash| verify_password(&body.current_password, hash));
+    let (current, stored) = (body.current_password, row.password_hash.clone());
+    let verified_hash =
+        argon2_off_runtime(move || stored.filter(|hash| verify_password(&current, hash)))
+            .await
+            .ok_or(ApiError::Internal)?;
     let Some(verified_hash) = verified_hash else {
         tracing::warn!(
             event = "auth.password",
@@ -355,11 +365,14 @@ async fn change_password(
     // racing the Argon2 work refuses instead of resurrecting the row, and the
     // same transaction bumps the credential generation that revokes every
     // session not stamped with the new value.
-    let Some(generation) = state.store.rotate_password(
-        &admin.admin_id,
-        verified_hash,
-        hash_password(&body.new_password)?,
-    )?
+    let new_password = body.new_password;
+    let new_hash = argon2_off_runtime(move || hash_password(&new_password))
+        .await
+        .ok_or(ApiError::Internal)??;
+    let Some(generation) =
+        state
+            .store
+            .rotate_password(&admin.admin_id, &verified_hash, new_hash)?
     else {
         return Err(ApiError::Unauthorized);
     };
@@ -374,7 +387,15 @@ async fn change_password(
     RedbSessionStore::new(&state.store)
         .delete_for_admin(&row.id, Some(session.id().ok_or(ApiError::Internal)?))
         .await
-        .map_err(|_| ApiError::Internal)?;
+        .map_err(|error| {
+            tracing::error!(
+                event = "auth.password",
+                correlation_id = %correlation_id,
+                %error,
+                "session purge failed"
+            );
+            ApiError::Internal
+        })?;
     tracing::info!(
         event = "auth.password",
         correlation_id = %correlation_id,
@@ -441,7 +462,7 @@ async fn activate(
     ctx: ClientContext,
     headers: HeaderMap,
     Path(token): Path<String>,
-    Json(body): Json<ActivateRequest>,
+    AdminJson(body): AdminJson<ActivateRequest>,
 ) -> Result<StatusCode, ApiError> {
     if !ctx.secure {
         return Err(ApiError::CleartextRefused);
@@ -454,7 +475,10 @@ async fn activate(
         log_validation_rejected(&correlation_id, "auth.activate", "invalid_payload");
         return Err(ApiError::Validation(first_message(&report)));
     }
-    let password_hash = hash_password(&body.password)?;
+    let password = body.password;
+    let password_hash = argon2_off_runtime(move || hash_password(&password))
+        .await
+        .ok_or(ApiError::Internal)??;
     // Atomic single use: the store transaction decides the winner; a lost race
     // (or a link used between the lookup and here) is a plain 410.
     if !state.store.activate_administrator(
@@ -473,4 +497,94 @@ async fn activate(
         "administrator activated"
     );
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::extract::{Path, State};
+    use axum::http::HeaderMap;
+    use tower_sessions::Session;
+
+    use super::{change_password, remove_administrator, ChangePasswordRequest};
+    use crate::admin_api::AdminJson;
+    use crate::auth::tests::{break_session_table, capture_logs, install, test_state, PASSWORD};
+    use crate::auth::{AdminSession, ApiError, ClientContext, SESSION_ADMIN_KEY};
+    use crate::session::RedbSessionStore;
+    use crate::store::{Administrator, AdministratorStatus};
+
+    fn alice() -> AdminSession {
+        AdminSession {
+            admin_id: "alice-id".to_string(),
+        }
+    }
+
+    // F-334: a failed session purge answers a generic 500, so its cause must
+    // reach the operator log.
+    #[tokio::test]
+    async fn removal_session_purge_failure_is_logged_with_its_cause() {
+        let state = test_state();
+        install(&state);
+        state
+            .store
+            .create_pending_administrator(Administrator {
+                id: "bob-id".to_string(),
+                username: "bob".to_string(),
+                password_hash: None,
+                status: AdministratorStatus::Pending,
+                created_at: 0,
+                activation_token_hash: None,
+                activation_expires_at: None,
+                session_generation: 0,
+            })
+            .unwrap();
+        let cause = break_session_table(&state.store);
+        let (logs, _guard) = capture_logs();
+
+        let result = remove_administrator(
+            State(state.clone()),
+            alice(),
+            HeaderMap::new(),
+            Path("bob-id".to_string()),
+        )
+        .await;
+
+        assert!(matches!(result, Err(ApiError::Internal)));
+        let logs = logs.text();
+        assert!(logs.contains("ERROR") && logs.contains(&cause), "{logs}");
+    }
+
+    #[tokio::test]
+    async fn password_change_session_purge_failure_is_logged_with_its_cause() {
+        let state = test_state();
+        install(&state);
+        // A saved session, so the handler has an id to keep and never
+        // reloads it from the table broken below.
+        let session = Session::new(None, Arc::new(RedbSessionStore::new(&state.store)), None);
+        session.insert(SESSION_ADMIN_KEY, "alice-id").await.unwrap();
+        session.save().await.unwrap();
+        let cause = break_session_table(&state.store);
+        let (logs, _guard) = capture_logs();
+
+        let result = change_password(
+            State(state.clone()),
+            alice(),
+            session,
+            ClientContext {
+                ip: None,
+                secure: true,
+            },
+            HeaderMap::new(),
+            AdminJson(ChangePasswordRequest {
+                current_password: PASSWORD.to_string(),
+                new_password: "a-brand-new-passphrase".to_string(),
+            }),
+        )
+        .await;
+
+        assert!(matches!(result, Err(ApiError::Internal)));
+        let logs = logs.text();
+        assert!(logs.contains("ERROR") && logs.contains(&cause), "{logs}");
+    }
 }

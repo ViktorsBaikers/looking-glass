@@ -16,7 +16,7 @@
       "line-red": { "role": "secondary", "displayName": "Line Red", "canonical": "light-dark(#c8102e, #ff6b6b)" },
       "line-blue": { "role": "secondary", "displayName": "Line Blue", "canonical": "light-dark(#0b5cad, #5ea8ff)" },
       "line-green": { "role": "secondary", "displayName": "Line Green", "canonical": "light-dark(#00783a, #45cf85)" },
-      "line-ochre": { "role": "secondary", "displayName": "Line Ochre", "canonical": "light-dark(#8a6500, #f5c842)" },
+      "line-ochre": { "role": "secondary", "displayName": "Line Ochre", "canonical": "light-dark(#886400, #f5c842)" },
       "line-violet": { "role": "secondary", "displayName": "Line Violet", "canonical": "light-dark(#6b3fa0, #b48cff)" },
       "line-teal": { "role": "secondary", "displayName": "Line Teal", "canonical": "light-dark(#00747a, #35c6cb)" },
       "line-orange": { "role": "secondary", "displayName": "Line Orange", "canonical": "light-dark(#b34a0c, #ff9147)" },
@@ -34,8 +34,8 @@
     ],
     "motion": [
       { "name": "ease-out", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "All state transitions and entrances." },
-      { "name": "station-in", "value": "320ms ease-out, translateY(-4px) to 0", "purpose": "Route-view hop rows arriving; mtr staggers 60ms." },
-      { "name": "here-pulse", "value": "1.4s infinite halo in the line colour", "purpose": "Newest hop while a traceroute streams." }
+      { "name": "station-in", "value": "240ms ease-out, translateY(-4px) to 0", "purpose": "Route-view hop rows arriving; mtr staggers 60ms." },
+      { "name": "here-pulse", "value": "1.6s infinite halo in the line colour", "purpose": "Newest hop while a traceroute streams." }
     ],
     "breakpoints": [
       { "name": "sm", "value": "640px" },

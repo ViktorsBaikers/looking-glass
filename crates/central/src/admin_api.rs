@@ -7,22 +7,26 @@
 //! (Slice 6); it carries no admin-only data (FR-045).
 
 use std::collections::HashMap;
-use std::net::IpAddr;
-use std::path::{Component, Path as FsPath};
+use std::net::{IpAddr, Ipv4Addr};
 
-use axum::extract::{Path, State};
+use axum::extract::{FromRequest, Path, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use garde::Validate;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+
+use shared::protocol::CertificateStatus;
 
 use crate::auth::{random_id, AdminSession, ApiError};
 use crate::observability::{correlation_id, log_validation_rejected};
 use crate::store::{
     derive_location_status, latest_last_seen, unix_now, Agent, Family, GlobalSettings,
     IperfEndpoint, Location, LocationStatus, NodeKind, OfferedMethod, TestFile, TestIp,
+    EXEC_MAX_CONCURRENT_MAX, EXEC_MAX_OUTPUT_KIB_MAX, EXEC_RATE_MAX_MAX, EXEC_RATE_WINDOW_SECS_MAX,
+    EXEC_TIMEOUT_SECS_MAX,
 };
 use crate::AppState;
 
@@ -85,8 +89,6 @@ struct PublicSettings {
 impl PublicSettings {
     fn from_settings(settings: GlobalSettings) -> Result<Self, ApiError> {
         if !(1..=100).contains(&settings.site_title.chars().count())
-            || !is_optional_https_url(&settings.logo_url, 500)
-            || !is_optional_https_url(&settings.terms_url, 300)
             || settings
                 .custom_block
                 .as_ref()
@@ -97,12 +99,29 @@ impl PublicSettings {
 
         Ok(Self {
             site_title: settings.site_title,
-            logo_url: settings.logo_url,
+            logo_url: stored_public_url(settings.logo_url, 500)?,
             default_theme: settings.default_theme,
-            terms_url: settings.terms_url,
+            terms_url: stored_public_url(settings.terms_url, 300)?,
             custom_block: settings.custom_block,
         })
     }
+}
+
+/// A stored logo or terms URL outside the contract every release enforced (too
+/// long, or not https with a host) is corruption; one saved before the strict
+/// check that the strict check now refuses is served as absent.
+fn stored_public_url(value: Option<String>, max_length: usize) -> Result<Option<String>, ApiError> {
+    let Some(url) = value else {
+        return Ok(None);
+    };
+    let legacy_ok = url.chars().count() <= max_length
+        && url
+            .parse::<Uri>()
+            .is_ok_and(|uri| uri.scheme_str() == Some("https") && uri.authority().is_some());
+    if !legacy_ok {
+        return Err(ApiError::Internal);
+    }
+    Ok(is_https_url(&url).then_some(url))
 }
 
 fn is_optional_https_url(value: &Option<String>, max_length: usize) -> bool {
@@ -111,11 +130,46 @@ fn is_optional_https_url(value: &Option<String>, max_length: usize) -> bool {
         .is_none_or(|url| url.chars().count() <= max_length && is_https_url(url))
 }
 
-fn is_https_url(value: &str) -> bool {
-    value
-        .parse::<Uri>()
-        .ok()
-        .is_some_and(|uri| uri.scheme_str() == Some("https") && uri.authority().is_some())
+/// The one strict https check for the admin-set public links (logo, terms and
+/// facility) and enroll's agent asset URLs: an https scheme, a host (a bracketed
+/// one must be IPv6, one ending in a number a dotted-quad IPv4) and nothing
+/// after the host but an optional `:` and decimal port, so the SPA's URL parser
+/// accepts every URL this accepts. http's parser alone lets through
+/// `[::1]x:443`, `x[::1]:443`, `:+443` and `256.1.1.1`.
+pub(crate) fn is_https_url(value: &str) -> bool {
+    let Ok(uri) = value.parse::<Uri>() else {
+        return false;
+    };
+    let Some(authority) = uri.authority() else {
+        return false;
+    };
+    let host = authority.host();
+    let host_ok = match host.strip_prefix('[') {
+        Some(rest) => rest
+            .strip_suffix(']')
+            .is_some_and(|ip| matches!(ip.parse::<IpAddr>(), Ok(IpAddr::V6(_)))),
+        None => {
+            // WHATWG parses a host whose last label is a number as IPv4.
+            let last = host.strip_suffix('.').unwrap_or(host).rsplit('.').next();
+            let last = last.unwrap_or_default();
+            let ends_in_number = match last.strip_prefix("0x").or(last.strip_prefix("0X")) {
+                Some(hex) => hex.bytes().all(|b| b.is_ascii_hexdigit()),
+                None => !last.is_empty() && last.bytes().all(|b| b.is_ascii_digit()),
+            };
+            !host.is_empty()
+                && !host.ends_with(']')
+                && (!ends_in_number || host.parse::<Ipv4Addr>().is_ok())
+        }
+    };
+    let host_port = authority.as_str().rsplit('@').next().unwrap_or_default();
+    let port_ok = match host_port.strip_prefix(host) {
+        Some("") => true,
+        Some(rest) => rest.strip_prefix(':').is_some_and(|port| {
+            port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok()
+        }),
+        None => false,
+    };
+    uri.scheme_str() == Some("https") && host_ok && port_ok
 }
 
 /// A location plus its child entities — the shape both the admin editor and the
@@ -152,7 +206,7 @@ fn scrub_local_data_plane_origin(location: &mut Location) {
     }
 }
 
-fn clean_data_plane_origin(
+pub(crate) fn clean_data_plane_origin(
     kind: NodeKind,
     origin: Option<String>,
 ) -> Result<Option<String>, ApiError> {
@@ -163,31 +217,26 @@ fn clean_data_plane_origin(
     let Some(origin) = origin else {
         return Ok(None);
     };
+    // The agent serves the data plane over HTTPS on :443 and proves the origin to
+    // its CA with TLS-ALPN-01, which is always dialed on 443.
+    let https_443 =
+        || ApiError::Validation("Enter an https:// data-plane origin on port 443.".to_string());
     let trimmed = origin.trim();
     if trimmed.is_empty() {
-        return Err(ApiError::Validation(
-            "Enter an absolute http:// or https:// data-plane origin.".to_string(),
-        ));
+        return Err(https_443());
     }
 
-    let uri: Uri = trimmed.parse().map_err(|_| {
-        ApiError::Validation("Enter an absolute http:// or https:// data-plane origin.".to_string())
-    })?;
-    let scheme = uri.scheme_str().ok_or_else(|| {
-        ApiError::Validation("Enter an absolute http:// or https:// data-plane origin.".to_string())
-    })?;
-    if scheme != "http" && scheme != "https" {
-        return Err(ApiError::Validation(
-            "Enter an absolute http:// or https:// data-plane origin.".to_string(),
-        ));
+    let uri: Uri = trimmed.parse().map_err(|_| https_443())?;
+    let scheme = uri.scheme_str().ok_or_else(https_443)?;
+    if scheme != "https" {
+        return Err(https_443());
     }
-    let authority = uri.authority().ok_or_else(|| {
-        ApiError::Validation("Enter an absolute http:// or https:// data-plane origin.".to_string())
-    })?;
+    let authority = uri.authority().ok_or_else(https_443)?;
+    if authority.port_u16().is_some_and(|port| port != 443) {
+        return Err(https_443());
+    }
     let Some((_scheme, authority_tail)) = trimmed.split_once("://") else {
-        return Err(ApiError::Validation(
-            "Enter an absolute http:// or https:// data-plane origin.".to_string(),
-        ));
+        return Err(https_443());
     };
     if authority.as_str().contains('@')
         || authority_tail.contains('/')
@@ -255,6 +304,11 @@ impl LocationInput {
         created_at: u64,
         status: LocationStatus,
     ) -> Result<Location, ApiError> {
+        if !is_optional_https_url(&self.facility_url, 300) {
+            return Err(ApiError::Validation(
+                "Facility link must be an https:// URL.".to_string(),
+            ));
+        }
         let data_plane_origin = clean_data_plane_origin(self.kind, self.data_plane_origin)?;
         let asn = clean_asn(&self.asn)?;
         Ok(Location {
@@ -285,6 +339,17 @@ struct AdminLocation {
     #[serde(flatten)]
     location: Location,
     last_seen: Option<u64>,
+}
+
+/// The admin editor's view of one location: the detail plus the list's
+/// `last_seen`, so both label an enrolled-but-offline remote the same way, and
+/// the data-plane certificate status its agent last reported.
+#[derive(Serialize)]
+struct AdminLocationDetail {
+    #[serde(flatten)]
+    detail: LocationDetail,
+    last_seen: Option<u64>,
+    certificate: Option<CertificateStatus>,
 }
 
 /// Group agents by their `location_id` so each location's live status derives from a
@@ -330,21 +395,38 @@ async fn get_location(
     State(state): State<AppState>,
     _admin: AdminSession,
     Path(id): Path<String>,
-) -> Result<Json<LocationDetail>, ApiError> {
+) -> Result<Json<AdminLocationDetail>, ApiError> {
     let mut location = state.store.get_location(&id)?.ok_or(ApiError::NotFound)?;
     scrub_local_data_plane_origin(&mut location);
     // Reflect the live-derived status so a poll (e.g. the enroll dialog awaiting
     // dial-home) sees the location come online (Slice 8b).
     let agents = state.store.list_agents(&id)?;
     location.status = derive_location_status(&location, &agents, unix_now());
-    Ok(Json(LocationDetail::load(&state, location)?))
+    let mut certificate = state.store.get_certificate_status(&id)?;
+    // An origin saved before the https-on-443 rule is withheld from the agent and
+    // visitors (see `public_locations`, `tunnel`); say so where the editor looks.
+    if clean_data_plane_origin(location.kind, location.data_plane_origin.clone()).is_err() {
+        certificate = Some(CertificateStatus {
+            last_error: Some(
+                "The saved origin is not https:// on port 443, so the node and visitors \
+                 do not get it. Re-save a valid origin."
+                    .to_string(),
+            ),
+            ..CertificateStatus::default()
+        });
+    }
+    Ok(Json(AdminLocationDetail {
+        last_seen: latest_last_seen(&location, &agents),
+        certificate,
+        detail: LocationDetail::load(&state, location)?,
+    }))
 }
 
 async fn create_location(
     State(state): State<AppState>,
     _admin: AdminSession,
     headers: HeaderMap,
-    Json(body): Json<LocationInput>,
+    AdminJson(body): AdminJson<LocationInput>,
 ) -> Result<(StatusCode, Json<Location>), ApiError> {
     validate_admin(&headers, "admin.location", &body)?;
     let location = body
@@ -361,7 +443,7 @@ async fn update_location(
     _admin: AdminSession,
     Path(id): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<LocationInput>,
+    AdminJson(body): AdminJson<LocationInput>,
 ) -> Result<Json<Location>, ApiError> {
     let existing = state.store.get_location(&id)?.ok_or(ApiError::NotFound)?;
     validate_admin(&headers, "admin.location", &body)?;
@@ -370,7 +452,11 @@ async fn update_location(
         .map_err(|error| {
             admin_validation_error(&headers, "admin.location", "invalid_location", error)
         })?;
-    state.store.put_location(&location)?;
+    let revoked = state
+        .store
+        .update_location(&location)?
+        .ok_or(ApiError::NotFound)?;
+    state.tunnel_hub.kick_agents(&revoked);
     Ok(Json(location))
 }
 
@@ -400,7 +486,7 @@ async fn reorder_locations(
     State(state): State<AppState>,
     _admin: AdminSession,
     headers: HeaderMap,
-    Json(body): Json<LocationOrderInput>,
+    AdminJson(body): AdminJson<LocationOrderInput>,
 ) -> Result<StatusCode, ApiError> {
     if state.store.reorder_locations(&body.ids)? {
         Ok(StatusCode::NO_CONTENT)
@@ -491,7 +577,7 @@ async fn create_test_ip(
     _admin: AdminSession,
     Path(location_id): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<TestIpInput>,
+    AdminJson(body): AdminJson<TestIpInput>,
 ) -> Result<(StatusCode, Json<TestIp>), ApiError> {
     require_location(&state, &location_id)?;
     validate_admin(&headers, "admin.test_ip", &body)?;
@@ -499,7 +585,7 @@ async fn create_test_ip(
         admin_validation_error(&headers, "admin.test_ip", "invalid_address", error)
     })?;
     let test_ip = body.into_test_ip(random_id(), location_id);
-    state.store.put_test_ip(&test_ip)?;
+    ok_or_not_found(state.store.put_test_ip(&test_ip)?)?;
     Ok((StatusCode::CREATED, Json(test_ip)))
 }
 
@@ -508,7 +594,7 @@ async fn update_test_ip(
     _admin: AdminSession,
     Path(id): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<TestIpInput>,
+    AdminJson(body): AdminJson<TestIpInput>,
 ) -> Result<Json<TestIp>, ApiError> {
     let existing = state.store.get_test_ip(&id)?.ok_or(ApiError::NotFound)?;
     validate_admin(&headers, "admin.test_ip", &body)?;
@@ -516,7 +602,7 @@ async fn update_test_ip(
         admin_validation_error(&headers, "admin.test_ip", "invalid_address", error)
     })?;
     let test_ip = body.into_test_ip(existing.id, existing.location_id);
-    state.store.put_test_ip(&test_ip)?;
+    ok_or_not_found(state.store.update_test_ip(&test_ip)?)?;
     Ok(Json(test_ip))
 }
 
@@ -563,12 +649,12 @@ async fn create_iperf(
     _admin: AdminSession,
     Path(location_id): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<IperfInput>,
+    AdminJson(body): AdminJson<IperfInput>,
 ) -> Result<(StatusCode, Json<IperfEndpoint>), ApiError> {
     require_location(&state, &location_id)?;
     validate_admin(&headers, "admin.iperf", &body)?;
     let endpoint = body.into_endpoint(random_id(), location_id);
-    state.store.put_iperf(&endpoint)?;
+    ok_or_not_found(state.store.put_iperf(&endpoint)?)?;
     Ok((StatusCode::CREATED, Json(endpoint)))
 }
 
@@ -577,12 +663,12 @@ async fn update_iperf(
     _admin: AdminSession,
     Path(id): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<IperfInput>,
+    AdminJson(body): AdminJson<IperfInput>,
 ) -> Result<Json<IperfEndpoint>, ApiError> {
     let existing = state.store.get_iperf(&id)?.ok_or(ApiError::NotFound)?;
     validate_admin(&headers, "admin.iperf", &body)?;
     let endpoint = body.into_endpoint(existing.id, existing.location_id);
-    state.store.put_iperf(&endpoint)?;
+    ok_or_not_found(state.store.update_iperf(&endpoint)?)?;
     Ok(Json(endpoint))
 }
 
@@ -611,15 +697,18 @@ impl TestFileInput {
         if location.kind != NodeKind::Remote {
             return Ok(());
         }
-        let path = FsPath::new(&self.source_ref);
-        if path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
+        // Split on '/' as the SPA's download URL does: `Path::components` would
+        // normalise away the empty and `.` segments the SPA refuses.
+        if self
+            .source_ref
+            .split('/')
+            .all(|part| !matches!(part, "" | "." | ".."))
         {
             Ok(())
         } else {
             Err(ApiError::Validation(
-                "Remote file source must be a relative path without dot segments.".to_string(),
+                "Remote file source must be a relative path without empty or dot segments."
+                    .to_string(),
             ))
         }
     }
@@ -640,7 +729,7 @@ async fn create_test_file(
     _admin: AdminSession,
     Path(location_id): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<TestFileInput>,
+    AdminJson(body): AdminJson<TestFileInput>,
 ) -> Result<(StatusCode, Json<TestFile>), ApiError> {
     let location = state
         .store
@@ -651,7 +740,7 @@ async fn create_test_file(
         admin_validation_error(&headers, "admin.file", "invalid_remote_source_ref", error)
     })?;
     let file = body.into_file(random_id(), location_id);
-    state.store.put_test_file(&file)?;
+    ok_or_not_found(state.store.put_test_file(&file)?)?;
     Ok((StatusCode::CREATED, Json(file)))
 }
 
@@ -660,7 +749,7 @@ async fn update_test_file(
     _admin: AdminSession,
     Path(id): Path<String>,
     headers: HeaderMap,
-    Json(body): Json<TestFileInput>,
+    AdminJson(body): AdminJson<TestFileInput>,
 ) -> Result<Json<TestFile>, ApiError> {
     let existing = state.store.get_test_file(&id)?.ok_or(ApiError::NotFound)?;
     let location = state
@@ -672,7 +761,7 @@ async fn update_test_file(
         admin_validation_error(&headers, "admin.file", "invalid_remote_source_ref", error)
     })?;
     let file = body.into_file(existing.id, existing.location_id);
-    state.store.put_test_file(&file)?;
+    ok_or_not_found(state.store.update_test_file(&file)?)?;
     Ok(Json(file))
 }
 
@@ -698,15 +787,15 @@ struct SettingsInput {
     terms_url: Option<String>,
     #[garde(inner(length(max = 5000)))]
     custom_block: Option<String>,
-    #[garde(range(min = 1, max = 1024))]
+    #[garde(range(min = 1, max = EXEC_MAX_CONCURRENT_MAX))]
     exec_max_concurrent: usize,
-    #[garde(range(min = 1, max = 3600))]
+    #[garde(range(min = 1, max = EXEC_TIMEOUT_SECS_MAX))]
     exec_timeout_secs: u64,
-    #[garde(range(min = 1, max = 1_048_576))]
+    #[garde(range(min = 1, max = EXEC_MAX_OUTPUT_KIB_MAX))]
     exec_max_output_kib: usize,
-    #[garde(range(min = 1, max = 100_000))]
+    #[garde(range(min = 1, max = EXEC_RATE_MAX_MAX))]
     exec_rate_max: u32,
-    #[garde(range(min = 1, max = 86_400))]
+    #[garde(range(min = 1, max = EXEC_RATE_WINDOW_SECS_MAX))]
     exec_rate_window_secs: u64,
 }
 
@@ -746,7 +835,7 @@ async fn update_settings(
     State(state): State<AppState>,
     _admin: AdminSession,
     headers: HeaderMap,
-    Json(body): Json<SettingsInput>,
+    AdminJson(body): AdminJson<SettingsInput>,
 ) -> Result<Json<GlobalSettings>, ApiError> {
     validate_admin(&headers, "admin.settings", &body)?;
     let settings = body.into_settings().map_err(|error| {
@@ -783,7 +872,9 @@ async fn public_locations(
     let by_location = agents_by_location(state.store.all_agents()?);
     let mut out = Vec::new();
     for mut location in state.store.list_locations()? {
-        scrub_local_data_plane_origin(&mut location);
+        // Also withholds a remote origin saved before the https-on-443 rule.
+        location.data_plane_origin =
+            clean_data_plane_origin(location.kind, location.data_plane_origin).unwrap_or_default();
         let agents = by_location
             .get(&location.id)
             .map(Vec::as_slice)
@@ -797,6 +888,29 @@ async fn public_locations(
 }
 
 // ----- Shared helpers --------------------------------------------------------
+
+/// `Json<T>` for admin bodies. A body the extractor refuses (malformed JSON, a
+/// wrong type, an out-of-range number) keeps axum's status but answers the
+/// `{error, message}` envelope the SPA reads, not axum's text/plain body.
+pub(crate) struct AdminJson<T>(pub(crate) T);
+
+impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for AdminJson<T> {
+    type Rejection = Response;
+
+    async fn from_request(request: Request, state: &S) -> Result<Self, Response> {
+        match Json::<T>::from_request(request, state).await {
+            Ok(Json(value)) => Ok(Self(value)),
+            Err(rejection) => Err((
+                rejection.status(),
+                Json(serde_json::json!({
+                    "error": "invalid_input",
+                    "message": rejection.body_text(),
+                })),
+            )
+                .into_response()),
+        }
+    }
+}
 
 fn validate_admin<T: Validate<Context = ()>>(
     headers: &HeaderMap,
@@ -830,7 +944,7 @@ pub(crate) fn first_message(report: &garde::Report) -> String {
 }
 
 /// A child create must have a parent — refuse a child for a location that does not
-/// exist rather than writing an orphan.
+/// exist before validating it. The store write re-checks inside its transaction.
 fn require_location(state: &AppState, location_id: &str) -> Result<(), ApiError> {
     state
         .store
@@ -844,5 +958,220 @@ fn ok_or_not_found(existed: bool) -> Result<StatusCode, ApiError> {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::store::tests::set_before_write;
+    use crate::{EnrollConfig, LoginLimiter, RunService, Store, TransportConfig, TunnelHub};
+
+    fn test_state() -> AppState {
+        let dir = std::env::temp_dir().join(format!(
+            "lg-admin-unit-{}-{}",
+            std::process::id(),
+            random_id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        AppState {
+            store: Store::open(dir.join("db.redb")).expect("open test store"),
+            transport: TransportConfig::new([IpAddr::from(Ipv4Addr::LOCALHOST)]),
+            login_limiter: Arc::new(LoginLimiter::default()),
+            setup_token: None,
+            run: RunService::for_test(8, Duration::from_secs(30), 100),
+            files_root: Arc::from(dir.as_path()),
+            enroll: EnrollConfig::for_test("https://central.test:8443", b"identity".to_vec()),
+            tunnel_hub: TunnelHub::new(),
+        }
+    }
+
+    fn admin() -> AdminSession {
+        AdminSession {
+            admin_id: "alice".to_string(),
+        }
+    }
+
+    fn body<T: DeserializeOwned>(value: &serde_json::Value) -> AdminJson<T> {
+        AdminJson(serde_json::from_value(value.clone()).expect("valid body"))
+    }
+
+    // Settings validation reads the same EXEC_*_MAX constants as
+    // the LG_EXEC_* clamps. Each bound validates and one past it is refused.
+    #[test]
+    fn settings_validation_uses_the_shared_exec_bounds() {
+        let at_max = json!({
+            "site_title": "Looking Glass",
+            "default_theme": "system",
+            "exec_max_concurrent": EXEC_MAX_CONCURRENT_MAX,
+            "exec_timeout_secs": EXEC_TIMEOUT_SECS_MAX,
+            "exec_max_output_kib": EXEC_MAX_OUTPUT_KIB_MAX,
+            "exec_rate_max": EXEC_RATE_MAX_MAX,
+            "exec_rate_window_secs": EXEC_RATE_WINDOW_SECS_MAX
+        });
+        let input = |value: &serde_json::Value| -> SettingsInput {
+            serde_json::from_value(value.clone()).unwrap()
+        };
+        assert!(input(&at_max).validate().is_ok());
+        for field in [
+            "exec_max_concurrent",
+            "exec_timeout_secs",
+            "exec_max_output_kib",
+            "exec_rate_max",
+            "exec_rate_window_secs",
+        ] {
+            let mut over = at_max.clone();
+            over[field] = json!(at_max[field].as_u64().unwrap() + 1);
+            assert!(input(&over).validate().is_err(), "{field} past its bound");
+        }
+    }
+
+    // A location delete that lands after a handler's existence check and
+    // before its write (the before_write barrier) is never undone. An edit must
+    // not resurrect the location, and a child write must not orphan a row.
+    #[tokio::test]
+    async fn a_location_delete_before_the_write_is_never_undone() {
+        let state = test_state();
+        let location = json!({ "name": "Frankfurt", "geo_label": "DE", "kind": "local", "offered_methods": ["ping"] });
+        let ip = json!({ "family": "v4", "address": "203.0.113.10" });
+        let iperf = json!({ "label": "x", "host": "h", "port": 5201, "cmd_incoming": "a", "cmd_outgoing": "b" });
+        let file = json!({ "label": "x", "declared_size": "1 B", "source_ref": "x.bin" });
+        let st = || State(state.clone());
+        let hm = HeaderMap::new;
+
+        for write in 0..7 {
+            let (_, Json(loc)) = create_location(st(), admin(), hm(), body(&location))
+                .await
+                .unwrap();
+            let id = loc.id;
+            let p = || Path(id.clone());
+            let (_, Json(test_ip)) = create_test_ip(st(), admin(), p(), hm(), body(&ip))
+                .await
+                .unwrap();
+            let (_, Json(endpoint)) = create_iperf(st(), admin(), p(), hm(), body(&iperf))
+                .await
+                .unwrap();
+            let (_, Json(test_file)) = create_test_file(st(), admin(), p(), hm(), body(&file))
+                .await
+                .unwrap();
+
+            let (store, doomed) = (state.store.clone(), id.clone());
+            set_before_write(move || {
+                store.delete_location(&doomed).unwrap();
+            });
+            let result = match write {
+                0 => update_location(st(), admin(), p(), hm(), body(&location))
+                    .await
+                    .map(drop),
+                1 => create_test_ip(st(), admin(), p(), hm(), body(&ip))
+                    .await
+                    .map(drop),
+                2 => update_test_ip(st(), admin(), Path(test_ip.id), hm(), body(&ip))
+                    .await
+                    .map(drop),
+                3 => create_iperf(st(), admin(), p(), hm(), body(&iperf))
+                    .await
+                    .map(drop),
+                4 => update_iperf(st(), admin(), Path(endpoint.id), hm(), body(&iperf))
+                    .await
+                    .map(drop),
+                5 => create_test_file(st(), admin(), p(), hm(), body(&file))
+                    .await
+                    .map(drop),
+                _ => update_test_file(st(), admin(), Path(test_file.id), hm(), body(&file))
+                    .await
+                    .map(drop),
+            };
+            set_before_write(|| {});
+
+            assert!(
+                matches!(result, Err(ApiError::NotFound)),
+                "write {write} succeeded over a delete: {result:?}"
+            );
+            assert!(
+                state.store.get_location(&id).unwrap().is_none(),
+                "write {write} resurrected the location"
+            );
+            let orphans = state.store.list_test_ips(&id).unwrap().len()
+                + state.store.list_iperf(&id).unwrap().len()
+                + state.store.list_test_files(&id).unwrap().len();
+            assert_eq!(orphans, 0, "write {write} orphaned a child");
+        }
+    }
+
+    // A child delete that lands after an edit's existence check and
+    // before its write (the before_write barrier) is never undone: the edit
+    // answers 404 and the row stays gone. Every kind is checked before failing.
+    #[tokio::test]
+    async fn a_child_delete_before_its_edit_is_never_undone() {
+        let state = test_state();
+        let location = json!({ "name": "Frankfurt", "geo_label": "DE", "kind": "local", "offered_methods": ["ping"] });
+        let ip = json!({ "family": "v4", "address": "203.0.113.10" });
+        let iperf = json!({ "label": "x", "host": "h", "port": 5201, "cmd_incoming": "a", "cmd_outgoing": "b" });
+        let file = json!({ "label": "x", "declared_size": "1 B", "source_ref": "x.bin" });
+        let st = || State(state.clone());
+        let hm = HeaderMap::new;
+        let (_, Json(loc)) = create_location(st(), admin(), hm(), body(&location))
+            .await
+            .unwrap();
+        let p = || Path(loc.id.clone());
+        let (_, Json(test_ip)) = create_test_ip(st(), admin(), p(), hm(), body(&ip))
+            .await
+            .unwrap();
+        let (_, Json(endpoint)) = create_iperf(st(), admin(), p(), hm(), body(&iperf))
+            .await
+            .unwrap();
+        let (_, Json(test_file)) = create_test_file(st(), admin(), p(), hm(), body(&file))
+            .await
+            .unwrap();
+
+        let mut undone = Vec::new();
+        for kind in ["test_ip", "iperf", "file"] {
+            let store = state.store.clone();
+            let (ip_id, iperf_id, file_id) = (
+                test_ip.id.clone(),
+                endpoint.id.clone(),
+                test_file.id.clone(),
+            );
+            set_before_write(move || {
+                match kind {
+                    "test_ip" => store.delete_test_ip(&ip_id),
+                    "iperf" => store.delete_iperf(&iperf_id),
+                    _ => store.delete_test_file(&file_id),
+                }
+                .unwrap();
+            });
+            let (result, row_back) = match kind {
+                "test_ip" => (
+                    update_test_ip(st(), admin(), Path(test_ip.id.clone()), hm(), body(&ip))
+                        .await
+                        .map(drop),
+                    state.store.get_test_ip(&test_ip.id).unwrap().is_some(),
+                ),
+                "iperf" => (
+                    update_iperf(st(), admin(), Path(endpoint.id.clone()), hm(), body(&iperf))
+                        .await
+                        .map(drop),
+                    state.store.get_iperf(&endpoint.id).unwrap().is_some(),
+                ),
+                _ => (
+                    update_test_file(st(), admin(), Path(test_file.id.clone()), hm(), body(&file))
+                        .await
+                        .map(drop),
+                    state.store.get_test_file(&test_file.id).unwrap().is_some(),
+                ),
+            };
+            set_before_write(|| {});
+            if !matches!(result, Err(ApiError::NotFound)) || row_back {
+                undone.push(format!("{kind}: result={result:?} row_back={row_back}"));
+            }
+        }
+        assert!(undone.is_empty(), "edit undid a child delete: {undone:?}");
     }
 }

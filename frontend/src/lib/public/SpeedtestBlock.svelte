@@ -4,6 +4,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import CopyButton from '$lib/components/ui/copy-button.svelte';
 	import { lineStyle } from '$lib/lines.js';
+	import { srOnly } from '$lib/styles.js';
 	import { downloadUrl } from './api.js';
 	import { barWidths, runSpeedTest, type SpeedSample } from './speedtest.js';
 	import {
@@ -42,11 +43,19 @@
 	let running = $state(false);
 	let measured = $state(false);
 	let failed = $state(false);
+	let uploadFailed = $state(false);
 	let downloadMbps = $state(0);
 	let uploadMbps = $state(0);
 	let progress = $state(0);
 
 	const hasFiles = $derived(location.files.length > 0);
+	const announcement = $derived(
+		running
+			? 'Speed test running.'
+			: measured
+				? `Speed test done. Download ${downloadMbps} Mbps${uploadFailed ? '' : `, upload ${uploadMbps} Mbps`}.`
+				: ''
+	);
 
 	// Measurements belong to one location; switching tabs (or unmounting)
 	// cancels the in-flight test and resets the readouts. `runId` fences stale
@@ -83,6 +92,7 @@
 			running = false;
 			measured = false;
 			failed = false;
+			uploadFailed = false;
 			downloadMbps = 0;
 			uploadMbps = 0;
 			progress = 0;
@@ -91,11 +101,17 @@
 	});
 
 	async function start() {
+		if (running) return;
 		const controller = new AbortController();
 		abort = controller;
 		const id = ++runId;
 		running = true;
+		measured = false;
 		failed = false;
+		uploadFailed = false;
+		downloadMbps = 0;
+		uploadMbps = 0;
+		progress = 0;
 		try {
 			const result = await runSpeedTest(
 				location,
@@ -110,6 +126,7 @@
 			if (id !== runId) return;
 			flush();
 			failed = result.failed;
+			uploadFailed = result.uploadFailed;
 			measured = !result.failed;
 			if (!result.failed) progress = 100;
 		} finally {
@@ -172,7 +189,16 @@
 			<div class={cardTitleRow}>
 				<span class={speedCardTitle}>Speed test</span>
 				{#if hasFiles}
-					<Button variant="secondary" size="sm" disabled={running} onclick={start}>
+					<!-- Busy, not disabled: disabling the focused button drops focus to
+					     <body> (same idiom as LocationEditor's Save). -->
+					<Button
+						variant="secondary"
+						size="sm"
+						style="pointer-events: auto"
+						aria-busy={running || undefined}
+						aria-disabled={running || undefined}
+						onclick={start}
+					>
 						{running ? 'Testing…' : 'Start speed test'}
 					</Button>
 				{:else}
@@ -188,6 +214,12 @@
 				<p class={panelError} role="alert">Speed test failed — the test file could not be downloaded.</p>
 			{/if}
 
+			{#if uploadFailed}
+				<p class={panelError} role="alert">Upload test failed — the upload could not be completed.</p>
+			{/if}
+
+			<p class={srOnly} aria-live="polite">{announcement}</p>
+
 			<div class={readouts} role="group" aria-label="Speed test results">
 				<div>
 					<div class={readoutLabel}><Download aria-hidden="true" /> Download</div>
@@ -199,7 +231,7 @@
 				<div>
 					<div class={readoutLabel}><Upload aria-hidden="true" /> Upload</div>
 					<div class={readoutValueRow}>
-						<span class={readoutValue}>{running || measured ? uploadMbps : '—'}</span>
+						<span class={readoutValue}>{(running || measured) && !uploadFailed ? uploadMbps : '—'}</span>
 						<span class={readoutUnit}>Mbps</span>
 					</div>
 				</div>
@@ -223,15 +255,15 @@
 			{#if hasFiles}
 				<div class={fileLinks}>
 					{#each location.files as file (file.id)}
-						<a
-							href={downloadUrl(location, file)}
-							download={file.label}
-							class={fileLink}
-						>
-							<Download aria-hidden="true" />
-							{file.label}
-							<span class={fileSize}>{file.declared_size}</span>
-						</a>
+						{@const href = downloadUrl(location, file)}
+						<!-- '#' means no usable URL; as a link it would download this page. -->
+						{#if href !== '#'}
+							<a {href} download={file.label} class={fileLink}>
+								<Download aria-hidden="true" />
+								{file.label}
+								<span class={fileSize}>{file.declared_size}</span>
+							</a>
+						{/if}
 					{/each}
 				</div>
 			{/if}

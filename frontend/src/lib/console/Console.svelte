@@ -2,6 +2,7 @@
 	import ContentCopy from '~icons/material-symbols/content-copy';
 	import { cx } from 'styled-system/css';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import { toast } from '$lib/toast.svelte.js';
 	import { lineCode, lineStyle } from '$lib/lines.js';
 	import {
 		consoleHeader,
@@ -67,16 +68,45 @@
 		time: cx(linePlain, lineTime)
 	} as const;
 
-	const outputLines = $derived(controller.lines.filter((line) => line.kind === 'out'));
-	const otherLines = $derived(controller.lines.filter((line) => line.kind !== 'out'));
+	// controller.lines only grows until a new run replaces it, so each line is
+	// split and filed once. The log renders in blocks of BLOCK lines and only the
+	// growing block re-renders: a frame costs its new lines plus one step per
+	// block, not a pass over the whole log (F-338).
+	type Line = RunController['lines'][number];
+	const BLOCK = 100;
+	let seen: Line[] | null = null;
+	let count = 0;
+	let blocks: Line[][] = [];
+	let output: Line[] = [];
+	let other: Line[] = [];
+	// A new object per change: everything below reads through `log`.
+	const log = $derived.by(() => {
+		const lines = controller.lines;
+		if (lines !== seen) {
+			seen = lines;
+			count = 0;
+			blocks = [];
+			output = [];
+			other = [];
+		}
+		for (; count < lines.length; count++) {
+			const line = lines[count];
+			(line.kind === 'out' ? output : other).push(line);
+			const last = blocks.length - 1;
+			// The growing block is replaced, never mutated, so its {#each} sees the change.
+			if (last < 0 || blocks[last].length === BLOCK) blocks.push([line]);
+			else blocks[last] = [...blocks[last], line];
+		}
+		return { blocks, output, other };
+	});
 	const mtrRows = $derived(
 		(method === 'mtr' || method === 'mtr6') && controller.status === 'done'
-			? parseMtr(outputLines.map((line) => line.text))
+			? parseMtr(log.output.map((line) => line.text))
 			: null
 	);
 	const traceRows = $derived(
 		method === 'traceroute' || method === 'traceroute6'
-			? parseTraceroute(outputLines.map((line) => line.text))
+			? parseTraceroute(log.output.map((line) => line.text))
 			: null
 	);
 	const hasRoute = $derived(mtrRows !== null || traceRows !== null);
@@ -84,8 +114,14 @@
 	// Route view by default; Raw shows the tool's own text, byte for byte.
 	let raw = $state(false);
 
-	function copyOutput() {
-		navigator.clipboard?.writeText(controller.lines.map((line) => line.text).join('\n'));
+	async function copyOutput() {
+		try {
+			await navigator.clipboard.writeText(controller.lines.map((line) => line.text).join('\n'));
+			toast.success('Output copied.');
+		} catch {
+			// Denied, or no clipboard API outside a secure context.
+			toast.error("Couldn't copy the output. Select it and copy it manually.");
+		}
 	}
 </script>
 
@@ -135,7 +171,7 @@
 		{:else if controller.status === 'connecting' && controller.lines.length === 0}
 			<p class={lineHint}>Connecting to the node…</p>
 		{:else if hasRoute && !raw}
-			{#each outputLines.filter((line) => !/^\s*(\d+[\s.]|HOST:)/.test(line.text)) as line, index (index)}
+			{#each log.output.filter((line) => !/^\s*(\d+[\s.]|HOST:)/.test(line.text)) as line, index (index)}
 				<p class={cx(linePlain, lineMeta)}>{line.text}</p>
 			{/each}
 			<div class={tableWrap}>
@@ -145,20 +181,22 @@
 					<TraceTable rows={traceRows} live={controller.active} origin={location?.name} />
 				{/if}
 			</div>
-			{#each otherLines as line, index (index)}
+			{#each log.other as line, index (index)}
 				<p class={cx(linePlain, index === 0 ? metaGap : '', line.kind === 'error' ? lineError : lineMeta)}>
 					{line.text}
 				</p>
 			{/each}
 		{:else}
-			{#each controller.lines as line, index (index)}
-				{#if line.kind === 'out'}
-					<p class={linePlain}>{#each colorize(line.text) as segment, segmentIndex (segmentIndex)}<span class={toneClass[segment.tone]}>{segment.text}</span>{/each}</p>
-				{:else}
-					<p class={line.kind === 'error' ? cx(linePlain, lineError) : cx(linePlain, lineMeta)}>
-						{line.text}
-					</p>
-				{/if}
+			{#each log.blocks as block, blockIndex (blockIndex)}
+				{#each block as line, index (index)}
+					{#if line.kind === 'out'}
+						<p class={linePlain}>{#each colorize(line.text) as segment, segmentIndex (segmentIndex)}<span class={toneClass[segment.tone]}>{segment.text}</span>{/each}</p>
+					{:else}
+						<p class={line.kind === 'error' ? cx(linePlain, lineError) : cx(linePlain, lineMeta)}>
+							{line.text}
+						</p>
+					{/if}
+				{/each}
 			{/each}
 			{#if controller.active}
 				<span class={cursor} aria-hidden="true"></span>

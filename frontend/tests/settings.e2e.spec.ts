@@ -74,3 +74,45 @@ test('settings.e2e toasts the server refusal and keeps the change unsaved', asyn
 	await expect(page.getByText('Logo and terms URLs must use https.')).toBeVisible();
 	await expect(page.getByText('Unsaved changes.')).toBeVisible();
 });
+
+// F-192: the saved copy replaces the whole form, so a save in flight must
+// refuse input everywhere (text, number, the theme select) while its Save
+// button keeps focus; nothing typed meanwhile is silently dropped.
+test('settings.e2e refuses edits while a save is in flight and keeps focus on Save', async ({ page }) => {
+	await signIn(page, `settings-busy-${crypto.randomUUID()}`);
+	await page.goto(`${APP}/admin/settings`);
+	await expect(page.getByText('No unsaved changes.', { exact: true })).toBeVisible();
+	let release!: () => void;
+	const held = new Promise<void>((resolve) => (release = resolve));
+	await page.route('**/api/admin/settings', async (route) => {
+		if (route.request().method() === 'PUT') await held;
+		await route.continue();
+	});
+
+	const title = page.getByLabel('Site title');
+	await title.fill('Title submitted');
+	const save = page.getByRole('button', { name: 'Save settings' });
+	// A keyboard save from a field keeps focus on that field.
+	await title.press('Enter');
+	await expect(save).toHaveAttribute('aria-busy', 'true');
+	await expect(title).toBeFocused();
+	await expect(title).toHaveAttribute('readonly', '');
+
+	const block = page.getByLabel('Custom content block (optional)');
+	await block.click({ force: true });
+	await page.keyboard.type('typed during save');
+	await expect.soft(block).toHaveValue('');
+	await expect.soft(block).toHaveAttribute('aria-disabled', 'true');
+	const theme = page.getByRole('combobox');
+	await theme.click({ force: true });
+	await expect.soft(page.getByRole('option', { name: 'Dark' })).toHaveCount(0);
+	await expect.soft(theme).toMatchAriaSnapshot('- combobox "Default theme" [disabled]');
+
+	await save.focus();
+	release();
+	await expect(page.getByText('Settings saved.')).toBeVisible();
+	await expect(page.getByText('No unsaved changes.', { exact: true })).toBeVisible();
+	await expect(save).toBeFocused();
+	await block.fill('typed after save');
+	await expect(page.getByText('Unsaved changes.', { exact: true })).toBeVisible();
+});

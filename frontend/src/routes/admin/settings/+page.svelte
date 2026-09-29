@@ -67,6 +67,32 @@
 			toast.error(result.message);
 		}
 	}
+
+	// While saving, the controls refuse changes without `disabled`, which would
+	// drop a focused control's focus to <body>: the saved copy replaces the whole
+	// form, so anything typed meanwhile would be lost. Capturing at the form keeps
+	// the Ark select from seeing the event, as in LocationEditor.
+	function holdWhileSaving(event: Event) {
+		if (!saving) return;
+		event.stopPropagation();
+		if (event.type === 'click') event.preventDefault();
+	}
+
+	// WebKit ignores scroll-padding when focus scrolls, so keep a keyboard-focused
+	// field clear of the sticky site header and Save row, focus ring included.
+	// Focus from a press is left alone: a scroll before the release loses the click.
+	// (Text fields match :focus-visible on a press too; the caret still lands.)
+	function keepClearOfStickyBars(event: FocusEvent) {
+		const row = (event.currentTarget as HTMLElement).querySelector('[data-sticky-actions]');
+		const field = event.target as Element;
+		if (!row || row.contains(field) || !field.matches(':focus-visible')) return;
+		const rect = field.getBoundingClientRect();
+		const room = rect.top - 8 - (document.querySelector('header')?.getBoundingClientRect().bottom ?? 0);
+		const overlap = rect.bottom + 8 - row.getBoundingClientRect().top;
+		// A field taller than the gap keeps its top in view.
+		if (room < 0) window.scrollBy(0, room);
+		else if (overlap > 0) window.scrollBy(0, Math.min(overlap, room));
+	}
 </script>
 
 {#snippet previewCard(dark: boolean)}
@@ -121,19 +147,35 @@
 	</header>
 
 	<div class={s.pageGrid}>
-		<form class={s.formCol} onsubmit={submit} novalidate>
+		<form
+			class={s.formCol}
+			onsubmit={submit}
+			onfocusin={keepClearOfStickyBars}
+			onclickcapture={holdWhileSaving}
+			onkeydowncapture={holdWhileSaving}
+			novalidate
+			aria-busy={saving || undefined}
+		>
 			<Card>
 				<CardHeader><CardTitle class={s.sectionTitle}>Branding</CardTitle></CardHeader>
 				<CardContent>
 					<div class={s.fieldStack}>
 						<Field label="Site title" for="site-title">
-							<Input id="site-title" bind:value={form.site_title} required />
+							<Input
+								id="site-title"
+								bind:value={form.site_title}
+								required
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
 						</Field>
 						<Field label="Logo URL (optional)" for="logo-url">
 							<Input
 								id="logo-url"
 								bind:value={form.logo_url}
 								placeholder="https://example.test/logo.svg"
+								readonly={saving}
+								aria-disabled={saving || undefined}
 							/>
 						</Field>
 						<Field label="Terms-of-service URL (optional)" for="terms-url">
@@ -141,10 +183,18 @@
 								id="terms-url"
 								bind:value={form.terms_url}
 								placeholder="https://example.test/terms"
+								readonly={saving}
+								aria-disabled={saving || undefined}
 							/>
 						</Field>
 						<Field label="Custom content block (optional)" for="custom-block">
-							<Textarea id="custom-block" bind:value={form.custom_block} rows={4} />
+							<Textarea
+								id="custom-block"
+								bind:value={form.custom_block}
+								rows={4}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
 						</Field>
 					</div>
 				</CardContent>
@@ -158,7 +208,10 @@
 						for="default-theme"
 						hint="This changes the default only. It does not replace a visitor's saved preference."
 					>
-						<Select id="default-theme" items={THEME_ITEMS} bind:value={form.default_theme} />
+						<!-- Select takes no aria-disabled; the group exposes it to the trigger. -->
+						<div class="locked" role="group" aria-disabled={saving || undefined}>
+							<Select id="default-theme" items={THEME_ITEMS} bind:value={form.default_theme} />
+						</div>
 					</Field>
 				</CardContent>
 			</Card>
@@ -172,41 +225,76 @@
 							for="max-concurrent"
 							info="The most runs that can execute at the same time. When every slot is taken, a new run is refused as busy until one finishes."
 						>
-							<Input id="max-concurrent" type="number" min={1} bind:value={form.exec_max_concurrent} />
+							<Input
+								id="max-concurrent"
+								type="number"
+								min={1}
+								bind:value={form.exec_max_concurrent}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
 						</Field>
 						<Field
 							label="Per-run timeout (seconds)"
 							for="timeout"
 							info="The longest one run may take. A run still going after this many seconds is stopped, and the visitor is told it timed out."
 						>
-							<Input id="timeout" type="number" min={1} bind:value={form.exec_timeout_secs} />
+							<Input
+								id="timeout"
+								type="number"
+								min={1}
+								bind:value={form.exec_timeout_secs}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
 						</Field>
 						<Field
 							label="Output cap (KiB)"
 							for="output"
 							info="The most output one run may produce, in KiB. A run that goes past it is stopped, and the visitor is told the output was too large."
 						>
-							<Input id="output" type="number" min={1} bind:value={form.exec_max_output_kib} />
+							<Input
+								id="output"
+								type="number"
+								min={1}
+								bind:value={form.exec_max_output_kib}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
 						</Field>
 						<Field
 							label="Rate limit (runs)"
 							for="rate-max"
 							info="How many runs one visitor, by IP address, may start within each rate window. Further attempts are refused until the window resets. Speed test uploads count too."
 						>
-							<Input id="rate-max" type="number" min={1} bind:value={form.exec_rate_max} />
+							<Input
+								id="rate-max"
+								type="number"
+								min={1}
+								bind:value={form.exec_rate_max}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
 						</Field>
 						<Field
 							label="Rate window (seconds)"
 							for="rate-window"
 							info="The period, in seconds, the rate limit is counted over. With a limit of 20 and a window of 60, each visitor can start 20 runs per minute."
 						>
-							<Input id="rate-window" type="number" min={1} bind:value={form.exec_rate_window_secs} />
+							<Input
+								id="rate-window"
+								type="number"
+								min={1}
+								bind:value={form.exec_rate_window_secs}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
 						</Field>
 					</div>
 				</CardContent>
 			</Card>
 
-			<div class={s.actionsRow}>
+			<div class={s.actionsRow} data-sticky-actions>
 				<Button type="submit" loading={saving}>Save settings</Button>
 				<span class={s.indicator}>{dirty ? 'Unsaved changes.' : 'No unsaved changes.'}</span>
 			</div>
@@ -221,3 +309,13 @@
 	</div>
 	</div>
 {/if}
+
+<style>
+	/* While saving, the group's aria-disabled gives the locked select its
+	   recipe's disabled look. Panda does not extract css() from .svelte files. */
+	.locked[aria-disabled='true'] :global([data-part='trigger']) {
+		opacity: 0.55;
+		cursor: not-allowed;
+		background: var(--colors-sunk);
+	}
+</style>

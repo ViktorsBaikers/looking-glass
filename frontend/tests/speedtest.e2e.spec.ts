@@ -1,4 +1,5 @@
-import { APP, FIXTURE } from './ports';
+import { request as httpRequest } from 'node:http';
+import { APP, DATA_PLANE, FIXTURE } from './ports';
 import { expect, test } from '@playwright/test';
 
 test.describe('speed tests section', () => {
@@ -61,7 +62,7 @@ test.describe('speed tests section', () => {
 
 		const uploadResponse = page.waitForResponse(
 			(response) =>
-				response.url() === `${FIXTURE}/speedtest/upload` && response.request().method() === 'POST'
+				response.url() === `${DATA_PLANE}/speedtest/upload` && response.request().method() === 'POST'
 		);
 		await page.getByRole('button', { name: 'Start speed test' }).click();
 		expect((await uploadResponse).ok()).toBe(true);
@@ -74,6 +75,28 @@ test.describe('speed tests section', () => {
 		await expect(results).toContainText(/Upload\s*[1-9]\d*\s*Mbps/);
 	});
 
+	// An unreachable data plane measured nothing: a failure, not "Download 0 Mbps".
+	test('a download lost at the network level is reported as a failure', async ({ page }) => {
+		await page.getByRole('tab', { name: 'Vienna (AS64500)' }).click();
+		await page.route(`${DATA_PLANE}/**`, (route) => route.abort('failed'));
+		await page.getByRole('button', { name: 'Start speed test' }).click();
+		await expect(page.getByRole('alert')).toHaveText('Speed test failed — the test file could not be downloaded.');
+		await expect(page.getByRole('button', { name: 'Start speed test' })).toBeEnabled();
+		const results = page.getByRole('group', { name: 'Speed test results' });
+		await expect(results).toContainText(/Download\s*—\s*Mbps/);
+	});
+
+	test('an upload lost at the network level does not blame the server', async ({ page }) => {
+		test.setTimeout(60_000);
+		await page.route('**/api/locations/fra/speedtest/upload', (route) => route.abort('failed'));
+		await page.getByRole('button', { name: 'Start speed test' }).click();
+		await expect(page.getByRole('alert')).toHaveText('Upload test failed — the upload could not be completed.', {
+			timeout: 25_000
+		});
+		const results = page.getByRole('group', { name: 'Speed test results' });
+		await expect(results).toContainText(/Upload\s*—\s*Mbps/);
+	});
+
 	test('Speed test is disabled with no test files configured', async ({ page }) => {
 		const fixtureId = `no-files-${crypto.randomUUID()}`;
 		await page.setExtraHTTPHeaders({ 'x-looking-glass-fixture': fixtureId });
@@ -84,4 +107,45 @@ test.describe('speed tests section', () => {
 		await expect(page.getByRole('button', { name: 'Start speed test' })).toBeDisabled();
 		await expect(page.getByRole('link', { name: /test file/ })).toHaveCount(0);
 	});
+});
+
+// The remote node's data-plane certificate status (issued, expires, last
+// error), as its agent reported it, reaches the admin location editor.
+test('the admin location editor shows the remote data-plane certificate', async ({ page }) => {
+	await page.setExtraHTTPHeaders({ 'x-looking-glass-fixture': `certificate-${crypto.randomUUID()}` });
+	await page.goto(`${APP}/login`);
+	await page.getByLabel('Username').fill('brooke');
+	await page.getByLabel('Password').fill('fixture-password');
+	await page.getByRole('button', { name: 'Sign in' }).click();
+	await expect(page).toHaveURL(`${APP}/admin`);
+
+	await page.goto(`${APP}/admin/locations/vie?tab=settings`);
+	await expect(page.getByLabel('Data-plane origin (optional)')).toHaveAccessibleDescription(
+		'HTTPS certificate issued 2026-09-20 00:00 UTC, expires 2026-09-26 00:00 UTC.'
+	);
+});
+
+// A speed-test upload cancelled mid-body must not take the fixture server, and so
+// every later test in the run, down with it.
+test('the fixture keeps serving after an upload is cancelled mid-body', async ({ request }) => {
+	const upload = httpRequest(`${FIXTURE}/api/locations/fra/speedtest/upload`, {
+		method: 'POST',
+		// The fixture's 100 Continue proves its handler is reading the body.
+		headers: { 'content-length': 1 << 20, expect: '100-continue' }
+	});
+	upload.on('error', () => {});
+	await new Promise((resolve, reject) => {
+		upload.once('continue', resolve);
+		upload.once('error', reject);
+	});
+	await new Promise((resolve) => upload.write(Buffer.alloc(1024), resolve));
+	const closed = new Promise((resolve) => upload.once('close', resolve));
+	upload.destroy();
+	await closed;
+
+	const after = await request.get(`${FIXTURE}/api/visitor`).then(
+		(response) => response.status(),
+		(error: Error) => error.message
+	);
+	expect(after).toBe(200);
 });

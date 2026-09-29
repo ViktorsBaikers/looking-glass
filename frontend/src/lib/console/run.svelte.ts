@@ -23,6 +23,11 @@ export class RunController {
 	runTitle = $state('');
 
 	#source: EventSource | null = null;
+	// Lines received since the last frame. Every update re-reconciles the whole
+	// rendered list, so a burst (thousands of BGP lines) is appended once per
+	// animation frame instead of once per line.
+	#pending: ConsoleLine[] = [];
+	#frame = 0;
 
 	get active(): boolean {
 		return this.status === 'connecting' || this.status === 'streaming';
@@ -39,9 +44,11 @@ export class RunController {
 		const source = new EventSource(`/api/run/stream?${params.toString()}`);
 		this.#source = source;
 
+		// Each line arrives as a JSON string, so a blank line still has a data field.
 		source.addEventListener('line', (event) => {
 			this.status = 'streaming';
-			this.lines.push({ kind: 'out', text: (event as MessageEvent<string>).data });
+			this.#pending.push({ kind: 'out', text: this.#decodeLine((event as MessageEvent<string>).data) });
+			this.#frame ||= requestAnimationFrame(() => this.#flush());
 		});
 
 		// A server-sent failure/refusal (named "run-error" to avoid colliding with
@@ -49,6 +56,7 @@ export class RunController {
 		source.addEventListener('run-error', (event) => {
 			const message = (event as MessageEvent<string>).data;
 			if (message) {
+				this.#flush();
 				this.errorText = message;
 				this.lines.push({ kind: 'error', text: message });
 			}
@@ -81,8 +89,11 @@ export class RunController {
 
 	#finish(payload: DonePayload | null): void {
 		this.#close();
-		if (payload?.status === 'completed' && payload.success) {
+		// A tool that exits non-zero (ping with 100% loss) still ran to the end:
+		// its output is the result. Central does not send the exit code.
+		if (payload?.status === 'completed') {
 			this.status = 'done';
+			if (!payload.success) this.lines.push({ kind: 'meta', text: 'The command finished with a non-zero exit code.' });
 			return;
 		}
 		this.status = 'error';
@@ -90,6 +101,18 @@ export class RunController {
 			this.errorText = FRIENDLY_FAILURE[payload?.status ?? 'failed'] ?? FRIENDLY_FAILURE.failed;
 			this.lines.push({ kind: 'error', text: this.errorText });
 		}
+	}
+
+	/// A central older than JSON-encoded lines sends raw text (a tab open across
+	/// a rollback): show anything that is not a JSON string as it came.
+	#decodeLine(data: string): string {
+		try {
+			const text: unknown = JSON.parse(data);
+			if (typeof text === 'string') return text;
+		} catch {
+			// Raw text.
+		}
+		return data;
 	}
 
 	#parseDone(data: string): DonePayload | null {
@@ -100,7 +123,19 @@ export class RunController {
 		}
 	}
 
+	#flush(): void {
+		cancelAnimationFrame(this.#frame);
+		this.#frame = 0;
+		if (this.#pending.length === 0) return;
+		// Not push(...pending): a hidden tab's backlog can exceed the argument limit (F-156).
+		for (const line of this.#pending) this.lines.push(line);
+		this.#pending = [];
+	}
+
+	/// Closes the stream; lines still waiting for a frame land first, so any
+	/// status line pushed next stays in order.
 	#close(): void {
+		this.#flush();
 		this.#source?.close();
 		this.#source = null;
 	}

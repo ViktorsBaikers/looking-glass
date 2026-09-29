@@ -10,7 +10,6 @@
 //! of a CSRF token, `/rite-vet` decision), a per-client rate limit keyed on the
 //! trusted-proxy client identity (AC39, reused from Slice 2), and the global cap.
 
-use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -23,7 +22,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use shared::exec::{ExecEngine, ExecHandle, ExecLimits, StartError};
 use shared::liveness::is_online;
-use shared::protocol::TunnelMessage;
+use shared::protocol::{RunLimits, TunnelMessage};
 use shared::template::{CommandTemplate, DaemonProbe, Method, PathDaemonProbe};
 use shared::validate::{
     bgp_arg, validate_target, BgpArgError, DnsResolver, HostResolver, PrefixFamily, TargetError,
@@ -33,14 +32,13 @@ use tokio::sync::{mpsc, Semaphore};
 
 use crate::auth::{random_id, ClientContext};
 use crate::observability::{correlation_id, log_validation_rejected};
+use crate::ratelimit::IpWindows;
 use crate::store::{
     derive_location_status, unix_now, Agent, GlobalSettings, LocationStatus, NodeKind,
     RunnableMethod, Store, StoreError,
 };
 use crate::stream::{sse_refusal, sse_relay, sse_run};
 use crate::{AppState, RelayEvent, SubmitError};
-
-const RATE_LIMITER_PRUNE_THRESHOLD: usize = 4096;
 
 /// The run subsystem carried in application state: the shared engine, admission
 /// domain, DNS resolver, and per-client exec rate limiter. Cheap to clone (all
@@ -110,8 +108,8 @@ impl RunService {
     /// Build the run subsystem from the admin-editable global settings (AC25):
     /// the global concurrency cap, per-run timeout, output bound, and per-client
     /// exec rate limit all come from `GlobalSettings`, whose defaults read the
-    /// `LG_EXEC_*` env vars as the fallback. A settings change takes effect on the
-    /// run path the next time this is built or reconfigured.
+    /// `LG_EXEC_*` env vars as the fallback. A saved settings change applies to
+    /// runs started after the save (`save_settings`).
     pub fn from_settings(settings: &GlobalSettings) -> Self {
         let resolver = Arc::new(
             DnsResolver::from_system().expect("build system DNS resolver for target validation"),
@@ -162,6 +160,10 @@ impl RunService {
         let _update = self.lock_settings_update();
         persist()?;
         self.runtime.admission.update(settings);
+        self.runtime.engine.set_run_limits(
+            Duration::from_secs(settings.exec_timeout_secs),
+            settings.exec_max_output_kib * 1024,
+        );
         Ok(())
     }
 
@@ -188,25 +190,19 @@ impl RunService {
 /// Per-client exec rate limit (AC39 / FR-035): N run requests per window, keyed
 /// on the trusted-proxy client identity so a spoofed `X-Forwarded-For` lands on
 /// the same key. Applied at the boundary before any work, so spamming even
-/// invalid requests is bounded. (A near-twin of the login limiter; kept separate
-/// so exec and login tune independently — consolidating the two fixed-window
-/// limiters is a follow-up outside this slice's files.)
+/// invalid requests is bounded. Counted by the same [`IpWindows`] as the login
+/// limiter, with its own max and window.
 #[derive(Clone, Copy, Debug)]
 pub struct RateLimit {
     pub max: u32,
     pub window: Duration,
 }
 
-struct Window {
-    count: u32,
-    start: Instant,
-}
-
 struct AdmissionState {
     max_concurrent: usize,
     active: usize,
     rate: RateLimit,
-    windows: HashMap<IpAddr, Window>,
+    windows: IpWindows,
 }
 
 struct RunAdmission {
@@ -229,31 +225,15 @@ impl RunAdmission {
                 max_concurrent,
                 active: 0,
                 rate,
-                windows: HashMap::new(),
+                windows: IpWindows::default(),
             }),
         }
     }
 
     fn allow(&self, client: IpAddr) -> bool {
-        let now = Instant::now();
         let mut state = self.state.lock().expect("run admission mutex");
-        if state.windows.len() > RATE_LIMITER_PRUNE_THRESHOLD {
-            let window = state.rate.window;
-            state
-                .windows
-                .retain(|_, entry| now.duration_since(entry.start) < window);
-        }
         let rate = state.rate;
-        let window = state.windows.entry(client).or_insert(Window {
-            count: 0,
-            start: now,
-        });
-        if now.duration_since(window.start) >= rate.window {
-            window.count = 0;
-            window.start = now;
-        }
-        window.count += 1;
-        window.count <= rate.max
+        state.windows.hit(client, rate.window, Instant::now()) <= rate.max
     }
 
     fn acquire(self: &Arc<Self>) -> Option<RunAdmissionPermit> {
@@ -281,28 +261,13 @@ impl RunAdmission {
     }
 }
 
-/// The diagnostic methods the built-in local node offers when a run does not name
-/// a location — the direct built-in-node path. A run that *does* name a location is
-/// gated instead on that location's [`Location::runnable_methods`], so the
-/// admin-configured offered set (including any BGP offering) holds on the live path.
-/// AC13 rejects any method outside the gating set. BGP is exposed only through an
-/// explicit per-location offering, never this bare fallback.
-const LOCAL_OFFERED: [Method; 6] = [
-    Method::Ping,
-    Method::Ping6,
-    Method::Mtr,
-    Method::Mtr6,
-    Method::Traceroute,
-    Method::Traceroute6,
-];
-
 #[derive(Deserialize)]
 pub struct RunParams {
     method: String,
     target: String,
     /// The location the visitor selected. When present it gates the run on that
-    /// location's runnable methods; absent (or empty) falls back to the built-in
-    /// local node's [`LOCAL_OFFERED`] set.
+    /// location's runnable methods; absent (or empty) resolves to the configured
+    /// local locations' runnable methods.
     #[serde(default)]
     location: Option<String>,
 }
@@ -442,7 +407,7 @@ async fn run_stream(
             .into_response();
     }
 
-    let destination = match run_destination(&state, params.location.as_deref()) {
+    let destination = match run_destination(&state, &correlation_id, params.location.as_deref()) {
         Ok(destination) => destination,
         Err(refusal) => {
             log_command_refusal(&correlation_id, &params, &refusal);
@@ -480,8 +445,9 @@ fn log_command_run(correlation_id: &str, params: &RunParams, outcome: &str, reas
     tracing::info!(
         event = "command.run",
         correlation_id,
-        method = %params.method,
-        location = %params.location.as_deref().filter(|id| !id.is_empty()).unwrap_or("local"),
+        // Visitor-controlled: Debug-quoted so an encoded newline cannot forge a line.
+        method = ?params.method,
+        location = ?params.location.as_deref().filter(|id| !id.is_empty()).unwrap_or("local"),
         outcome,
         reason,
         "command run event"
@@ -490,27 +456,42 @@ fn log_command_run(correlation_id: &str, params: &RunParams, outcome: &str, reas
 
 /// The runnable-method set that gates this run. A named location is gated on its
 /// stored [`Location::runnable_methods`] (its offered set, diagnostics and BGP
-/// alike) and must be online (FR-026); an unnamed or empty location falls back to
-/// the built-in local node's diagnostic [`LOCAL_OFFERED`].
-fn run_destination(state: &AppState, location: Option<&str>) -> Result<RunDestination, RunRefusal> {
+/// alike) and must be online (FR-026); an unnamed or empty location resolves to the
+/// configured local locations (always online) and is gated on what they offer, so
+/// with none configured every method is refused (F-212).
+fn run_destination(
+    state: &AppState,
+    correlation_id: &str,
+    location: Option<&str>,
+) -> Result<RunDestination, RunRefusal> {
+    // A store failure answers the visitor "not available"; its cause goes to the operator log.
+    let store_failed = |error: StoreError| {
+        tracing::error!(
+            event = "command.run",
+            correlation_id = %correlation_id,
+            %error,
+            "location lookup failed"
+        );
+        RunRefusal::LocationUnavailable
+    };
     let location = location.filter(|id| !id.is_empty());
     let Some(id) = location else {
-        return Ok(RunDestination::Local {
-            offered: LOCAL_OFFERED
-                .iter()
-                .map(|method| RunnableMethod::Diagnostic(*method))
-                .collect(),
-        });
+        let offered = state
+            .store
+            .list_locations()
+            .map_err(store_failed)?
+            .into_iter()
+            .filter(|location| location.kind == NodeKind::Local)
+            .flat_map(|location| location.runnable_methods())
+            .collect();
+        return Ok(RunDestination::Local { offered });
     };
     let location = state
         .store
         .get_location(id)
-        .map_err(|_| RunRefusal::LocationUnavailable)?
+        .map_err(store_failed)?
         .ok_or(RunRefusal::LocationUnavailable)?;
-    let agents = state
-        .store
-        .list_agents(id)
-        .map_err(|_| RunRefusal::LocationUnavailable)?;
+    let agents = state.store.list_agents(id).map_err(store_failed)?;
     let status = derive_location_status(&location, &agents, unix_now());
     if status != LocationStatus::Online {
         return Err(RunRefusal::LocationUnavailable);
@@ -552,13 +533,15 @@ async fn evaluate(
 
     match resolve_method(&params.method, destination.offered())? {
         ResolvedRun::Diagnostic(method) => {
-            let target = diagnostic_target(&params.target, state.run.resolver.as_ref()).await?;
+            let target =
+                diagnostic_target(&params.target, method.family(), state.run.resolver.as_ref())
+                    .await?;
             match destination {
                 RunDestination::Local { .. } => {
                     start_local(runtime, method.command(&target), Some(target.ip()))
                 }
                 RunDestination::Remote { agent_id, .. } => {
-                    submit_remote(state, &agent_id, method_wire(method), &target.arg()).await
+                    submit_remote(state, &agent_id, method.wire(), &target.arg()).await
                 }
             }
         }
@@ -608,8 +591,8 @@ fn start_local(
     }
 }
 
-/// Relay a run to a connected agent over the tunnel; the wire message is unchanged
-/// (`Command { method, target }`) — BGP rides it with the method name `bgp`/`bgp6`
+/// Relay a run to a connected agent over the tunnel as `Command { method, target,
+/// limits }` — BGP rides it with the method name `bgp`/`bgp6`
 /// and the canonical prefix in the target field, and the agent re-validates it.
 async fn submit_remote(
     state: &AppState,
@@ -625,6 +608,19 @@ async fn submit_remote(
                 run_id: random_id(),
                 method: method.to_string(),
                 target: target.to_string(),
+                // The saved Execution limits bound the run on the node too; an
+                // unreadable settings record leaves the agent's own defaults.
+                limits: state
+                    .store
+                    .settings()
+                    .inspect_err(|error| {
+                        tracing::error!(%error, "could not read the Execution limits to relay")
+                    })
+                    .ok()
+                    .map(|settings| RunLimits {
+                        timeout_secs: settings.exec_timeout_secs,
+                        max_output_bytes: settings.exec_max_output_kib * 1024,
+                    }),
             },
         )
         .await
@@ -639,9 +635,10 @@ async fn submit_remote(
 /// clear message. Generic over the resolver so it is unit-tested with a stub.
 async fn diagnostic_target<R: HostResolver>(
     target: &str,
+    family: PrefixFamily,
     resolver: &R,
 ) -> Result<ValidatedTarget, RunRefusal> {
-    validate_target(target, resolver)
+    validate_target(target, family, resolver)
         .await
         .map_err(|error| RunRefusal::InvalidTarget(target_message(&error)))
 }
@@ -661,7 +658,7 @@ fn bgp_target_refusal(error: &BgpArgError) -> RunRefusal {
 /// a diagnostic method or a BGP family (AC13 — a method the location does not offer
 /// is refused, and no run is prepared).
 fn resolve_method(name: &str, offered: &[RunnableMethod]) -> Result<ResolvedRun, RunRefusal> {
-    if let Some(method) = method_from_wire(name) {
+    if let Some(method) = Method::from_wire(name) {
         if offered.contains(&RunnableMethod::Diagnostic(method)) {
             return Ok(ResolvedRun::Diagnostic(method));
         }
@@ -674,42 +671,30 @@ fn resolve_method(name: &str, offered: &[RunnableMethod]) -> Result<ResolvedRun,
     Err(RunRefusal::MethodNotOffered)
 }
 
-fn method_from_wire(name: &str) -> Option<Method> {
-    Some(match name {
-        "ping" => Method::Ping,
-        "ping6" => Method::Ping6,
-        "mtr" => Method::Mtr,
-        "mtr6" => Method::Mtr6,
-        "traceroute" => Method::Traceroute,
-        "traceroute6" => Method::Traceroute6,
-        _ => return None,
-    })
-}
-
-fn method_wire(method: Method) -> &'static str {
-    match method {
-        Method::Ping => "ping",
-        Method::Ping6 => "ping6",
-        Method::Mtr => "mtr",
-        Method::Mtr6 => "mtr6",
-        Method::Traceroute => "traceroute",
-        Method::Traceroute6 => "traceroute6",
-    }
-}
-
 fn target_message(error: &TargetError) -> String {
     match error {
         TargetError::Malformed => "that target is not a valid IP address or hostname".to_string(),
-        TargetError::Rejected(_) => {
-            "that target is not a public address we can run diagnostics against".to_string()
+        // One message for both, so the refusal does not reveal which names exist
+        // in central's resolver view.
+        TargetError::Rejected(_) | TargetError::Unresolvable => {
+            "that target could not be resolved to a public address we can run diagnostics against"
+                .to_string()
         }
-        TargetError::Unresolvable => "that hostname could not be resolved".to_string(),
+        TargetError::WrongFamily(PrefixFamily::V4) => {
+            "that target has no IPv4 address; choose the IPv6 version of this method".to_string()
+        }
+        TargetError::WrongFamily(PrefixFamily::V6) => {
+            "that target has no IPv6 address; choose the IPv4 version of this method".to_string()
+        }
     }
 }
 
 /// A same-origin check on `Origin` (falling back to `Referer`). Public runs are
 /// unauthenticated but still trigger node work, so absence is refused: a browser
-/// request must prove same-origin by sending one of these headers.
+/// request must prove same-origin by sending one of these headers. When both are
+/// absent (a same-origin EventSource GET under `Referrer-Policy: no-referrer`),
+/// the browser-set `Sec-Fetch-Site: same-origin` is the proof; any other value
+/// (`same-site`, `cross-site`, `none`) or no value is refused.
 pub(crate) fn same_origin(headers: &HeaderMap) -> bool {
     let host = headers
         .get(header::HOST)
@@ -734,7 +719,9 @@ pub(crate) fn same_origin(headers: &HeaderMap) -> bool {
             }
             None => false,
         },
-        (_, None) => false,
+        (_, None) => headers
+            .get("sec-fetch-site")
+            .is_some_and(|v| v.as_bytes() == b"same-origin"),
         (None, Some(_)) => false,
     }
 }
@@ -880,7 +867,10 @@ mod tests {
                 .await
                 .unwrap();
             job.events
-                .send(crate::RelayEvent::Terminal { error: None })
+                .send(crate::RelayEvent::Terminal {
+                    error: None,
+                    status: shared::exec::ExecStatus::Completed { success: true },
+                })
                 .await
                 .unwrap();
         });
@@ -911,6 +901,54 @@ mod tests {
         assert!(body.contains("event: done"), "{body}");
     }
 
+    // F-154: a relayed run carries the saved per-run timeout and output cap, so
+    // the admin Execution limits bound runs on remote nodes too.
+    #[tokio::test]
+    async fn remote_run_carries_the_saved_execution_limits() {
+        let state = test_state();
+        online_remote(&state);
+        state
+            .store
+            .persist_settings(&GlobalSettings {
+                exec_timeout_secs: 7,
+                exec_max_output_kib: 3,
+                ..GlobalSettings::default()
+            })
+            .unwrap();
+        let mut jobs = state.tunnel_hub.register_for_test("agent-1");
+
+        let _response = run_stream(
+            State(state),
+            ClientContext {
+                ip: Some("198.51.100.9".parse().unwrap()),
+                secure: false,
+            },
+            headers(&[
+                ("host", "lg.test"),
+                ("x-forwarded-proto", "https"),
+                ("origin", "https://lg.test"),
+            ]),
+            Query(RunParams {
+                method: "ping".to_string(),
+                target: "8.8.8.8".to_string(),
+                location: Some("remote-1".to_string()),
+            }),
+        )
+        .await;
+
+        let job = jobs.recv().await.expect("remote job submitted");
+        match job.command {
+            TunnelMessage::Command { limits, .. } => assert_eq!(
+                limits,
+                Some(RunLimits {
+                    timeout_secs: 7,
+                    max_output_bytes: 3 * 1024,
+                })
+            ),
+            other => panic!("expected command, got {other:?}"),
+        }
+    }
+
     // Slice 10 / AC41: a remote terminal failure is delivered as a clear SSE
     // run-error followed by done, so the visitor console closes instead of hanging.
     #[tokio::test]
@@ -923,6 +961,7 @@ mod tests {
             job.events
                 .send(crate::RelayEvent::Terminal {
                     error: Some("the remote node dropped the connection".to_string()),
+                    status: shared::exec::ExecStatus::Failed,
                 })
                 .await
                 .unwrap();
@@ -957,7 +996,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn remote_second_run_gets_node_busy_instead_of_queueing() {
         let state = test_state();
         online_remote(&state);
@@ -997,12 +1036,14 @@ mod tests {
                 target: "8.8.4.4".to_string(),
                 location: Some("remote-1".to_string()),
             }),
-        )
-        .await;
+        );
 
-        let body = tokio::time::timeout(Duration::from_millis(200), response_body(second))
-            .await
-            .expect("busy refusal must be immediate, not queued behind the first run");
+        // Bounds the submit too: a queued second run would wait in `run_stream`.
+        let body = tokio::time::timeout(Duration::from_millis(200), async {
+            response_body(second.await).await
+        })
+        .await
+        .expect("busy refusal must be immediate, not queued behind the first run");
         assert!(body.contains("busy"), "{body}");
         drop(first);
     }
@@ -1051,7 +1092,10 @@ mod tests {
                 other => panic!("expected command, got {other:?}"),
             }
             job.events
-                .send(crate::RelayEvent::Terminal { error: None })
+                .send(crate::RelayEvent::Terminal {
+                    error: None,
+                    status: shared::exec::ExecStatus::Completed { success: true },
+                })
                 .await
                 .unwrap();
         });
@@ -1129,7 +1173,7 @@ mod tests {
     #[tokio::test]
     async fn diagnostic_target_accepts_a_public_ip_literal() {
         let resolver = StubResolver { addrs: vec![] };
-        let target = diagnostic_target("8.8.8.8", &resolver)
+        let target = diagnostic_target("8.8.8.8", PrefixFamily::V4, &resolver)
             .await
             .expect("public ip literal is a valid target");
         assert_eq!(target.arg(), "8.8.8.8");
@@ -1140,7 +1184,7 @@ mod tests {
     #[tokio::test]
     async fn diagnostic_target_rejects_a_private_target_with_a_clear_message() {
         let resolver = StubResolver { addrs: vec![] };
-        match diagnostic_target("10.0.0.1", &resolver).await {
+        match diagnostic_target("10.0.0.1", PrefixFamily::V4, &resolver).await {
             Err(RunRefusal::InvalidTarget(message)) => {
                 assert!(message.contains("public"));
                 assert!(!message.contains("Private") && !message.contains("Reject"));
@@ -1149,14 +1193,42 @@ mod tests {
         }
     }
 
+    // A wrong-family target gets a specific refusal, not raw tool output.
+    #[tokio::test]
+    async fn diagnostic_target_rejects_a_wrong_family_target_with_a_clear_message() {
+        let resolver = StubResolver { addrs: vec![] };
+        assert!(matches!(
+            diagnostic_target("2606:4700:4700::1111", PrefixFamily::V4, &resolver).await,
+            Err(RunRefusal::InvalidTarget(message)) if message.contains("no IPv4 address")
+        ));
+    }
+
     // AC41 — an unresolvable hostname surfaces a clear error, not a hang or trace.
     #[tokio::test]
     async fn diagnostic_target_reports_an_unresolvable_hostname() {
         let resolver = StubResolver { addrs: vec![] };
         assert!(matches!(
-            diagnostic_target("nope.invalid", &resolver).await,
+            diagnostic_target("nope.invalid", PrefixFamily::V4, &resolver).await,
             Err(RunRefusal::InvalidTarget(message)) if message.contains("resolved")
         ));
+    }
+
+    // F-189: a name that resolves only to a non-public address gets the same
+    // visitor refusal as one that does not resolve at all.
+    #[tokio::test]
+    async fn private_and_unresolvable_names_get_one_refusal() {
+        let refusal = |result: Result<ValidatedTarget, RunRefusal>| match result {
+            Err(RunRefusal::InvalidTarget(message)) => message,
+            other => panic!("expected an invalid-target refusal, got {other:?}"),
+        };
+        let private = StubResolver {
+            addrs: vec!["10.0.0.5".parse().unwrap()],
+        };
+        let empty = StubResolver { addrs: vec![] };
+        assert_eq!(
+            refusal(diagnostic_target("db.internal", PrefixFamily::V4, &private).await),
+            refusal(diagnostic_target("nope.invalid", PrefixFamily::V4, &empty).await),
+        );
     }
 
     #[test]
@@ -1208,8 +1280,8 @@ mod tests {
 
     struct StubProbe(Option<shared::template::BgpDaemon>);
     impl DaemonProbe for StubProbe {
-        fn detect(&self) -> Option<shared::template::BgpDaemon> {
-            self.0
+        fn detect(&self) -> Option<shared::template::DaemonCli> {
+            self.0.map(shared::template::DaemonCli::on_path)
         }
     }
 
@@ -1386,7 +1458,10 @@ mod tests {
                 .await
                 .unwrap();
             job.events
-                .send(crate::RelayEvent::Terminal { error: None })
+                .send(crate::RelayEvent::Terminal {
+                    error: None,
+                    status: shared::exec::ExecStatus::Completed { success: true },
+                })
                 .await
                 .unwrap();
         });
@@ -1435,6 +1510,62 @@ mod tests {
         );
     }
 
+    /// A `for_test` service whose settings save lowers the timeout to 1 s and the
+    /// output cap to 1 KiB, and the terminal status of `script` run on its engine.
+    #[cfg(unix)]
+    async fn status_after_lowering_limits(script: &str) -> shared::exec::ExecStatus {
+        use shared::exec::{ExecEvent, ExecStatus};
+
+        let run = RunService::for_test(1, Duration::from_secs(30), 10);
+        let settings = GlobalSettings {
+            exec_timeout_secs: 1,
+            exec_max_output_kib: 1,
+            ..GlobalSettings::default()
+        };
+        run.save_settings_with(&settings, || Ok(())).unwrap();
+
+        let command = CommandTemplate {
+            program: "sh",
+            args: vec!["-c".to_string(), script.to_string()],
+        };
+        let mut handle = run.snapshot().engine.try_start(command, None).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match handle.events.recv().await {
+                    Some(ExecEvent::Done { status, .. }) => break status,
+                    Some(_) => {}
+                    None => break ExecStatus::Canceled,
+                }
+            }
+        })
+        .await
+        .expect("the run must end within the lowered timeout")
+    }
+
+    // AC25: a saved timeout reaches the live engine without a restart.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn settings_save_applies_the_timeout_to_the_engine() {
+        assert_eq!(
+            status_after_lowering_limits("sleep 10").await,
+            shared::exec::ExecStatus::TimedOut
+        );
+    }
+
+    // AC25: a saved output cap reaches the live engine without a restart.
+    // 200 lines of 41 bytes is ~8 KiB: inside the old 64 KiB cap, past the new 1 KiB.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn settings_save_applies_the_output_cap_to_the_engine() {
+        assert_eq!(
+            status_after_lowering_limits(
+                "i=0; while [ $i -lt 200 ]; do echo 0123456789012345678901234567890123456789; i=$((i+1)); done"
+            )
+            .await,
+            shared::exec::ExecStatus::OutputCapped
+        );
+    }
+
     #[test]
     fn run_admission_blocks_past_the_rate_max() {
         let admission = RunAdmission::new(
@@ -1449,6 +1580,21 @@ mod tests {
             assert!(admission.allow(client));
         }
         assert!(!admission.allow(client), "the fourth request is blocked");
+    }
+
+    #[test]
+    fn run_admission_keys_ipv6_by_64() {
+        let admission = RunAdmission::new(
+            1,
+            RateLimit {
+                max: 3,
+                window: Duration::from_secs(60),
+            },
+        );
+        let allowed = (1..=50u16)
+            .filter(|i| admission.allow(format!("2001:db8::{i:x}").parse().unwrap()))
+            .count();
+        assert_eq!(allowed, 3, "one /64 shares one exec budget");
     }
 
     #[test]
@@ -1679,5 +1825,123 @@ mod tests {
         let client: IpAddr = "203.0.113.10".parse().unwrap();
         assert!(run.snapshot().admission.allow(client));
         assert!(!run.snapshot().admission.allow(client));
+    }
+
+    // F-349: a store failure resolving the run's location still answers the
+    // visitor "not available", but its cause must reach the operator log.
+    #[tokio::test]
+    async fn location_store_failure_is_logged_with_its_cause() {
+        let state = test_state();
+        let txn = state.store.database().begin_write().unwrap();
+        txn.delete_table(crate::store::LOCATION).unwrap();
+        txn.open_table(redb::TableDefinition::<u64, u64>::new("location"))
+            .unwrap();
+        let cause = txn
+            .open_table(crate::store::LOCATION)
+            .unwrap_err()
+            .to_string();
+        txn.commit().unwrap();
+
+        for location in [None, Some("remote-1".to_string())] {
+            let (logs, _guard) = crate::auth::tests::capture_logs();
+            let response = run_stream(
+                State(state.clone()),
+                ClientContext {
+                    ip: Some("198.51.100.9".parse().unwrap()),
+                    secure: false,
+                },
+                headers(&[("host", "lg.test"), ("origin", "http://lg.test")]),
+                Query(RunParams {
+                    method: "ping".to_string(),
+                    target: "8.8.8.8".to_string(),
+                    location,
+                }),
+            )
+            .await;
+
+            let body = response_body(response).await;
+            assert!(body.contains("that location is not available"), "{body}");
+            let logs = logs.text();
+            assert!(logs.contains("ERROR"), "{logs}");
+            assert!(logs.contains(&cause), "{logs}");
+        }
+    }
+
+    // F-367: the same holds when the location reads fine and its agents lookup fails.
+    #[tokio::test]
+    async fn agent_store_failure_is_logged_with_its_cause() {
+        let state = test_state();
+        online_remote(&state);
+        let txn = state.store.database().begin_write().unwrap();
+        txn.delete_table(crate::store::AGENT).unwrap();
+        txn.open_table(redb::TableDefinition::<u64, u64>::new("agent"))
+            .unwrap();
+        let cause = txn.open_table(crate::store::AGENT).unwrap_err().to_string();
+        txn.commit().unwrap();
+
+        let (logs, _guard) = crate::auth::tests::capture_logs();
+        let response = run_stream(
+            State(state.clone()),
+            ClientContext {
+                ip: Some("198.51.100.9".parse().unwrap()),
+                secure: false,
+            },
+            headers(&[("host", "lg.test"), ("origin", "http://lg.test")]),
+            Query(RunParams {
+                method: "ping".to_string(),
+                target: "8.8.8.8".to_string(),
+                location: Some("remote-1".to_string()),
+            }),
+        )
+        .await;
+
+        let body = response_body(response).await;
+        assert!(body.contains("that location is not available"), "{body}");
+        let logs = logs.text();
+        assert!(logs.contains("ERROR"), "{logs}");
+        assert!(logs.contains(&cause), "{logs}");
+    }
+
+    // F-371: an unreadable settings record still relays the run with the
+    // agent's own limits, but its cause must reach the operator log.
+    #[tokio::test]
+    async fn relayed_limits_settings_failure_is_logged_with_its_cause() {
+        let state = test_state();
+        online_remote(&state);
+        let txn = state.store.database().begin_write().unwrap();
+        txn.delete_table(crate::store::SETTINGS).unwrap();
+        txn.open_table(redb::TableDefinition::<u64, u64>::new("settings"))
+            .unwrap();
+        let cause = txn
+            .open_table(crate::store::SETTINGS)
+            .unwrap_err()
+            .to_string();
+        txn.commit().unwrap();
+        let mut jobs = state.tunnel_hub.register_for_test("agent-1");
+
+        let (logs, _guard) = crate::auth::tests::capture_logs();
+        let _response = run_stream(
+            State(state),
+            ClientContext {
+                ip: Some("198.51.100.9".parse().unwrap()),
+                secure: false,
+            },
+            headers(&[("host", "lg.test"), ("origin", "http://lg.test")]),
+            Query(RunParams {
+                method: "ping".to_string(),
+                target: "8.8.8.8".to_string(),
+                location: Some("remote-1".to_string()),
+            }),
+        )
+        .await;
+
+        let job = jobs.recv().await.expect("remote job submitted");
+        assert!(matches!(
+            job.command,
+            TunnelMessage::Command { limits: None, .. }
+        ));
+        let logs = logs.text();
+        assert!(logs.contains("ERROR"), "{logs}");
+        assert!(logs.contains(&cause), "{logs}");
     }
 }
