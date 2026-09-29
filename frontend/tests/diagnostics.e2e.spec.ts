@@ -155,6 +155,7 @@ test.describe('diagnostics page', () => {
 		const latency = status.locator(
 			'xpath=//span[text()="Your latency"]/following-sibling::span'
 		);
-		await expect(latency).toHaveText(/^(≈ \d+ ms|—)$/, { timeout: 5_000 });
+		// The fixture always answers the probe, so '—' here is a failure.
+		await expect(latency).toHaveText(/^≈ \d+ ms$/, { timeout: 5_000 });
 	});
 });

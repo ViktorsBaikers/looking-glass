@@ -55,14 +55,15 @@
 			<CardDescription>Sign in to manage locations and settings.</CardDescription>
 		</CardHeader>
 		<CardContent>
-			<form class={formStack} onsubmit={submit} novalidate>
+			<form class={formStack} onsubmit={submit} novalidate aria-busy={submitting || undefined}>
 				<Field label="Username" for="username">
 					<Input
 						id="username"
 						name="username"
 						autocomplete="username"
 						bind:value={username}
-						disabled={submitting}
+						readonly={submitting}
+						aria-disabled={submitting || undefined}
 						required
 					/>
 				</Field>
@@ -74,7 +75,8 @@
 						type="password"
 						autocomplete="current-password"
 						bind:value={password}
-						disabled={submitting}
+						readonly={submitting}
+						aria-disabled={submitting || undefined}
 						aria-describedby={formError ? 'login-error' : undefined}
 						required
 					/>

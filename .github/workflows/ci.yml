@@ -8,6 +8,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -24,9 +27,11 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Install Playwright Chromium
+      # WebKit runs the accessibility spec and the @webkit-tagged dialog and
+      # drawer tests (see the webkit project in frontend/playwright.config.ts).
+      - name: Install Playwright Chromium and WebKit
         working-directory: frontend
-        run: ./node_modules/.bin/playwright install --with-deps chromium
+        run: ./node_modules/.bin/playwright install --with-deps chromium webkit
 
       - name: Verify frontend
         working-directory: frontend
@@ -36,10 +41,11 @@ jobs:
           npm run test:e2e
           npm run build
 
+      # The release image and agent asset build with rust:1.96 (Dockerfile, release.yml).
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable branch
         with:
-          toolchain: stable
-          components: rustfmt, clippy
+          toolchain: '1.96'
+          components: rustfmt, clippy, rust-src
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
@@ -47,10 +53,33 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Lint
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --all
+        run: cargo test --all --locked
 
       - name: Build
-        run: cargo build --release
+        run: cargo build --locked --release
+
+      # The notices cover the standard library of the pinned toolchain: its
+      # rust-src and the crates.io sources in its library/Cargo.lock. The library
+      # manifest uses a nightly cargo feature, hence RUSTC_BOOTSTRAP for this fetch.
+      - name: Fetch standard library sources
+        run: RUSTC_BOOTSTRAP=1 cargo fetch --locked --manifest-path "$(rustc --print sysroot)/lib/rustlib/src/rust/library/Cargo.toml"
+
+      - name: Repository checks
+        run: |
+          sh scripts/check-readme.sh
+          sh scripts/check-release-workflow.sh
+          python3 scripts/third-party-notices.py --check
+          bash scripts/test-install-agent.sh
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Build the release image
+        run: |
+          docker build -t looking-glass:ci .
+          docker run --rm --entrypoint cat looking-glass:ci /usr/share/doc/looking-glass/THIRD_PARTY_NOTICES.md > /dev/null

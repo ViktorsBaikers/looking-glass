@@ -37,14 +37,25 @@
 	let submitting = $state(false);
 	let formError = $state('');
 
+	// Central counts UTF-8 bytes, so a character beyond ASCII counts as 2 to 4.
+	const passwordBytes = $derived(new TextEncoder().encode(password).length);
+	const byteNote = $derived(passwordBytes > password.length ? ' Accented letters, other scripts and emoji count as 2 to 4 each.' : '');
 	const passwordError = $derived(
-		password.length > 0 && (password.length < MIN_PASSWORD || password.length > MAX_PASSWORD)
-			? `At least ${MIN_PASSWORD} characters.`
-			: ''
+		passwordBytes > MAX_PASSWORD
+			? `At most ${MAX_PASSWORD} characters.${byteNote}`
+			: passwordBytes > 0 && passwordBytes < MIN_PASSWORD
+				? `At least ${MIN_PASSWORD} characters.${byteNote}`
+				: ''
 	);
 	const confirmError = $derived(confirm.length > 0 && confirm !== password ? 'Passwords do not match.' : '');
+	// A rule is a hint while its field is being typed in; leaving the field
+	// shows it as an error (Set password stays disabled until the rules pass).
+	// Editing Password makes the match rule a hint again until Password is left.
+	// Typing resets in the capture phase: a delegated oninput runs after
+	// bind:value has already rendered the alert (F-260).
+	let shown = $state({ password: false, confirm: false });
 	const canSubmit = $derived(
-		password.length >= MIN_PASSWORD && password.length <= MAX_PASSWORD && confirm === password && !submitting
+		passwordBytes >= MIN_PASSWORD && passwordBytes <= MAX_PASSWORD && confirm === password && !submitting
 	);
 
 	onMount(async () => {
@@ -94,31 +105,47 @@
 			{:else if phase === 'invalid'}
 				<p class={activateMessage} role="alert">{message}</p>
 			{:else}
-				<form class={formStack} onsubmit={submit} novalidate>
+				<form class={formStack} onsubmit={submit} novalidate aria-busy={submitting || undefined}>
 					<p class={activateWho}>{username}</p>
 
-					<Field label="Password" for="password" error={passwordError}>
+					<Field
+						label="Password"
+						for="password"
+						error={shown.password ? passwordError : undefined}
+						hint={shown.password ? undefined : passwordError}
+					>
 						<Input
 							id="password"
 							name="password"
 							type="password"
 							autocomplete="new-password"
 							bind:value={password}
-							disabled={submitting}
-							invalid={!!passwordError}
+							readonly={submitting}
+							aria-disabled={submitting || undefined}
+							invalid={shown.password && !!passwordError}
+							oninputcapture={() => (shown = { password: false, confirm: false })}
+							onblur={() => (shown = { password: true, confirm: shown.confirm || confirm.length > 0 })}
 							required
 						/>
 					</Field>
 
-					<Field label="Confirm password" for="confirm" error={confirmError}>
+					<Field
+						label="Confirm password"
+						for="confirm"
+						error={shown.confirm ? confirmError : undefined}
+						hint={shown.confirm ? undefined : confirmError}
+					>
 						<Input
 							id="confirm"
 							name="confirm"
 							type="password"
 							autocomplete="new-password"
 							bind:value={confirm}
-							disabled={submitting}
-							invalid={!!confirmError}
+							readonly={submitting}
+							aria-disabled={submitting || undefined}
+							invalid={shown.confirm && !!confirmError}
+							oninputcapture={() => (shown.confirm = false)}
+							onblur={() => (shown.confirm = true)}
 							required
 						/>
 					</Field>

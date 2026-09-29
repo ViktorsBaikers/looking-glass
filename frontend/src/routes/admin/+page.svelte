@@ -476,12 +476,24 @@
 </div>
 
 <Dialog bind:open={showCreate} title="Add location" description="Name it; configure it next.">
-	<form class={formStack} onsubmit={submitCreate} novalidate>
+	<form class={formStack} onsubmit={submitCreate} novalidate aria-busy={creating || undefined}>
 		<Field label="Display name" for="new-name">
-			<Input id="new-name" bind:value={draft.name} disabled={creating} required />
+			<Input
+				id="new-name"
+				bind:value={draft.name}
+				readonly={creating}
+				aria-disabled={creating || undefined}
+				required
+			/>
 		</Field>
 		<Field label="Geographic label" for="new-geo">
-			<Input id="new-geo" bind:value={draft.geo_label} placeholder="Frankfurt, DE" disabled={creating} />
+			<Input
+				id="new-geo"
+				bind:value={draft.geo_label}
+				placeholder="Frankfurt, DE"
+				readonly={creating}
+				aria-disabled={creating || undefined}
+			/>
 		</Field>
 		<Field label="Node kind" for="new-kind">
 			<Select id="new-kind" items={kindItems} bind:value={draft.kind} disabled={creating} portaled={false} />
@@ -501,7 +513,7 @@
 <ConfirmDialog
 	bind:open={showDelete}
 	title="Delete this location?"
-	message="Its test IPs, iperf endpoints, files, agent, and tokens are all removed. This cannot be undone."
+	message={`${pendingDelete?.name ?? 'This location'} and its test IPs, iperf endpoints, files, agent, and tokens are all removed. This cannot be undone.`}
 	confirmLabel="Delete location"
 	danger
 	busy={deleting}
@@ -511,7 +523,7 @@
 <ConfirmDialog
 	bind:open={showRevoke}
 	title="Revoke this agent?"
-	message="Its credential stops working and its tunnel closes now. The location shows Not enrolled until you enroll a new agent."
+	message={`${pendingRevoke?.name ?? 'This location'}'s agent credential stops working and its tunnel closes now. The location shows Not enrolled until you enroll a new agent.`}
 	confirmLabel="Revoke agent"
 	danger
 	busy={revoking}

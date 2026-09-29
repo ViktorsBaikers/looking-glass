@@ -799,7 +799,24 @@ async fn a_session_resurrected_after_a_password_change_is_refused() {
             .is_none(),
         "the password change purged the other session"
     );
-    sessions.save(&stale).await.expect("resurrect the record");
+    // `save` only updates an existing row, so put it back with `create`.
+    let mut resurrected_record = stale.clone();
+    sessions
+        .create(&mut resurrected_record)
+        .await
+        .expect("resurrect the record");
+    assert_eq!(
+        resurrected_record.id, stale.id,
+        "the stale cookie's id is back"
+    );
+    assert!(
+        sessions
+            .load(&stale.id)
+            .await
+            .expect("session store")
+            .is_some(),
+        "the stale record is back, so only the generation check can refuse it"
+    );
 
     let resurrected = send(
         central::build(state.clone()),
@@ -919,4 +936,41 @@ async fn password_rotation_never_recreates_or_overwrites_a_changed_row() {
         None
     );
     assert!(state.store.get_administrator("ghost").unwrap().is_none());
+}
+
+// F-321 — create, change-password and activate refuse a body the JSON extractor
+// cannot read (malformed or missing fields) with the admin API's
+// `{error:"invalid_input", message}` JSON envelope, keeping axum's status.
+#[tokio::test]
+async fn bad_json_bodies_answer_the_json_error_envelope() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    for (method, uri) in [
+        ("POST", "/api/admin/administrators"),
+        ("PUT", "/api/admin/me/password"),
+        ("POST", "/api/activate/not-a-real-token"),
+    ] {
+        for (body, status) in [
+            ("{", StatusCode::BAD_REQUEST),
+            ("{}", StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let response = send(
+                central::build(state.clone()),
+                authed(method, uri, &cookie, body),
+            )
+            .await;
+            assert_status(&response, status);
+            assert_eq!(
+                response.headers()["content-type"],
+                "application/json",
+                "{method} {uri} {body}"
+            );
+            let error = json_body(response).await;
+            assert_eq!(error["error"], "invalid_input", "{method} {uri} {body}");
+            assert!(
+                error["message"].is_string(),
+                "{method} {uri} {body}: {error}"
+            );
+        }
+    }
 }

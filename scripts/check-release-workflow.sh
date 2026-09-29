@@ -2,9 +2,11 @@
 set -eu
 
 workflow=${1:-.github/workflows/release.yml}
+ci=${2:-.github/workflows/ci.yml}
 
-python3 - "$workflow" <<'PY'
+python3 - "$workflow" "$ci" <<'PY'
 import copy
+import re
 import sys
 from pathlib import Path
 
@@ -113,6 +115,21 @@ def scalar_values(value):
         yield value
 
 
+def pinned(step, name, action, message):
+    # Actions are pinned to a full commit SHA with the release tag as a comment.
+    uses = step.get("uses", "")
+    if step.get("name") != name or not re.fullmatch(re.escape(action) + r"@[0-9a-f]{40} # v[0-9]+(\.[0-9]+)*", uses):
+        fail(message)
+    return {key: value for key, value in step.items() if key not in {"name", "uses"}}
+
+
+def publish_run():
+    return verify_run() + (
+        '/usr/bin/gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes'
+        " assets/install-agent.sh assets/lg-agent-x86_64-unknown-linux-gnu THIRD_PARTY_NOTICES.md\n"
+    )
+
+
 def verify_run():
     return (
         "lg_installer_sha256=$(/usr/bin/grep -E '^LG_INSTALLER_SHA256=[0-9a-f]{64}$' README.md | /usr/bin/cut -d= -f2)\n"
@@ -151,14 +168,13 @@ def validate(document):
         "Checkout tag tree", "Build release assets", "Verify release assets against README pins",
         "Upload verified release assets",
     ])
-    expect(prepare_steps[0], {"name": "Checkout tag tree", "uses": "actions/checkout@v4"}, "prepare checkout")
+    expect(pinned(prepare_steps[0], "Checkout tag tree", "actions/checkout", "prepare checkout"), {}, "prepare checkout")
     expect(set(prepare_steps[1]), {"name", "run"}, "prepare builder")
     if "cargo build --locked --release --package agent" not in prepare_steps[1]["run"]:
         fail("prepare agent build")
     expect(set(prepare_steps[2]), {"name", "run"}, "prepare verification")
     expect(prepare_steps[2]["run"], verify_run(), "prepare strict README verification")
-    expect(prepare_steps[3], {
-        "name": "Upload verified release assets", "uses": "actions/upload-artifact@v4",
+    expect(pinned(prepare_steps[3], "Upload verified release assets", "actions/upload-artifact", "prepare artifact"), {
         "with": {
             "name": "release-assets",
             "path": "assets/install-agent.sh\nassets/lg-agent-x86_64-unknown-linux-gnu\n",
@@ -177,15 +193,14 @@ def validate(document):
     publisher_steps = steps(publisher["steps"], [
         "Checkout tag tree", "Download verified release assets", "Verify and publish GitHub Release assets",
     ])
-    expect(publisher_steps[0], {"name": "Checkout tag tree", "uses": "actions/checkout@v4"}, "publisher checkout")
-    expect(publisher_steps[1], {
-        "name": "Download verified release assets", "uses": "actions/download-artifact@v4",
+    expect(pinned(publisher_steps[0], "Checkout tag tree", "actions/checkout", "publisher checkout"), {}, "publisher checkout")
+    expect(pinned(publisher_steps[1], "Download verified release assets", "actions/download-artifact", "publisher artifact download"), {
         "with": {"name": "release-assets", "path": "assets"},
     }, "publisher artifact download")
     expect(publisher_steps[2], {
         "name": "Verify and publish GitHub Release assets",
         "env": {"GH_TOKEN": "${{ github.token }}"},
-        "run": verify_run() + '/usr/bin/gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes assets/install-agent.sh assets/lg-agent-x86_64-unknown-linux-gnu\n',
+        "run": publish_run(),
     }, "publisher strict verification and fixed gh release")
 
     image = mapping(jobs["image"], "image mapping")
@@ -193,6 +208,9 @@ def validate(document):
     expect(image["permissions"], {"contents": "read", "packages": "write"}, "image permissions")
 
     for job_name, job in jobs.items():
+        for step in job["steps"]:
+            if "uses" in step:
+                pinned(step, step.get("name"), step["uses"].split("@", 1)[0], "action not pinned to a commit SHA")
         for value in scalar_values(job):
             if "GITHUB_ENV" in value or "PATH" in value:
                 fail("environment-file or PATH mutation")
@@ -200,7 +218,30 @@ def validate(document):
                 fail("alternate publication path")
 
 
+def validate_ci(text):
+    # CI pins every action to a full commit SHA and builds against Cargo.lock.
+    for line in text.splitlines():
+        uses = re.match(r"\s*(?:-\s+)?uses:\s*(\S+)", line)
+        if uses and not re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", uses.group(1)):
+            fail(f"ci action not pinned to a commit SHA: {uses.group(1)}")
+        if re.search(r"\bcargo (build|test|clippy|fetch)\b", line) and "--locked" not in line:
+            fail(f"ci cargo command without --locked: {line.strip()}")
+
+
 try:
+    ci = Path(sys.argv[2]).read_text()
+    validate_ci(ci)
+    ci_mutations = {
+        "ci-tag-pinned-action": lambda text: re.sub(r"@[0-9a-f]{40}", "@v4", text, count=1),
+        "ci-unlocked-cargo": lambda text: text.replace(" --locked", "", 1),
+    }
+    for name, mutate in ci_mutations.items():
+        try:
+            validate_ci(mutate(ci))
+        except ValueError:
+            print(f"ci workflow mutation rejected: {name}")
+            continue
+        fail(f"mutation passed: {name}")
     workflow = parse(Path(sys.argv[1]).read_text().splitlines())
     validate(workflow)
     mutations = {
@@ -209,7 +250,7 @@ try:
         ),
         "privilege-leakage": lambda value: value["jobs"]["prepare-release-assets"]["permissions"].update({"contents": "write"}),
         "artifact-tampering": lambda value: value["jobs"]["release-assets"]["steps"][2].update(
-            {"run": verify_run() + 'printf tampered > assets/install-agent.sh\n/usr/bin/gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes assets/install-agent.sh assets/lg-agent-x86_64-unknown-linux-gnu\n'}
+            {"run": publish_run().replace("/usr/bin/gh release", "printf tampered > assets/install-agent.sh\n/usr/bin/gh release")}
         ),
         "environment-export": lambda value: value["jobs"]["release-assets"]["steps"][2].update(
             {"run": value["jobs"]["release-assets"]["steps"][2]["run"] + "printf x >> $GITHUB_ENV\n"}
@@ -221,6 +262,11 @@ try:
         "permissive-guard": lambda value: value["jobs"]["prepare-release-assets"].update({"if": "${{ true }}"}),
         "altered-runner": lambda value: value["jobs"]["release-assets"].update({"runs-on": "windows-latest"}),
         "altered-default-shell": lambda value: value["jobs"]["prepare-release-assets"].update({"defaults": {"run": {"shell": "bash {0}"}}}),
+        "tag-pinned-checkout": lambda value: value["jobs"]["release-assets"]["steps"][0].update({"uses": "actions/checkout@v4"}),
+        "tag-pinned-image-action": lambda value: value["jobs"]["image"]["steps"][0].update({"uses": "actions/checkout@v4"}),
+        "notices-not-published": lambda value: value["jobs"]["release-assets"]["steps"][2].update(
+            {"run": publish_run().replace(" THIRD_PARTY_NOTICES.md", "")}
+        ),
     }
     for name, mutate in mutations.items():
         mutant = copy.deepcopy(workflow)
@@ -231,7 +277,7 @@ try:
             print(f"release workflow mutation rejected: {name}")
             continue
         fail(f"mutation passed: {name}")
-except (ValueError, IndexError, TypeError) as error:
+except (ValueError, IndexError, TypeError, OSError) as error:
     print(f"release workflow missing: {error}", file=sys.stderr)
     sys.exit(1)
 

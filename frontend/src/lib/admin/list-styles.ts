@@ -55,10 +55,12 @@ export const list = css({
 // Fixed tracks so every row's cells line up under the head row. The first
 // track widens when rows carry a reorder handle (see `reorderable`); the
 // methods track fits its longest label ("8 methods offered", the cap) tightly.
+// The tracks need 844 px plus the name, so rows stay stacked below `xl`: beside
+// the 220 px admin sidebar the list is only 740 px wide at 1024.
 const columns = 'var(--mark-track, 56px) minmax(0, 1fr) 124px 96px 128px 292px';
 export const headRow = css({
 	display: 'none',
-	lg: {
+	xl: {
 		display: 'grid',
 		gridTemplateColumns: columns,
 		gap: '16px',
@@ -80,7 +82,7 @@ export const row = css({
 	transitionDuration: '120ms',
 	'& + &': { borderTopWidth: '1px', borderTopStyle: 'solid', borderTopColor: 'rule' },
 	_hover: { background: 'color-mix(in srgb, {colors.sunk} 45%, transparent)' },
-	lg: { gridTemplateColumns: columns, padding: '16px 20px' }
+	xl: { gridTemplateColumns: columns, padding: '16px 20px' }
 });
 /** Wraps the head row and list while rows can be dragged into public order. */
 export const reorderable = css({ '--mark-track': '84px' });
@@ -123,7 +125,7 @@ export const lineMark = css({
 	alignItems: 'center',
 	gridRow: 'span 4',
 	alignSelf: 'start',
-	lg: { gridRow: 'auto', alignSelf: 'center' }
+	xl: { gridRow: 'auto', alignSelf: 'center' }
 });
 export const roundel = css({
 	display: 'inline-flex',
@@ -154,7 +156,7 @@ export const stubState = {
 	offline: css({ borderTopStyle: 'dotted', opacity: 0.6 }),
 	not_enrolled: css({ borderTopStyle: 'dashed', opacity: 0.6 })
 } as const;
-export const nameCell = css({ minWidth: '0', gridColumn: '2', lg: { gridColumn: 'auto' } });
+export const nameCell = css({ minWidth: '0', gridColumn: '2', xl: { gridColumn: 'auto' } });
 export const rowTitle = css({
 	textStyle: 'item',
 	color: 'ink'
@@ -171,6 +173,8 @@ export const metaRow = css({
 export const cell = css({
 	gridColumn: '2',
 	display: 'flex',
+	// A 320 px row drops the Status badge under its label instead of overflowing.
+	flexWrap: 'wrap',
 	alignItems: 'baseline',
 	gap: '8px',
 	fontSize: '14px',
@@ -178,14 +182,14 @@ export const cell = css({
 	color: 'ink',
 	minWidth: '0',
 	fontVariantNumeric: 'tabular-nums',
-	lg: { gridColumn: 'auto', display: 'block' }
+	xl: { gridColumn: 'auto', display: 'block' }
 });
 /** Per-cell label: visible on narrow rows, read-only for screen readers on wide ones. */
 export const cellLabel = css({
 	textStyle: 'key',
 	color: 'ink-muted',
 	minWidth: '84px',
-	lg: {
+	xl: {
 		position: 'absolute',
 		width: '1px',
 		height: '1px',
@@ -201,7 +205,7 @@ export const actions = css({
 	alignItems: 'center',
 	gap: '6px',
 	flexWrap: 'wrap',
-	lg: { gridColumn: 'auto', justifyContent: 'flex-end', flexWrap: 'nowrap' }
+	xl: { gridColumn: 'auto', justifyContent: 'flex-end', flexWrap: 'nowrap' }
 });
 
 // ----- empty / loading / error states -----

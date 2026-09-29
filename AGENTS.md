@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Looking Glass: self-hosted network diagnostics console. Rust workspace (`crates/central`, `crates/agent`, `crates/shared`; axum + tokio) serving a SvelteKit SPA (`frontend/`, Svelte 5, Tailwind v4 + `tailwind-variants`).
+Looking Glass: self-hosted network diagnostics console. Rust workspace (`crates/central`, `crates/agent`, `crates/shared`; axum + tokio) serving a SvelteKit SPA (`frontend/`, Svelte 5, Panda CSS + Ark UI).
 
 **Tradeoff:** these rules bias toward caution over speed. For trivial tasks, use judgment.
 
@@ -55,6 +55,9 @@ For multi-step work, state a brief plan:
 
 - `central` embeds `frontend/build` via rust-embed: build the SPA before any cargo command. The `Makefile` targets enforce this; prefer `make test`, `make clippy`, `make verify` over raw cargo.
 - Frontend: `npm test` (vitest), `npm run test:e2e` (playwright), `npm run check` (svelte-check), all from `frontend/`.
+- `npm run test:e2e` (and so `make verify`) needs Playwright's Chromium and WebKit: run `npx playwright install chromium webkit` once in `frontend/`, as `ci.yml` does (it adds `--with-deps`).
+- `THIRD_PARTY_NOTICES.md` is generated: run `python3 scripts/third-party-notices.py` after any change to `Cargo.lock` or `frontend/package-lock.json`. `make check-scripts` and CI fail while it is stale.
+- Releases: update the README pins (image tag, asset URLs, `LG_INSTALLER_SHA256`, `LG_AGENT_SHA256`) and the matching lines in `scripts/check-readme.sh` before pushing a `v*` tag. The release job refuses assets that don't match the pins. See README "Cutting a release".
 
 ## Code intelligence
 

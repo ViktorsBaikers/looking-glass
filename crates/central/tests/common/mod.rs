@@ -207,6 +207,8 @@ pub fn captured_logs() -> Arc<Mutex<Vec<u8>>> {
             let subscriber = tracing_subscriber::fmt()
                 .with_ansi(false)
                 .with_writer(move || CaptureWriter(Arc::clone(&writer_buffer)))
+                // Every level: a secret logged at DEBUG or TRACE must fail the test too.
+                .with_max_level(tracing::Level::TRACE)
                 .finish();
             let _ = tracing::subscriber::set_global_default(subscriber);
             buffer

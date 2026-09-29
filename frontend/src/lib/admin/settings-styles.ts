@@ -4,7 +4,7 @@ import { css } from 'styled-system/css';
 
 export const pageGrid = css({
 	display: 'grid',
-	gridTemplateColumns: '1fr',
+	gridTemplateColumns: 'minmax(0, 1fr)',
 	gap: '32px',
 	alignItems: 'start',
 	lg: { gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: '32px' }

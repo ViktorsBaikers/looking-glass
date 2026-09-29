@@ -36,6 +36,17 @@ pub struct CommandTemplate {
 }
 
 impl Method {
+    /// The address family this method runs over — the family [`validate_target`]
+    /// must pin the target to.
+    ///
+    /// [`validate_target`]: crate::validate::validate_target
+    pub fn family(self) -> PrefixFamily {
+        match self {
+            Method::Ping | Method::Mtr | Method::Traceroute => PrefixFamily::V4,
+            Method::Ping6 | Method::Mtr6 | Method::Traceroute6 => PrefixFamily::V6,
+        }
+    }
+
     /// Build the command for this method against a validated target. The pinned public IP
     /// is appended as the sole target argument; `-n` keeps every tool numeric so it never
     /// performs its own reverse lookup on top of the address we already validated.
@@ -115,13 +126,39 @@ impl BgpDaemon {
     }
 }
 
+/// A detected routing daemon plus the exact program to spawn for it — the same file
+/// the probe checked, so probing and running cannot diverge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DaemonCli {
+    pub daemon: BgpDaemon,
+    pub program: &'static str,
+}
+
+impl DaemonCli {
+    /// The daemon's bare program name, resolved through `PATH` at spawn time.
+    pub fn on_path(daemon: BgpDaemon) -> Self {
+        Self {
+            daemon,
+            program: daemon.program(),
+        }
+    }
+
+    /// [`BgpDaemon::command`] with `program` set to the probed file.
+    pub fn command(self, prefix: &ValidatedPrefix) -> CommandTemplate {
+        CommandTemplate {
+            program: self.program,
+            ..self.daemon.command(prefix)
+        }
+    }
+}
+
 /// Detects which supported routing daemon's read-only CLI is available on this
 /// node. Injectable so a test can simulate a daemon present or absent WITHOUT a
 /// live BIRD/FRR install; the production [`PathDaemonProbe`] looks for `birdc` /
 /// `vtysh` on `PATH`. BGP is offered only where a daemon is present (FR-036) — an
 /// absent daemon makes the method unavailable, node-side, at run time.
 pub trait DaemonProbe: Send + Sync {
-    fn detect(&self) -> Option<BgpDaemon>;
+    fn detect(&self) -> Option<DaemonCli>;
 }
 
 /// The environment variable naming the agent's scoped BGP wrapper directory — the
@@ -142,8 +179,8 @@ pub const BGP_WRAPPER_DIR_ENV: &str = "LG_AGENT_BGP_WRAPPER_DIR";
 pub struct PathDaemonProbe;
 
 impl DaemonProbe for PathDaemonProbe {
-    fn detect(&self) -> Option<BgpDaemon> {
-        daemon_on_path(std::env::var_os("PATH").as_deref())
+    fn detect(&self) -> Option<DaemonCli> {
+        daemon_on_path(std::env::var_os("PATH").as_deref()).map(DaemonCli::on_path)
     }
 }
 
@@ -156,8 +193,12 @@ impl DaemonProbe for PathDaemonProbe {
 /// through to `/usr/sbin/birdc`. The directory is the one the installer controls and
 /// prepends to the service `PATH`; [`from_env`](Self::from_env) reads it from
 /// [`BGP_WRAPPER_DIR_ENV`], and an unset variable is itself fail-closed (`None`).
+///
+/// A detected daemon is spawned by the absolute wrapper path the probe checked, not by
+/// its bare name through `PATH`, so a `PATH` not led by the wrapper directory cannot
+/// swap in a different binary. A relative or non-UTF-8 directory is fail-closed.
 pub struct ScopedDaemonProbe {
-    wrapper_dir: Option<PathBuf>,
+    wrappers: Vec<DaemonCli>,
 }
 
 impl ScopedDaemonProbe {
@@ -168,20 +209,44 @@ impl ScopedDaemonProbe {
         let wrapper_dir = std::env::var_os(BGP_WRAPPER_DIR_ENV)
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
-        Self { wrapper_dir }
+        Self::for_dir(wrapper_dir)
     }
 
     /// Construct a probe scoped to an explicit directory — the deterministic core,
     /// testable without mutating the process environment.
     pub fn for_dir(wrapper_dir: Option<PathBuf>) -> Self {
-        Self { wrapper_dir }
+        let Some(dir) = wrapper_dir.filter(|dir| dir.is_absolute()) else {
+            return Self {
+                wrappers: Vec::new(),
+            };
+        };
+        // ponytail: `CommandTemplate::program` is `&'static str`, so each wrapper path is
+        // leaked once per probe (the agent builds one); make `program` owned if probes
+        // are ever built per request.
+        let wrappers = [BgpDaemon::Bird, BgpDaemon::Frr]
+            .into_iter()
+            .filter_map(|daemon| {
+                let path = dir
+                    .join(daemon.program())
+                    .into_os_string()
+                    .into_string()
+                    .ok()?;
+                Some(DaemonCli {
+                    daemon,
+                    program: Box::leak(path.into_boxed_str()),
+                })
+            })
+            .collect();
+        Self { wrappers }
     }
 }
 
 impl DaemonProbe for ScopedDaemonProbe {
-    fn detect(&self) -> Option<BgpDaemon> {
-        let dir = self.wrapper_dir.as_deref()?;
-        daemon_in_dir(dir)
+    fn detect(&self) -> Option<DaemonCli> {
+        self.wrappers
+            .iter()
+            .copied()
+            .find(|cli| is_executable_file(Path::new(cli.program)))
     }
 }
 
@@ -229,16 +294,6 @@ fn daemon_on_path(path: Option<&OsStr>) -> Option<BgpDaemon> {
         .find(|daemon| resolve_on_path(path, daemon.program()).is_some())
 }
 
-/// Resolve the available daemon inside a single scoped directory — the pure core of
-/// [`ScopedDaemonProbe`]. A daemon counts as present only when an *executable*
-/// wrapper of its [`program`](BgpDaemon::program) name lives directly in `dir`;
-/// there is no `PATH` fall-through, so an absent wrapper fails closed.
-fn daemon_in_dir(dir: &Path) -> Option<BgpDaemon> {
-    [BgpDaemon::Bird, BgpDaemon::Frr]
-        .into_iter()
-        .find(|daemon| is_executable_file(&dir.join(daemon.program())))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,7 +310,12 @@ mod tests {
     }
 
     async fn target(ip: &str) -> ValidatedTarget {
-        validate_target(ip, &StubResolver).await.unwrap()
+        let family = if ip.contains(':') {
+            PrefixFamily::V6
+        } else {
+            PrefixFamily::V4
+        };
+        validate_target(ip, family, &StubResolver).await.unwrap()
     }
 
     #[tokio::test]
@@ -567,7 +627,9 @@ mod tests {
         // absolute file resolves for the program name exec will spawn.
         write_exec(&wrapper_dir.join("birdc"), b"#!/bin/sh\n");
         assert_eq!(
-            ScopedDaemonProbe::for_dir(Some(wrapper_dir.clone())).detect(),
+            ScopedDaemonProbe::for_dir(Some(wrapper_dir.clone()))
+                .detect()
+                .map(|cli| cli.daemon),
             Some(BgpDaemon::Bird)
         );
         assert_eq!(
@@ -580,6 +642,37 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    // The agent spawns the absolute wrapper path it probed, not the bare name
+    // through PATH, so a PATH not led by the wrapper dir cannot swap the binary.
+    #[test]
+    fn scoped_probe_runs_the_probed_absolute_wrapper_path() {
+        let base = unique_tmp_dir("lg-bgp-scoped-exec");
+        let wrapper_dir = base.join("agent-wrapper");
+        std::fs::create_dir_all(&wrapper_dir).unwrap();
+        write_exec(&wrapper_dir.join("vtysh"), b"#!/bin/sh\n");
+
+        let prefix = bgp_arg("8.8.8.8", PrefixFamily::V4).unwrap();
+        let cli = ScopedDaemonProbe::for_dir(Some(wrapper_dir.clone()))
+            .detect()
+            .unwrap();
+        assert_eq!(cli.daemon, BgpDaemon::Frr);
+        let cmd = cli.command(&prefix);
+        assert_eq!(
+            std::path::Path::new(cmd.program),
+            wrapper_dir.join("vtysh"),
+            "the spawned program must be the probed wrapper file"
+        );
+        assert_eq!(cmd.args, vec!["-c", "show ip bgp 8.8.8.8"]);
+
+        // A relative wrapper dir is not an absolute path: fail closed.
+        assert_eq!(
+            ScopedDaemonProbe::for_dir(Some(PathBuf::from("agent-wrapper"))).detect(),
+            None
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     // An unconfigured scoped directory (unset env / no dir) is itself fail-closed.

@@ -12,10 +12,11 @@ use tower_sessions::cookie::{Cookie, CookieJar, Key};
 use tower_sessions::session::{Id, Record};
 use tower_sessions::SessionStore;
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
 mod common;
 use common::{
-    assert_status, body_string, cleartext_request, secure_request, send, session_cookie,
+    assert_status, authed, body_string, cleartext_request, secure_request, send, session_cookie,
     temp_files_dir, test_state, test_state_at, SETUP_TOKEN,
 };
 
@@ -219,7 +220,7 @@ async fn legacy_raw_session_id_is_refused_even_when_a_record_exists() {
         serde_json::json!(OffsetDateTime::now_utc().unix_timestamp() as u64),
     );
     RedbSessionStore::new(&state.store)
-        .save(&Record {
+        .create(&mut Record {
             id: raw_id,
             data,
             expiry_date: OffsetDateTime::now_utc() + Duration::hours(1),
@@ -297,37 +298,42 @@ fn missing_session_cookie_key_table_migrates_existing_volume() {
 }
 
 // AC4 (expiry half / FR-006) — a session past the absolute cap is refused even
-// though its cookie is still live.
+// though its cookie is still live; one just inside the 12h cap still works.
 #[tokio::test]
 async fn session_past_absolute_cap_is_refused() {
     let state = signed_test_state();
     install_admin(central::build(state.clone()), "alice", PASSWORD).await;
 
     let session_store = RedbSessionStore::new(&state.store);
-    let id = Id::default();
-    let mut data = HashMap::new();
-    data.insert(
-        "admin_id".to_string(),
-        serde_json::json!(state.store.list_administrators().unwrap()[0].id),
-    );
-    data.insert("auth_at".to_string(), serde_json::json!(0u64));
-    let record = Record {
-        id,
-        data,
-        expiry_date: OffsetDateTime::now_utc() + Duration::hours(1),
-    };
-    session_store.save(&record).await.unwrap();
+    let admin_id = state.store.list_administrators().unwrap()[0].id.clone();
+    let now = OffsetDateTime::now_utc().unix_timestamp() as u64;
+    let cap = 12 * 60 * 60;
+    for (auth_at, expected) in [
+        (now - cap - 60, StatusCode::UNAUTHORIZED),
+        (now - cap + 60, StatusCode::OK),
+    ] {
+        let id = Id::default();
+        let mut data = HashMap::new();
+        data.insert("admin_id".to_string(), serde_json::json!(admin_id));
+        data.insert("auth_at".to_string(), serde_json::json!(auth_at));
+        let mut record = Record {
+            id,
+            data,
+            expiry_date: OffsetDateTime::now_utc() + Duration::hours(1),
+        };
+        session_store.create(&mut record).await.unwrap();
 
-    let response = send(
-        central::build(state),
-        Request::builder()
-            .uri("/api/admin/me")
-            .header("cookie", signed_session_cookie(id))
-            .body(Body::empty())
-            .unwrap(),
-    )
-    .await;
-    assert_status(&response, StatusCode::UNAUTHORIZED);
+        let response = send(
+            central::build(state.clone()),
+            Request::builder()
+                .uri("/api/admin/me")
+                .header("cookie", signed_session_cookie(id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_status(&response, expected);
+    }
 }
 
 // FR-007 — logout ends the session immediately; the same cookie is then refused.
@@ -374,6 +380,101 @@ async fn logout_ends_the_session_immediately() {
             .header("cookie", &cookie)
             .body(Body::empty())
             .unwrap(),
+    )
+    .await;
+    assert_status(&after, StatusCode::UNAUTHORIZED);
+}
+
+/// Runs its hook once, synchronously, on the thread that emits the first
+/// tracing event whose `event` field equals `name` — a deterministic pause
+/// point inside a request that has already loaded its session record.
+struct OnEvent {
+    name: &'static str,
+    hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
+
+impl<S: tracing::Subscriber> Layer<S> for OnEvent {
+    fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+        struct EventName(Option<String>);
+        impl tracing::field::Visit for EventName {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "event" {
+                    self.0 = Some(value.to_string());
+                }
+            }
+            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+        }
+        let mut name = EventName(None);
+        event.record(&mut name);
+        if name.0.as_deref() == Some(self.name) {
+            if let Some(hook) = self.hook.lock().unwrap().take() {
+                hook();
+            }
+        }
+    }
+}
+
+// FR-007 — a request that loaded the session before logout must not write the
+// record back afterwards: the logged-out cookie stays refused.
+#[tokio::test]
+async fn logout_survives_an_overlapping_request() {
+    let state = test_state();
+    install_admin(central::build(state.clone()), "alice", PASSWORD).await;
+    let login = send(
+        central::build(state.clone()),
+        secure_request("POST", "/api/auth/login", &setup_json("alice", PASSWORD)),
+    )
+    .await;
+    assert_status(&login, StatusCode::NO_CONTENT);
+    let cookie = session_cookie(&login).expect("login sets a session cookie");
+
+    // The overlapping request is paused after its session loaded (at its
+    // rejection log line) and before the session layer re-saves the record;
+    // logout runs to completion on its own thread inside that pause.
+    let logout_status = Arc::new(Mutex::new(None));
+    let (slot, logout_state, logout_cookie) =
+        (logout_status.clone(), state.clone(), cookie.clone());
+    let pause = OnEvent {
+        name: "auth.password",
+        hook: Mutex::new(Some(Box::new(move || {
+            let status = std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(send(
+                        central::build(logout_state),
+                        authed("POST", "/api/auth/logout", &logout_cookie, ""),
+                    ))
+                    .status()
+            })
+            .join()
+            .unwrap();
+            *slot.lock().unwrap() = Some(status);
+        }))),
+    };
+    let _pause = tracing::subscriber::set_default(tracing_subscriber::registry().with(pause));
+
+    let overlapping = send(
+        central::build(state.clone()),
+        authed(
+            "PUT",
+            "/api/admin/me/password",
+            &cookie,
+            r#"{"current_password":"wrong-password-xx","new_password":"Another-Passphrase-123"}"#,
+        ),
+    )
+    .await;
+    assert_status(&overlapping, StatusCode::FORBIDDEN);
+    assert_eq!(
+        *logout_status.lock().unwrap(),
+        Some(StatusCode::NO_CONTENT),
+        "logout must have run inside the overlapping request"
+    );
+
+    let after = send(
+        central::build(state),
+        authed("GET", "/api/admin/me", &cookie, ""),
     )
     .await;
     assert_status(&after, StatusCode::UNAUTHORIZED);
@@ -569,7 +670,7 @@ async fn login_rotates_the_session_id() {
 }
 
 // (correctness / FR-006) an authenticated request refreshes the sliding idle
-// window — the session is re-saved with an expiry no earlier than before.
+// window — the session is re-saved with a fresh 30-minute expiry.
 #[tokio::test]
 async fn authenticated_request_refreshes_the_idle_window() {
     let state = signed_test_state();
@@ -587,7 +688,7 @@ async fn authenticated_request_refreshes_the_idle_window() {
         serde_json::json!(OffsetDateTime::now_utc().unix_timestamp() as u64),
     );
     session_store
-        .save(&Record {
+        .create(&mut Record {
             id,
             data,
             expiry_date: OffsetDateTime::now_utc() + Duration::minutes(1),
@@ -613,11 +714,15 @@ async fn authenticated_request_refreshes_the_idle_window() {
     );
 
     let after = session_store.load(&id).await.unwrap().unwrap().expiry_date;
-    assert!(after >= before, "activity must not shorten the idle window");
+    // Seeded with 1 minute left; a refresh restarts the full 30-minute window.
+    assert!(
+        after > before + Duration::minutes(28),
+        "activity must extend the idle window: before {before}, after {after}"
+    );
 }
 
-// FR-004 — altering one byte of a signed cookie must invalidate it before the
-// matching session record can authorize an admin route.
+// FR-004 — altering one byte of a signed cookie's MAC tag must invalidate it
+// even though the session id it carries still names a live record.
 #[tokio::test]
 async fn altered_signed_cookie_is_refused() {
     let state = test_state();
@@ -629,19 +734,25 @@ async fn altered_signed_cookie_is_refused() {
     )
     .await;
     assert_status(&login, StatusCode::NO_CONTENT);
-    let mut cookie = session_cookie(&login).expect("login sets a session cookie");
-    let last = cookie.pop().expect("non-empty session cookie");
-    cookie.push(if last == 'a' { 'b' } else { 'a' });
-
-    let response = send(
-        central::build(state),
+    let cookie = session_cookie(&login).expect("login sets a session cookie");
+    let me = |cookie: String| {
         Request::builder()
             .uri("/api/admin/me")
             .header("cookie", cookie)
             .body(Body::empty())
-            .unwrap(),
-    )
-    .await;
+            .unwrap()
+    };
+    // Control: the untouched cookie (and so its id half) authorizes.
+    let control = send(central::build(state.clone()), me(cookie.clone())).await;
+    assert_status(&control, StatusCode::OK);
+
+    // The value is `{44-char base64 HMAC tag}{session id}`: flip a tag byte only.
+    let (name, value) = cookie.split_once('=').expect("name=value cookie");
+    let first = value.chars().next().expect("non-empty session cookie");
+    let flipped = if first == 'A' { 'B' } else { 'A' };
+    let tampered = format!("{name}={flipped}{}", &value[1..]);
+
+    let response = send(central::build(state), me(tampered)).await;
     assert_status(&response, StatusCode::UNAUTHORIZED);
 }
 
@@ -715,12 +826,12 @@ async fn data_persists_across_a_store_reopen() {
         let session_store = RedbSessionStore::new(&store);
         let mut data = HashMap::new();
         data.insert("admin_id".to_string(), serde_json::json!("alice-id"));
-        let record = Record {
+        let mut record = Record {
             id: session_id,
             data,
             expiry_date: OffsetDateTime::now_utc() + Duration::hours(1),
         };
-        session_store.save(&record).await.unwrap();
+        session_store.create(&mut record).await.unwrap();
     }
 
     {
@@ -799,5 +910,113 @@ impl<'a> MakeWriter<'a> for BufferWriter {
     type Writer = BufferWriter;
     fn make_writer(&'a self) -> Self::Writer {
         self.clone()
+    }
+}
+
+// A body-less admin POST is a simple request a same-site sibling origin
+// can forge with the admin's SameSite=Strict cookie. A foreign Origin is refused;
+// the same request from this origin still works.
+#[tokio::test]
+async fn body_less_admin_post_from_a_foreign_origin_is_refused() {
+    let state = test_state();
+    let cookie = common::setup_and_login(&state).await;
+    let created = send(
+        central::build(state.clone()),
+        authed(
+            "POST",
+            "/api/admin/administrators",
+            &cookie,
+            r#"{"username":"bob"}"#,
+        ),
+    )
+    .await;
+    assert_status(&created, StatusCode::CREATED);
+    let id = common::json_body(created).await["administrator"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let regenerate = |origin: &str| {
+        let mut request = authed(
+            "POST",
+            &format!("/api/admin/administrators/{id}/activation"),
+            &cookie,
+            "",
+        );
+        let headers = request.headers_mut();
+        headers.remove("content-type");
+        headers.insert("host", "lg.test".parse().unwrap());
+        headers.insert("origin", origin.parse().unwrap());
+        request
+    };
+
+    let forged = send(
+        central::build(state.clone()),
+        regenerate("https://evil.lg.test"),
+    )
+    .await;
+    assert_status(&forged, StatusCode::FORBIDDEN);
+
+    let own = send(central::build(state), regenerate("https://lg.test")).await;
+    assert_status(&own, StatusCode::OK);
+}
+
+// With DEBUG enabled the request span must not write an activation
+// token (the path is the credential) into the log.
+#[tokio::test]
+async fn debug_request_logs_do_not_carry_activation_tokens() {
+    let buffer = log_capture();
+    let token = "f086".repeat(16);
+    for uri in [
+        format!("/api/activate/{token}"),
+        format!("/activate/{token}"),
+    ] {
+        send(
+            central::build(test_state()),
+            secure_request("GET", &uri, ""),
+        )
+        .await;
+    }
+
+    let logs = String::from_utf8_lossy(&buffer.lock().unwrap()).to_string();
+    assert!(
+        logs.contains("/api/activate/"),
+        "the request span must be logged (else the scan is vacuous)\n{logs}"
+    );
+    assert!(
+        !logs.contains(&token),
+        "an activation token leaked into DEBUG logs"
+    );
+}
+
+// F-321 — a body the JSON extractor refuses (malformed or missing fields) answers
+// the same `{error:"invalid_input", message}` JSON envelope as the admin API,
+// keeping axum's status, not axum's text/plain body.
+#[tokio::test]
+async fn setup_and_login_refuse_bad_json_with_the_json_envelope() {
+    let state = test_state();
+    for (uri, before_setup) in [("/api/setup", true), ("/api/auth/login", false)] {
+        if !before_setup {
+            install_admin(central::build(state.clone()), "alice", PASSWORD).await;
+        }
+        for (json, status) in [
+            ("{", StatusCode::BAD_REQUEST),
+            ("{}", StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let response = send(
+                central::build(state.clone()),
+                secure_request("POST", uri, json),
+            )
+            .await;
+            assert_status(&response, status);
+            assert_eq!(
+                response.headers()["content-type"],
+                "application/json",
+                "{uri} {json}"
+            );
+            let body: serde_json::Value =
+                serde_json::from_str(&body_string(response).await).expect("json body");
+            assert_eq!(body["error"], "invalid_input", "{uri} {json}");
+            assert!(body["message"].is_string(), "{uri} {json}: {body}");
+        }
     }
 }

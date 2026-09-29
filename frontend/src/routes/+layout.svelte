@@ -10,6 +10,8 @@
 	import Toaster from '$lib/components/ui/toaster.svelte';
 	import { fetchSetupStatus, getJson } from '$lib/api.js';
 	import { fetchPublicSettings } from '$lib/public/settings.js';
+	import { savedSettings } from '$lib/admin/api.js';
+	import type { GlobalSettings } from '$lib/admin/types.js';
 	import { theme } from '$lib/theme.svelte.js';
 	import { cx } from 'styled-system/css';
 	import {
@@ -76,14 +78,21 @@
 		if (status && !status.installed && path !== '/install') {
 			goto('/install');
 		}
-		if (settings) {
-			siteTitle = settings.site_title;
-			logoUrl = settings.logo_url;
-			termsUrl = settings.terms_url;
-			customBlock = settings.custom_block;
-			theme.applyDefault(settings.default_theme);
-		}
+		if (settings) apply(settings);
 	});
+
+	// An admin's settings save updates the shell in place, no reload needed.
+	onMount(() => savedSettings.subscribe((saved) => saved && apply(saved)));
+
+	function apply(
+		settings: Pick<GlobalSettings, 'site_title' | 'logo_url' | 'terms_url' | 'custom_block' | 'default_theme'>
+	) {
+		siteTitle = settings.site_title;
+		logoUrl = settings.logo_url;
+		termsUrl = settings.terms_url;
+		customBlock = settings.custom_block;
+		theme.applyDefault(settings.default_theme);
+	}
 
 </script>
 

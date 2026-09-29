@@ -152,7 +152,7 @@ export const geoValue = css({
 export const moreIps = css({ gridColumn: '1 / -1', marginTop: '-8px' });
 export const moreIpList = css({
 	display: 'grid',
-	gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+	gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
 	gap: '4px 24px',
 	paddingTop: '8px'
 });
@@ -167,7 +167,7 @@ export const moreIpMeta = css({ color: 'ink-muted', flex: '1', minWidth: '0' });
 export const moreToggle = css({ marginLeft: '-12px' });
 
 // ----- output (Console) -----
-export const resultsSection = css({ display: 'flex', flexDirection: 'column', gap: '16px', scrollMarginTop: '72px' });
+export const resultsSection = css({ display: 'flex', flexDirection: 'column', gap: '16px' });
 export const consoleHeader = css({
 	display: 'flex',
 	alignItems: 'center',
@@ -225,9 +225,25 @@ export const viewOption = css({
 	border: 'none',
 	borderRadius: '1px',
 	cursor: 'pointer',
-	_hover: { color: 'ink' },
-	'&[aria-pressed=true]': { background: 'ink', color: 'on-ink' },
-	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' }
+	// Only an unpressed option lifts on hover: on the pressed one the ink label
+	// would sit on the ink fill, and the pointer rests there after pressing it.
+	_hover: { '&:not([aria-pressed=true])': { color: 'ink' } },
+	'&[aria-pressed=true]': {
+		background: 'ink',
+		color: 'on-ink',
+		// Forced colours replace the ink fill with Canvas, so the pressed
+		// option would look like the other one: use the system selection pair.
+		// Opt out of the forced repaint so no Canvas text backplate hides the
+		// HighlightText label (both values are already system colours).
+		_highContrast: { background: 'Highlight', color: 'HighlightText', forcedColorAdjust: 'none' }
+	},
+	_focusVisible: {
+		outline: '2px solid {colors.ink}',
+		outlineOffset: '2px',
+		// The pressed option opts out of forced colours, so its ring would keep
+		// the page theme's ink whatever the system palette: use CanvasText.
+		_highContrast: { outlineColor: 'CanvasText' }
+	}
 });
 
 export const terminal = css({
@@ -295,7 +311,8 @@ export const terminalBody = css({
 	overflowWrap: 'break-word',
 	md: { minHeight: '240px' }
 });
-export const linePlain = css({ margin: '0' });
+// A blank output line keeps its row (an empty block has no line box).
+export const linePlain = css({ margin: '0', minHeight: '1lh' });
 export const lineBytes = css({ color: 'ink-muted' });
 export const lineTime = css({ color: 'var(--line)', fontWeight: 700 });
 export const lineError = css({ color: 'danger', fontWeight: 600 });
@@ -351,7 +368,7 @@ export const mtrTd = css({
 	fontVariantNumeric: 'tabular-nums'
 });
 export const mtrTdNum = css({ textAlign: 'right' });
-export const mtrTdHop = css({ color: 'ink-faint', textAlign: 'right', paddingRight: '4px' });
+export const mtrTdHop = css({ color: 'ink-muted', textAlign: 'right', paddingRight: '4px' });
 export const mtrTdHost = css({ width: '100%', color: 'ink', fontWeight: 600, fontSize: '14px' });
 /** Timetable grammar: the host runs into a dotted leader toward its times. */
 export const hostLeader = css({
@@ -559,7 +576,7 @@ export const cmdCode = css({
 });
 export const readouts = css({
 	display: 'grid',
-	gridTemplateColumns: '1fr 1fr',
+	gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
 	gap: '16px'
 });
 export const readoutLabel = css({
@@ -571,7 +588,7 @@ export const readoutLabel = css({
 	marginBottom: '4px',
 	'& svg': { width: '16px', height: '16px' }
 });
-export const readoutValueRow = css({ display: 'flex', alignItems: 'baseline', gap: '6px' });
+export const readoutValueRow = css({ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', columnGap: '6px' });
 export const readoutValue = css({
 	textStyle: 'display',
 	fontVariantNumeric: 'tabular-nums',
@@ -584,6 +601,10 @@ export const barTrack = css({
 	background: 'sunk',
 	height: '6px',
 	overflow: 'hidden',
+	// Forced colours repaint the track and both fills Canvas (F-259): edge the
+	// track in CanvasText and fill with system text colours, which contrast with
+	// Canvas (Firefox's Highlight is 2.9:1 on white).
+	_highContrast: { outline: '1px solid CanvasText' },
 	// Live: follow the per-frame samples closely. Finished: ease into the
 	// proportional download/upload split.
 	'&[data-settled=true] > div': { transitionDuration: '300ms', transitionTimingFunction: 'in-out' }
@@ -598,8 +619,16 @@ const barSegment = {
 	transitionDuration: '100ms',
 	transitionTimingFunction: 'linear'
 } as const;
-export const barDownload = css({ ...barSegment, background: 'var(--line)' });
-export const barUpload = css({ ...barSegment, background: 'ink' });
+export const barDownload = css({
+	...barSegment,
+	background: 'var(--line)',
+	_highContrast: { forcedColorAdjust: 'none', background: 'CanvasText' }
+});
+export const barUpload = css({
+	...barSegment,
+	background: 'ink',
+	_highContrast: { forcedColorAdjust: 'none', background: 'GrayText' }
+});
 export const noFilesNote = css({ textStyle: 'body-sm', color: 'ink-muted' });
 export const fileLinks = css({
 	display: 'flex',

@@ -5,11 +5,11 @@
 // operators run more than a handful of Locations.
 
 /** Light-map colour, night-map colour. Roundel text is white on light, ink on night. */
-const LINES: readonly (readonly [string, string, string])[] = [
+export const LINES: readonly (readonly [string, string, string])[] = [
 	['#c8102e', '#ff6b6b', '#ffffff'], // red
 	['#0b5cad', '#5ea8ff', '#ffffff'], // blue
 	['#00783a', '#45cf85', '#ffffff'], // green
-	['#8a6500', '#f5c842', '#ffffff'], // ochre
+	['#886400', '#f5c842', '#ffffff'], // ochre
 	['#6b3fa0', '#b48cff', '#ffffff'], // violet
 	['#00747a', '#35c6cb', '#ffffff'], // teal
 	['#b34a0c', '#ff9147', '#ffffff'], // orange

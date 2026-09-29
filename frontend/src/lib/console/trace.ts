@@ -14,7 +14,8 @@ export type TraceRow = {
 // " 1  router.example (192.0.2.1)  1.045 ms  1.012 ms  0.998 ms"
 // " 2  198.51.100.1  4.221 ms * 4.177 ms"
 // " 3  * * *"
-const HOP = /^\s*(\d+)\s+(?:(\S+)(?:\s+\(([^)]+)\))?\s+)?((?:(?:\*|[\d.]+ ms)\s*)+)$/;
+// " 4  203.0.113.9  23.412 ms !X  23.5 ms !H"  (ICMP unreachable annotations)
+const HOP = /^\s*(\d+)\s+(?:(\S+)(?:\s+\(([^)]+)\))?\s+)?((?:(?:\*|[\d.]+ ms(?:\s+!\S*)?)\s*)+)$/;
 const PROBE = /\*|[\d.]+(?= ms)/g;
 
 export function parseTraceroute(lines: string[]): TraceRow[] | null {

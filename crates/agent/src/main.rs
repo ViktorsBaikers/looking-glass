@@ -8,12 +8,13 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use agent::acme::Acme;
 use agent::dataplane;
 use agent::enroll::{
     store_dry_run_response_credential, store_install_credential, validate_stored_credential,
     AgentCredential, HttpsEnrollConnector, PinnedCommand,
 };
-use agent::tunnel::{self, NodeExecutor, TunnelClientConfig};
+use agent::tunnel::{self, DataPlaneLink, NodeExecutor, TunnelClientConfig};
 use shared::exec::{ExecEngine, ExecLimits};
 use shared::validate::DnsResolver;
 
@@ -52,20 +53,18 @@ async fn main() -> ExitCode {
         }
     };
     let executor = NodeExecutor::new(ExecEngine::new(ExecLimits::default()), resolver);
-    match dataplane::config_from_env() {
-        Ok(Some((bind, root))) => {
-            tokio::spawn(async move {
-                if let Err(error) = dataplane::serve(bind, root).await {
-                    tracing::error!(%error, "agent speedtest data-plane listener stopped");
-                }
-            });
+    // The data plane waits for the origin central assigns, then serves HTTPS
+    // with a certificate cached beside the credential (the agent state dir).
+    let (data_plane, origin, status) = DataPlaneLink::new();
+    let state_dir = credential_path()
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    tokio::spawn(async move {
+        if let Err(error) = dataplane::run(origin, status, Acme::lets_encrypt(state_dir)).await {
+            tracing::error!(%error, "agent speedtest data-plane listener stopped");
         }
-        Ok(None) => {}
-        Err(error) => {
-            eprintln!("invalid data-plane configuration: {error}");
-            return ExitCode::FAILURE;
-        }
-    }
+    });
 
     let config = TunnelClientConfig::from_parts(
         &credential.tunnel_url,
@@ -79,7 +78,7 @@ async fn main() -> ExitCode {
         "starting agent tunnel (outbound, central fingerprint pinned)"
     );
     // Runs the reconnecting tunnel forever.
-    tunnel::run(config, executor).await;
+    tunnel::run(config, executor, data_plane).await;
     ExitCode::SUCCESS
 }
 
@@ -134,11 +133,14 @@ async fn maybe_store_enrollment() -> Option<ExitCode> {
     }
 }
 
-fn load_credential() -> std::io::Result<Option<AgentCredential>> {
-    let path = std::env::var(ENV_CREDENTIAL_PATH)
+fn credential_path() -> PathBuf {
+    std::env::var(ENV_CREDENTIAL_PATH)
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_CREDENTIAL_PATH));
-    match std::fs::read(&path) {
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_CREDENTIAL_PATH))
+}
+
+fn load_credential() -> std::io::Result<Option<AgentCredential>> {
+    match std::fs::read(credential_path()) {
         Ok(bytes) => {
             let credential = serde_json::from_slice(&bytes).map_err(|error| {
                 std::io::Error::other(format!("malformed credential file: {error}"))

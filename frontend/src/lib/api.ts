@@ -2,7 +2,9 @@ export type ApiFailure = { ok: false; error: string; message: string };
 type ApiResult = { ok: true } | ApiFailure;
 
 async function failureFrom(response: Response): Promise<ApiFailure> {
-	const body = await response.json().catch(() => ({}) as Record<string, unknown>);
+	// Any JSON counts as a body, `null` too; only an object carries error fields.
+	const parsed: unknown = await response.json().catch(() => null);
+	const body = typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
 	return {
 		ok: false,
 		error: typeof body.error === 'string' ? body.error : 'error',
@@ -39,7 +41,12 @@ async function request<T>(method: string, path: string, payload?: unknown): Prom
 	}
 	if (!response.ok) return failureFrom(response);
 	if (response.status === 204) return { ok: true, data: undefined as T };
-	return { ok: true, data: (await response.json()) as T };
+	try {
+		return { ok: true, data: (await response.json()) as T };
+	} catch {
+		// A 2xx body that is not JSON (a proxy's HTML page) is a failed request.
+		return { ok: false, error: 'error', message: 'The request could not be completed.' };
+	}
 }
 
 export const getJson = <T>(path: string): Promise<JsonResult<T>> => request<T>('GET', path);

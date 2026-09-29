@@ -124,8 +124,8 @@
 	{#if moreIps.length > 0}
 		<div class={moreWrap}>
 		<Collapsible>
-			{#snippet trigger()}
-				<Button variant="ghost" size="sm" class={moreToggle}>More test IPs</Button>
+			{#snippet trigger(props)}
+				<Button {...props()} variant="ghost" size="sm" class={moreToggle}>More test IPs</Button>
 			{/snippet}
 			<div class={moreIpList}>
 				{#each moreIps as ip (ip.id)}

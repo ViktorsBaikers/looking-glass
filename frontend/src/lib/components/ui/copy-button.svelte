@@ -3,11 +3,12 @@
 	import { copyBtn as btn, copyOk as ok, srOnly } from '$lib/styles.js';
 	import CopyIcon from '~icons/material-symbols/content-copy';
 	import CheckIcon from '~icons/material-symbols/check';
+	import { toast } from '$lib/toast.svelte.js';
 
 	/**
 	 * Copy-to-clipboard button with a transient "copied" confirmation. Uses
 	 * navigator.clipboard directly (reliable + testable); the aria-label flips and
-	 * a polite live region announces success for screen readers.
+	 * a polite live region announces success for screen readers; a failure toasts.
 	 */
 	let {
 		text,
@@ -25,7 +26,8 @@
 			clearTimeout(timer);
 			timer = setTimeout(() => (copied = false), 1500);
 		} catch {
-			// Clipboard unavailable (insecure context or denied): stay silent.
+			// Clipboard unavailable (insecure context or denied): say so.
+			toast.error("Couldn't copy. Select the text and copy it manually.");
 		}
 	}
 </script>

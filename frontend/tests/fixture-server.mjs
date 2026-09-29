@@ -4,16 +4,22 @@
 // header: each distinct header value gets its own bucket; ids starting with
 // `fresh-install-` begin uninstalled. Requests without the header share one
 // default bucket (read-only specs like run.e2e).
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { isIP } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const fixture = readFileSync(new URL('./fixture/index.html', import.meta.url));
 
 const now = () => Math.floor(Date.now() / 1000);
 const DAY = 24 * 3600;
 const FIXTURE_PORT = Number(process.env.E2E_FIXTURE_PORT ?? 4173);
+// The remote node's data plane is HTTPS only, like the real agent's.
+const DATA_PLANE_PORT = Number(process.env.E2E_DATA_PLANE_PORT ?? 4175);
 const APP_ORIGIN = `http://127.0.0.1:${process.env.E2E_APP_PORT ?? 4174}`;
 
 // ----- Seeded catalogue (design/stitch sample data) ----------------------------
@@ -81,8 +87,8 @@ const locations = [
 		files: files('fra', 'frankfurt')
 	},
 	{
-		// The design's Vienna: a remote node whose data-plane points back at this
-		// fixture server, so cross-origin download/upload e2e exercises real fetches.
+		// The design's Vienna: a remote node whose HTTPS data plane is this fixture
+		// server, so cross-origin download/upload e2e exercises real fetches.
 		id: 'vie',
 		name: 'Vienna',
 		geo_label: 'Vienna, AT',
@@ -90,7 +96,7 @@ const locations = [
 		facility: 'Interxion VIE1',
 		facility_url: 'https://www.digitalrealty.com/data-centers/vienna/vie1',
 		kind: 'remote',
-		data_plane_origin: `http://127.0.0.1:${FIXTURE_PORT}`,
+		data_plane_origin: `https://127.0.0.1:${DATA_PLANE_PORT}`,
 		asn: 64500,
 		offered_methods: ['ping', 'ping6', 'mtr', 'traceroute', 'bgp'],
 		status: 'online',
@@ -173,6 +179,12 @@ const locations = [
 		files: []
 	}
 ];
+
+// The data-plane certificate each remote's agent reported, as the admin
+// location read returns it (null when none was reported).
+const CERTIFICATES = {
+	vie: { issued_at: 1789862400, expires_at: 1790380800, last_error: null }
+};
 
 // ----- Seeded administrators ----------------------------------------------------
 // brooke signs in with `fixture-password`. dana holds the valid activation token
@@ -297,6 +309,17 @@ function usernameAllowed(username) {
 	);
 }
 
+/// central's 422 message for a garde `length(min, max)` rule: first_message's
+/// `{field}: {error}` over garde's DefaultI18n (byte length, like garde's
+/// Simple mode). A non-string stands in for axum's JSON rejection, also a 422.
+function lengthError(field, value, min, max) {
+	if (typeof value !== 'string') return 'A required field is missing or invalid.';
+	const length = Buffer.byteLength(value);
+	if (length < min) return `${field}: length is lower than ${min}`;
+	if (length > max) return `${field}: length is greater than ${max}`;
+	return null;
+}
+
 /// Deterministic stand-in file content; served with Range support so the
 /// speed-test download path (ranged fetch) exercises real 206 handling.
 const FILE_BYTES = Buffer.alloc(65536);
@@ -328,8 +351,8 @@ function serveBytes(request, response) {
 	response.end(FILE_BYTES);
 }
 // ----- Sub-resource CRUD specs (issue #7): test IPs, iperf endpoints, files -----
-// Mirrors central's admin_api validation closely enough for e2e: required fields
-// present and typed, else 422 invalid_input.
+// Mirrors central's admin_api validation: garde length/range rules in field
+// order (first failure wins), then the handler checks, each a 422 invalid_input.
 const SUB_RESOURCES = {
 	'test-ips': {
 		key: 'test_ips',
@@ -338,12 +361,10 @@ const SUB_RESOURCES = {
 		// must be a real IP of the declared family, else the coded 422 message.
 		validate: (body) => {
 			if (body.family !== 'v4' && body.family !== 'v6') return 'A required field is missing or invalid.';
-			if (typeof body.address !== 'string' || body.address.length < 1 || body.address.length > 45) {
-				return 'address: invalid length: expected 1 <= length <= 45';
-			}
-			if (body.label != null && (typeof body.label !== 'string' || [...body.label].length > 100)) {
-				return 'label: invalid length: expected length <= 100';
-			}
+			const invalid =
+				lengthError('address', body.address, 1, 45) ??
+				(body.label == null ? null : lengthError('label', body.label, 0, 100));
+			if (invalid) return invalid;
 			const parsedFamily = isIP(body.address);
 			if (parsedFamily === 0) return 'Enter a valid IP address.';
 			if (parsedFamily !== (body.family === 'v4' ? 4 : 6)) {
@@ -360,34 +381,38 @@ const SUB_RESOURCES = {
 	iperf: {
 		key: 'iperf',
 		prefix: 'iperf',
-		validate: (body) =>
-			typeof body.label === 'string' &&
-			body.label.length > 0 &&
-			typeof body.host === 'string' &&
-			body.host.length > 0 &&
-			typeof body.port === 'number'
-				? null
-				: 'A required field is missing or invalid.',
+		validate: (body) => {
+			const invalid = lengthError('label', body.label, 1, 100) ?? lengthError('host', body.host, 1, 253);
+			if (invalid) return invalid;
+			if (!Number.isInteger(body.port) || body.port < 0 || body.port > 65535) {
+				return 'A required field is missing or invalid.';
+			}
+			if (body.port < 1) return 'port: lower than 1';
+			return lengthError('cmd_incoming', body.cmd_incoming, 1, 300) ?? lengthError('cmd_outgoing', body.cmd_outgoing, 1, 300);
+		},
 		apply: (body) => ({
 			label: body.label,
 			host: body.host,
 			port: body.port,
-			cmd_incoming: typeof body.cmd_incoming === 'string' ? body.cmd_incoming : '',
-			cmd_outgoing: typeof body.cmd_outgoing === 'string' ? body.cmd_outgoing : ''
+			cmd_incoming: body.cmd_incoming,
+			cmd_outgoing: body.cmd_outgoing
 		})
 	},
 	files: {
 		key: 'files',
 		prefix: 'file',
-		validate: (body) =>
-			typeof body.label === 'string' &&
-			body.label.length > 0 &&
-			typeof body.declared_size === 'string' &&
-			body.declared_size.length > 0 &&
-			typeof body.source_ref === 'string' &&
-			body.source_ref.length > 0
-				? null
-				: 'A required field is missing or invalid.',
+		validate: (body, owner) => {
+			const invalid =
+				lengthError('label', body.label, 1, 100) ??
+				lengthError('declared_size', body.declared_size, 1, 50) ??
+				lengthError('source_ref', body.source_ref, 1, 300);
+			if (invalid) return invalid;
+			// central's check_remote_source_ref: split on '/' as the SPA does.
+			if (owner.kind === 'remote' && body.source_ref.split('/').some((part) => ['', '.', '..'].includes(part))) {
+				return 'Remote file source must be a relative path without empty or dot segments.';
+			}
+			return null;
+		},
 		apply: (body) => ({
 			label: body.label,
 			declared_size: body.declared_size,
@@ -406,6 +431,7 @@ const RUN_OUTPUT = {
 		'64 bytes from 1.1.1.1: icmp_seq=2 ttl=56 time=12.1 ms',
 		'64 bytes from 1.1.1.1: icmp_seq=3 ttl=55 time=11.9 ms',
 		'64 bytes from 1.1.1.1: icmp_seq=4 ttl=56 time=12.0 ms',
+		'',
 		`--- ${target} ping statistics ---`,
 		'4 packets transmitted, 4 received, 0% packet loss, time 3004ms',
 		'rtt min/avg/max/mdev = 11.9/12.1/12.3/0.2 ms'
@@ -433,7 +459,7 @@ const RUN_OUTPUT = {
 
 // ----- Server --------------------------------------------------------------------------
 
-createServer(async (request, response) => {
+const handle = async (request, response) => {
 	const path = new URL(request.url, 'http://127.0.0.1').pathname;
 	const method = request.method;
 	const state = stateFor(request.headers['x-looking-glass-fixture']);
@@ -514,13 +540,29 @@ createServer(async (request, response) => {
 
 	// ----- setup + auth -----
 	if (path === '/api/setup/status') return json(response, { installed: state.installed });
+	// Mirrors central's create_admin: the Json extractor (a missing or mistyped
+	// field is its 422), then the token (403), then the payload (422), then the
+	// closed installer (409); 201 on success.
 	if (method === 'POST' && path === '/api/setup') {
 		const body = await readJson(request);
-		if (state.installed) {
-			return json(response, { error: 'already_installed', message: 'Setup already completed.' }, 409);
+		if (['setup_token', 'username', 'password'].some((field) => typeof body[field] !== 'string')) {
+			return json(response, { error: 'invalid_input', message: 'A required field is missing or invalid.' }, 422);
 		}
 		if (body.setup_token !== 'fixture-setup-token') {
-			return json(response, { error: 'invalid_setup_token', message: 'Invalid setup token.' }, 401);
+			return json(response, { error: 'invalid_setup_token', message: 'A valid first-run setup token is required.' }, 403);
+		}
+		// installer.rs has its own first_message: garde's error with no field path.
+		// garde checks struct fields in name order (password, setup_token, username).
+		const garde =
+			lengthError('password', body.password, 12, 512) ??
+			lengthError('setup_token', body.setup_token, 1, 128) ??
+			lengthError('username', body.username, 1, 64);
+		const invalid =
+			garde?.replace(/^\w+: /, '') ??
+			(usernameAllowed(body.username) ? null : 'Username may contain only letters, digits, and . _ -');
+		if (invalid) return json(response, { error: 'invalid_input', message: invalid }, 422);
+		if (state.installed) {
+			return json(response, { error: 'already_installed', message: 'Setup has already been completed.' }, 409);
 		}
 		state.installed = true;
 		state.administrators = [
@@ -534,7 +576,7 @@ createServer(async (request, response) => {
 				activation_expires_at: null
 			}
 		];
-		response.writeHead(204);
+		response.writeHead(201);
 		return response.end();
 	}
 	if (method === 'POST' && path === '/api/auth/login') {
@@ -592,9 +634,8 @@ createServer(async (request, response) => {
 				);
 			}
 			const body = await readJson(request);
-			if (typeof body.password !== 'string' || body.password.length < 12 || body.password.length > 512) {
-				return json(response, { error: 'invalid_input', message: 'password: invalid length: expected 12 <= length <= 512' }, 422);
-			}
+			const invalid = lengthError('password', body.password, 12, 512);
+			if (invalid) return json(response, { error: 'invalid_input', message: invalid }, 422);
 			pending.status = 'active';
 			pending.password = body.password;
 			pending.activation_token = null;
@@ -614,9 +655,10 @@ createServer(async (request, response) => {
 		const me = signedIn();
 		if (!me) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
 		const body = await readJson(request);
-		if (typeof body.new_password !== 'string' || body.new_password.length < 12 || body.new_password.length > 512) {
-			return json(response, { error: 'invalid_input', message: 'new_password: invalid length: expected 12 <= length <= 512' }, 422);
-		}
+		const invalid =
+			lengthError('current_password', body.current_password, 1, 512) ??
+			lengthError('new_password', body.new_password, 12, 512);
+		if (invalid) return json(response, { error: 'invalid_input', message: invalid }, 422);
 		if (body.current_password !== me.password) {
 			return json(response, { error: 'invalid_credentials', message: 'The current password is incorrect.' }, 403);
 		}
@@ -649,9 +691,12 @@ createServer(async (request, response) => {
 		}
 		if (method === 'POST') {
 			const body = await readJson(request);
-			if (!usernameAllowed(body.username)) {
-				return json(response, { error: 'invalid_input', message: 'Username may contain only letters, digits, and . _ -' }, 422);
-			}
+			// Mirrors central's create_administrator: garde's length (admin_api's
+			// prefixed first_message), then the username rule.
+			const invalid =
+				lengthError('username', body.username, 1, 64) ??
+				(usernameAllowed(body.username) ? null : 'Username may contain only letters, digits, and . _ -');
+			if (invalid) return json(response, { error: 'invalid_input', message: invalid }, 422);
 			if (state.administrators.some((candidate) => candidate.username.toLowerCase() === body.username.toLowerCase())) {
 				return json(response, { error: 'username_taken', message: 'That username is already taken.' }, 409);
 			}
@@ -706,9 +751,8 @@ createServer(async (request, response) => {
 		if (method === 'GET') return json(response, locations);
 		if (method === 'POST') {
 			const body = await readJson(request);
-			if (typeof body.name !== 'string' || body.name.length === 0) {
-				return json(response, { error: 'invalid_input', message: 'name: invalid length: expected 1 <= length' }, 422);
-			}
+			const invalid = locationError(body);
+			if (invalid) return json(response, invalid.body, invalid.status);
 			const location = {
 				id: `loc-${randomUUID()}`,
 				name: body.name,
@@ -752,7 +796,7 @@ createServer(async (request, response) => {
 		if (!signedIn()) return json(response, { error: 'unauthorized', message: 'Authentication required.' }, 401);
 		const location = locations.find((candidate) => candidate.id === adminLocation[1]);
 		if (!location) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
-		if (method === 'GET') return json(response, location);
+		if (method === 'GET') return json(response, { ...location, certificate: CERTIFICATES[location.id] ?? null });
 		if (method === 'DELETE') {
 			locations.splice(locations.indexOf(location), 1);
 			response.writeHead(204);
@@ -773,27 +817,25 @@ createServer(async (request, response) => {
 		const location = locations.find((candidate) => candidate.id === adminLocation[1]);
 		if (!location) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
 		const body = await readJson(request);
-		if (typeof body.name !== 'string' || body.name.length === 0 || typeof body.geo_label !== 'string') {
-			return json(response, { error: 'invalid_input', message: 'name: invalid length: expected 1 <= length' }, 422);
-		}
-		// Mirrors central's clean_asn: any non-whole or out-of-range value is the
-		// coded 400 invalid_asn, judged here rather than by a body extractor.
-		if (body.asn !== null && body.asn !== undefined) {
-			if (!Number.isInteger(body.asn) || body.asn < 1 || body.asn > 4294967295) {
-				return json(response, { error: 'invalid_asn', message: 'ASN must be a whole number between 1 and 4294967295.' }, 400);
-			}
-		}
+		const invalid = locationError(body);
+		if (invalid) return json(response, invalid.body, invalid.status);
 		location.name = body.name;
 		location.geo_label = body.geo_label;
 		location.map_query = body.map_query ?? null;
 		location.facility = body.facility ?? null;
 		location.facility_url = body.facility_url ?? null;
+		const wasLocal = location.kind === 'local';
 		location.kind = body.kind === 'remote' ? 'remote' : 'local';
 		location.data_plane_origin = body.data_plane_origin ?? null;
 		location.asn = body.asn ?? null;
 		if (Array.isArray(body.offered_methods)) location.offered_methods = body.offered_methods;
+		// central's PUT echoes the stored status (local saves as online); GET and
+		// public reads derive it: remote is online only with a live agent, which a
+		// node that was local has not got yet.
+		const saved = location.kind === 'local' ? 'online' : location.status;
 		if (location.kind === 'local') location.status = 'online';
-		return json(response, location);
+		else if (wasLocal) location.status = 'offline';
+		return json(response, { ...location, status: saved });
 	}
 	const enrollLocation = /^\/api\/admin\/locations\/([^/]+)\/enroll$/.exec(path);
 	if (method === 'POST' && enrollLocation) {
@@ -820,7 +862,7 @@ createServer(async (request, response) => {
 			const owner = locations.find((candidate) => candidate.id === created[1]);
 			if (!owner) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
 			const body = await readJson(request);
-			const invalid = spec.validate(body);
+			const invalid = spec.validate(body, owner);
 			if (invalid) {
 				return json(response, { error: 'invalid_input', message: invalid }, 422);
 			}
@@ -843,7 +885,7 @@ createServer(async (request, response) => {
 			if (!record) return json(response, { error: 'not_found', message: 'The requested item does not exist.' }, 404);
 			if (method === 'PUT') {
 				const body = await readJson(request);
-				const invalid = spec.validate(body);
+				const invalid = spec.validate(body, owner);
 				if (invalid) {
 					return json(response, { error: 'invalid_input', message: invalid }, 422);
 				}
@@ -875,7 +917,7 @@ createServer(async (request, response) => {
 		if (streamTarget === 'slow.test') {
 			let seq = 0;
 			const timer = setInterval(
-				() => send('line', `64 bytes from ${streamTarget}: icmp_seq=${++seq} ttl=56 time=12.0 ms`),
+				() => send('line', JSON.stringify(`64 bytes from ${streamTarget}: icmp_seq=${++seq} ttl=56 time=12.0 ms`)),
 				300
 			);
 			response.on('close', () => clearInterval(timer));
@@ -895,7 +937,8 @@ createServer(async (request, response) => {
 			? RUN_OUTPUT[family](streamTarget)
 			: [`$ ${streamMethod} ${streamTarget}`];
 		setTimeout(() => {
-			for (const line of lines) send('line', line);
+			// Central sends each line as a JSON string.
+			for (const line of lines) send('line', JSON.stringify(line));
 			send('done', JSON.stringify({ status: 'completed', success: true, elapsed_ms: 100 }));
 			setTimeout(() => response.end(), 25);
 		}, 150);
@@ -908,7 +951,69 @@ createServer(async (request, response) => {
 	}
 	response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
 	response.end(fixture);
-}).listen(FIXTURE_PORT, '127.0.0.1');
+};
+
+/// A test CA generated at start, and a 127.0.0.1 leaf it signs for the HTTPS
+/// data plane. Playwright trusts the CA's key (playwright.config.ts).
+function testTls() {
+	const dir = process.env.E2E_TLS_DIR ?? mkdtempSync(join(tmpdir(), 'looking-glass-e2e-tls-'));
+	mkdirSync(dir, { recursive: true });
+	const openssl = (...args) => execFileSync('openssl', args, { stdio: 'ignore' });
+	const ec = ['-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes'];
+	openssl('req', '-x509', ...ec, '-keyout', `${dir}/ca.key`, '-out', `${dir}/ca.pem`, '-days', '2', '-subj', '/CN=Looking Glass e2e test CA');
+	openssl('req', ...ec, '-keyout', `${dir}/leaf.key`, '-out', `${dir}/leaf.csr`, '-subj', '/CN=127.0.0.1');
+	writeFileSync(`${dir}/leaf.ext`, 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\n');
+	openssl('x509', '-req', '-in', `${dir}/leaf.csr`, '-CA', `${dir}/ca.pem`, '-CAkey', `${dir}/ca.key`, '-CAcreateserial', '-out', `${dir}/leaf.pem`, '-days', '2', '-extfile', `${dir}/leaf.ext`);
+	return {
+		key: readFileSync(`${dir}/leaf.key`),
+		cert: Buffer.concat([readFileSync(`${dir}/leaf.pem`), readFileSync(`${dir}/ca.pem`)])
+	};
+}
+
+// A body read rejects when the client aborts mid-request (a cancelled speed-test
+// upload); drop that request instead of letting the rejection kill the fixture,
+// but log it so a real handler bug is not silent.
+const serve = (request, response) =>
+	handle(request, response).catch((error) => {
+		console.error(`fixture: ${request.method} ${request.url} failed:`, error);
+		response.destroy();
+	});
+
+// The HTTPS data plane is up before the HTTP API answers Playwright's readiness probe.
+createHttpsServer(testTls(), serve).listen(DATA_PLANE_PORT, '127.0.0.1', () => {
+	createServer(serve).listen(FIXTURE_PORT, '127.0.0.1');
+});
+
+/// Mirrors central's LocationInput: garde lengths in field order, then the
+/// strict https facility link, then clean_asn's coded 400.
+function locationError(body) {
+	const invalid = (message) => ({ status: 422, body: { error: 'invalid_input', message } });
+	const optional = (field, max) => (body[field] == null ? null : lengthError(field, body[field], 0, max));
+	const lengths =
+		lengthError('name', body.name, 1, 100) ??
+		lengthError('geo_label', body.geo_label, 0, 100) ??
+		optional('map_query', 200) ??
+		optional('facility', 100) ??
+		optional('facility_url', 300) ??
+		optional('data_plane_origin', 300);
+	if (lengths) return invalid(lengths);
+	if (body.facility_url != null && !isHttpsUrl(body.facility_url)) {
+		return invalid('Facility link must be an https:// URL.');
+	}
+	// clean_data_plane_origin: a remote node's origin is https on port 443.
+	if (body.kind === 'remote' && body.data_plane_origin != null && !isHttps443(body.data_plane_origin)) {
+		return invalid('Enter an https:// data-plane origin on port 443.');
+	}
+	// clean_asn: any non-whole or out-of-range value is the coded 400
+	// invalid_asn, judged here rather than by a body extractor.
+	if (body.asn != null && (!Number.isInteger(body.asn) || body.asn < 1 || body.asn > 4294967295)) {
+		return {
+			status: 400,
+			body: { error: 'invalid_asn', message: 'ASN must be a whole number between 1 and 4294967295.' }
+		};
+	}
+	return null;
+}
 
 async function readJsonBytes(request) {
 	const chunks = [];
@@ -928,32 +1033,50 @@ function isHttpsUrl(value) {
 	}
 }
 
+/// Mirrors the scheme and port rule of central's clean_data_plane_origin.
+function isHttps443(value) {
+	try {
+		const url = new URL(String(value).trim());
+		return url.protocol === 'https:' && url.port === '';
+	} catch {
+		return false;
+	}
+}
+
 /// Mirrors central's is_optional_https_url: null passes; otherwise a string
 /// within max chars that parses as an https URL with an authority.
 function optionalHttpsUrl(value, max) {
 	return value === null || ([...String(value ?? '')].length <= max && isHttpsUrl(value));
 }
 
+/// Mirrors central's update_settings: a mistyped body is axum's 422 rejection,
+/// then SettingsInput's garde rules in field order, then the https check.
 function parseSettings(body) {
-	const invalid = { ok: false, message: 'Settings payload is invalid.' };
-	if (!body || typeof body !== 'object' || Array.isArray(body)) return invalid;
-	const positiveInt = (value) => Number.isInteger(value) && value >= 1;
-	const optionalString = (value, max) =>
-		value === null || (typeof value === 'string' && value.length <= max);
-	if (typeof body.site_title !== 'string' || body.site_title.length < 1 || body.site_title.length > 100) return invalid;
-	if (body.default_theme !== 'system' && body.default_theme !== 'light' && body.default_theme !== 'dark') return invalid;
-	if (!optionalHttpsUrl(body.logo_url, 500) || !optionalHttpsUrl(body.terms_url, 300)) {
-		return { ok: false, message: 'Logo and terms URLs must use https.' };
+	const reject = (message) => ({ ok: false, message });
+	if (!body || typeof body !== 'object' || Array.isArray(body)) return reject('Settings payload is invalid.');
+	if (body.default_theme !== 'system' && body.default_theme !== 'light' && body.default_theme !== 'dark') {
+		return reject('Settings payload is invalid.');
 	}
-	if (!optionalString(body.custom_block, 5000)) return invalid;
-	if (
-		!positiveInt(body.exec_max_concurrent) ||
-		!positiveInt(body.exec_timeout_secs) ||
-		!positiveInt(body.exec_max_output_kib) ||
-		!positiveInt(body.exec_rate_max) ||
-		!positiveInt(body.exec_rate_window_secs)
-	) {
-		return invalid;
+	const optional = (field, max) => (body[field] == null ? null : lengthError(field, body[field], 0, max));
+	const range = (field, max) => {
+		const value = body[field];
+		if (!Number.isInteger(value) || value < 0) return 'Settings payload is invalid.';
+		if (value < 1) return `${field}: lower than 1`;
+		return value > max ? `${field}: greater than ${max}` : null;
+	};
+	const invalid =
+		lengthError('site_title', body.site_title, 1, 100) ??
+		optional('logo_url', 500) ??
+		optional('terms_url', 300) ??
+		optional('custom_block', 5000) ??
+		range('exec_max_concurrent', 1024) ??
+		range('exec_timeout_secs', 3600) ??
+		range('exec_max_output_kib', 1_048_576) ??
+		range('exec_rate_max', 100_000) ??
+		range('exec_rate_window_secs', 86_400);
+	if (invalid) return reject(invalid);
+	if (!optionalHttpsUrl(body.logo_url, 500) || !optionalHttpsUrl(body.terms_url, 300)) {
+		return reject('Logo and terms URLs must use https.');
 	}
 	return {
 		ok: true,
