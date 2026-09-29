@@ -215,7 +215,7 @@ if grep -Fqi 'same mounted volume' "$readme"; then
   echo "README rollback must restore the pre-upgrade backup, not reuse the same mounted volume" >&2
   exit 1
 fi
-if grep -qi 'tailwind' "$agents"; then
+if [ -f "$agents" ] && grep -qi 'tailwind' "$agents"; then
   echo "AGENTS.md names Tailwind; the frontend stack is Panda CSS + Ark UI" >&2
   exit 1
 fi

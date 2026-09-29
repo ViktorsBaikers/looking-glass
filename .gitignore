@@ -7,3 +7,7 @@
 .playwright-mcp
 .tokensave
 .omp/mcp.json
+# Local agent and design-tool files
+.impeccable/
+AGENTS.md
+DESIGN.md
