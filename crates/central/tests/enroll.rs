@@ -15,7 +15,7 @@ use common::{
     assert_status, authed, body_string, captured_logs, cleartext_request, json_body,
     secure_request, send, setup_and_login, test_state, CENTRAL_IDENTITY, CENTRAL_URL,
 };
-use shared::protocol::{fingerprint, sha256_hex, PROTOCOL_VERSION};
+use shared::protocol::{fingerprint, identity_pin, sha256_hex, PROTOCOL_VERSION};
 
 fn cleartext_authed(method: &str, uri: &str, cookie: &str, body: &str) -> Request<Body> {
     let mut request = cleartext_request(method, uri, body);
@@ -328,7 +328,9 @@ async fn enrollment_is_refused_while_no_tunnel_identity_is_loaded() {
     assert_eq!(body["error"], "tunnel_unavailable");
     let message = body["message"].as_str().unwrap();
     assert!(
-        message.contains("LG_TUNNEL_CERT") && message.contains("LG_TUNNEL_KEY"),
+        message.contains("tunnel.key")
+            && message.contains("LG_TUNNEL_CERT")
+            && message.contains("LG_TUNNEL_KEY"),
         "{body}"
     );
     assert!(body.get("token").is_none(), "{body}");
@@ -398,6 +400,147 @@ async fn enrollment_ticket_uses_the_configured_api_origin_not_the_tunnel_default
     assert!(install_command.contains("LG_TUNNEL_URL='https://tunnel.central.example:8443'"));
     assert!(!install_command.contains("https://localhost:8443"));
     assert_eq!(ticket["fingerprint"], fingerprint(CENTRAL_IDENTITY));
+}
+
+/// Serializes the tests that set the `LG_CENTRAL_*` env, which one process shares.
+static CENTRAL_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// `EnrollConfig::from_env` with only `vars` set among the central and tunnel
+/// URL/identity env, keeping the test agent assets so a ticket can be minted.
+fn config_from_env(vars: &[(&str, &str)], tunnel_pin: &str) -> EnrollConfig {
+    let config = {
+        let _env = CENTRAL_ENV
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for name in [
+            "LG_CENTRAL_URL",
+            "LG_CENTRAL_CERT",
+            "LG_CENTRAL_IDENTITY",
+            "LG_TUNNEL_URL",
+        ] {
+            std::env::remove_var(name);
+        }
+        for (name, value) in vars {
+            std::env::set_var(name, value);
+        }
+        let config = EnrollConfig::from_env(Some(tunnel_pin)).expect("valid enrollment config");
+        for (name, _) in vars {
+            std::env::remove_var(name);
+        }
+        config
+    };
+    EnrollConfig {
+        central_url: config.central_url,
+        web_url: config.web_url,
+        tunnel_url: config.tunnel_url,
+        identity: config.identity,
+        tunnel_pin: config.tunnel_pin,
+        ..EnrollConfig::for_test(CENTRAL_URL, CENTRAL_IDENTITY.to_vec())
+    }
+}
+
+/// A PEM certificate file for `LG_CENTRAL_CERT`, and the pin agents verify it by.
+fn central_cert_file() -> (std::path::PathBuf, String) {
+    let generated = rcgen::generate_simple_self_signed(vec!["api.central.example".to_string()])
+        .expect("generate certificate");
+    let path = common::temp_files_dir().join("central.pem");
+    std::fs::write(&path, generated.cert.pem()).expect("write certificate");
+    (path, identity_pin(generated.cert.der()))
+}
+
+// With no LG_CENTRAL_* env the tunnel listener serves enrollment, so the
+// install command points the agent at the tunnel origin under the tunnel pin.
+#[tokio::test]
+async fn with_no_central_env_the_install_command_targets_the_tunnel() {
+    let tunnel_pin = fingerprint(b"tunnel-certificate");
+    let mut state = test_state();
+    state.enroll = config_from_env(
+        &[("LG_TUNNEL_URL", "https://lg.example.net:8443")],
+        &tunnel_pin,
+    );
+    let cookie = setup_and_login(&state).await;
+    let (ticket, location_id) = create_remote_and_ticket(&state, &cookie).await;
+    let install_command = ticket["install_command"].as_str().unwrap();
+
+    assert!(
+        install_command.contains("LG_CENTRAL_URL='https://lg.example.net:8443'"),
+        "{install_command}"
+    );
+    assert!(
+        install_command.contains("LG_TUNNEL_URL='https://lg.example.net:8443'"),
+        "{install_command}"
+    );
+    assert!(
+        install_command.contains(&format!("LG_CENTRAL_FP='{tunnel_pin}'")),
+        "{install_command}"
+    );
+    assert_eq!(ticket["fingerprint"], tunnel_pin);
+
+    let token = ticket["token"].as_str().unwrap();
+    let enrolled = send(
+        central::build(state.clone()),
+        enroll_request(token, PROTOCOL_VERSION, true),
+    )
+    .await;
+    assert_status(&enrolled, StatusCode::OK);
+    assert_eq!(state.store.list_agents(&location_id).unwrap().len(), 1);
+}
+
+// Any one LG_CENTRAL_* variable keeps the configured-origin behavior: without
+// a certificate there is nothing an agent could pin, so no ticket is minted.
+#[tokio::test]
+async fn a_partial_central_env_does_not_fall_back_to_the_tunnel() {
+    let tunnel_pin = fingerprint(b"tunnel-certificate");
+    for var in [
+        ("LG_CENTRAL_URL", "https://api.central.example"),
+        ("LG_CENTRAL_IDENTITY", "operator-chosen-identity"),
+    ] {
+        let mut state = test_state();
+        state.enroll = config_from_env(&[var], &tunnel_pin);
+        assert_ne!(state.enroll.identity.fingerprint(), tunnel_pin, "{var:?}");
+        let cookie = setup_and_login(&state).await;
+        let location_id = create_remote_location(&state, &cookie).await;
+
+        let refused = request_ticket(&state, &cookie, &location_id).await;
+        assert_status(&refused, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            body_string(refused).await.contains("LG_CENTRAL_CERT"),
+            "{var:?}"
+        );
+    }
+}
+
+// LG_CENTRAL_URL and LG_CENTRAL_CERT still name the API origin and its
+// certificate, and a certificate whose key differs from the tunnel's is refused.
+#[tokio::test]
+async fn configured_central_url_and_cert_override_the_tunnel_default() {
+    let (cert, cert_pin) = central_cert_file();
+    let cert = cert.to_str().unwrap();
+    let vars = [
+        ("LG_CENTRAL_URL", "https://api.central.example"),
+        ("LG_CENTRAL_CERT", cert),
+    ];
+
+    let mut state = test_state();
+    state.enroll = config_from_env(&vars, &fingerprint(b"tunnel-certificate"));
+    let cookie = setup_and_login(&state).await;
+    let location_id = create_remote_location(&state, &cookie).await;
+    let refused = request_ticket(&state, &cookie, &location_id).await;
+    assert_status(&refused, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(json_body(refused).await["error"], "identity_mismatch");
+
+    state.enroll = config_from_env(&vars, &cert_pin);
+    let (ticket, _location_id) = create_remote_and_ticket(&state, &cookie).await;
+    let install_command = ticket["install_command"].as_str().unwrap();
+    assert!(
+        install_command.contains("LG_CENTRAL_URL='https://api.central.example'"),
+        "{install_command}"
+    );
+    assert!(
+        install_command.contains("LG_TUNNEL_URL='https://localhost:8443'"),
+        "{install_command}"
+    );
+    assert_eq!(ticket["fingerprint"], cert_pin);
 }
 
 #[tokio::test]
@@ -840,6 +983,16 @@ async fn cleartext_enrollment_is_refused() {
     )
     .await;
     assert_status(&response, StatusCode::FORBIDDEN);
+    assert_eq!(json_body(response).await["error"], "insecure_transport");
+    // A client claiming https itself is still cleartext: only a trusted proxy
+    // (or central's own tunnel TLS) makes the transport secure.
+    let mut forged = enroll_request(&token, PROTOCOL_VERSION, false);
+    forged
+        .headers_mut()
+        .insert("x-forwarded-proto", "https".parse().unwrap());
+    let response = send(central::build(state.clone()), forged).await;
+    assert_status(&response, StatusCode::FORBIDDEN);
+    assert_eq!(json_body(response).await["error"], "insecure_transport");
     assert_eq!(
         state.store.list_agents(&location_id).unwrap().len(),
         0,

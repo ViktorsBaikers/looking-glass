@@ -95,12 +95,13 @@ struct ActivationLink {
     expires_at: u64,
 }
 
-/// `{origin}/activate/{token}` — the origin derived exactly as the enrollment
-/// command derives it (the configured central API origin, `LG_CENTRAL_URL`).
+/// `{origin}/activate/{token}` — the origin is `LG_CENTRAL_URL` when set; with
+/// the tunnel default (no `LG_CENTRAL_*`) it is the `LG_TUNNEL_URL` host with no
+/// port, since the tunnel port serves only agents.
 fn activation_url(state: &AppState, raw_token: &str) -> String {
     format!(
         "{}/activate/{raw_token}",
-        state.enroll.central_url.trim_end_matches('/')
+        state.enroll.web_url.trim_end_matches('/')
     )
 }
 

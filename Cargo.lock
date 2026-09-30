@@ -307,6 +307,7 @@ dependencies = [
  "hyper-util",
  "mime_guess",
  "rand_core 0.6.4",
+ "rcgen",
  "redb",
  "rust-embed",
  "rustls",
