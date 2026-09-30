@@ -1,10 +1,17 @@
 <script lang="ts">
 	import type { HTMLAttributes } from 'svelte/elements';
-	import { cn } from '$lib/utils.js';
+	import type { Snippet } from 'svelte';
+	import { cx } from 'styled-system/css';
+	import { card } from 'styled-system/recipes';
 
-	let { class: className, children, ...rest }: HTMLAttributes<HTMLDivElement> = $props();
+	let {
+		class: className,
+		children,
+		...rest
+	}: Omit<HTMLAttributes<HTMLDivElement>, 'class'> & { class?: string; children?: Snippet } =
+		$props();
 </script>
 
-<div class={cn('rounded-lg border border-border bg-card text-card-foreground shadow-sm', className)} {...rest}>
+<div class={cx(card().root, className)} {...rest}>
 	{@render children?.()}
 </div>

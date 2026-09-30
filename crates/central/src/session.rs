@@ -32,6 +32,56 @@ impl RedbSessionStore {
             cookie_key: Key::from(store.session_cookie_key()),
         }
     }
+
+    /// Delete every session record belonging to one administrator, except `keep`
+    /// — the mechanism behind "removal ends that peer's sessions immediately"
+    /// and "a password change signs out the caller's OTHER sessions" (spec #1).
+    /// The record data has no secondary index on the admin id, so this scans and
+    /// deletes inside one write transaction.
+    pub async fn delete_for_admin(
+        &self,
+        admin_id: &str,
+        keep: Option<Id>,
+    ) -> session_store::Result<()> {
+        let admin_id = admin_id.to_owned();
+        write_off_runtime(&self.db, move |db| {
+            let txn = db.begin_write().map_err(backend)?;
+            {
+                let mut table = txn.open_table(SESSION).map_err(backend)?;
+                let doomed: Vec<String> = table
+                    .iter()
+                    .map_err(backend)?
+                    .filter_map(|entry| {
+                        let (key, value) = entry.ok()?;
+                        let record = decode(value.value()).ok()?;
+                        let mine = record
+                            .data
+                            .get(crate::auth::SESSION_ADMIN_KEY)
+                            .and_then(|value| value.as_str())
+                            == Some(admin_id.as_str());
+                        (mine && Some(record.id) != keep).then(|| key.value().to_string())
+                    })
+                    .collect();
+                for key in doomed {
+                    table.remove(key.as_str()).map_err(backend)?;
+                }
+            }
+            txn.commit().map_err(backend)
+        })
+        .await
+    }
+}
+
+/// Runs a redb write on the blocking pool: `begin_write` waits out any other
+/// writer and `commit` fsyncs, and neither may park an async worker.
+async fn write_off_runtime<R: Send + 'static>(
+    db: &Arc<Database>,
+    job: impl FnOnce(&Database) -> session_store::Result<R> + Send + 'static,
+) -> session_store::Result<R> {
+    let db = Arc::clone(db);
+    tokio::task::spawn_blocking(move || job(&db))
+        .await
+        .map_err(backend)?
 }
 
 fn backend<E: std::fmt::Display>(e: E) -> session_store::Error {
@@ -48,18 +98,50 @@ fn decode(bytes: &[u8]) -> Result<Record, session_store::Error> {
 
 #[async_trait]
 impl SessionStore for RedbSessionStore {
+    /// Inserts under a fresh id, re-rolling on the (unlikely) collision.
+    async fn create(&self, record: &mut Record) -> session_store::Result<()> {
+        let mut fresh = record.clone();
+        *record = write_off_runtime(&self.db, move |db| {
+            let txn = db.begin_write().map_err(backend)?;
+            {
+                let mut table = txn.open_table(SESSION).map_err(backend)?;
+                while table
+                    .get(fresh.id.to_string().as_str())
+                    .map_err(backend)?
+                    .is_some()
+                {
+                    fresh.id = Id::default();
+                }
+                table
+                    .insert(fresh.id.to_string().as_str(), encode(&fresh)?.as_slice())
+                    .map_err(backend)?;
+            }
+            txn.commit().map_err(backend)?;
+            Ok(fresh)
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Updates an existing record only. `with_always_save` re-saves every
+    /// in-flight request's session, so a record deleted mid-request (logout,
+    /// removal, a password change's purge) must not be written back.
     async fn save(&self, record: &Record) -> session_store::Result<()> {
         let key = record.id.to_string();
         let value = encode(record)?;
-        let txn = self.db.begin_write().map_err(backend)?;
-        {
-            let mut table = txn.open_table(SESSION).map_err(backend)?;
-            table
-                .insert(key.as_str(), value.as_slice())
-                .map_err(backend)?;
-        }
-        txn.commit().map_err(backend)?;
-        Ok(())
+        write_off_runtime(&self.db, move |db| {
+            let txn = db.begin_write().map_err(backend)?;
+            {
+                let mut table = txn.open_table(SESSION).map_err(backend)?;
+                if table.get(key.as_str()).map_err(backend)?.is_some() {
+                    table
+                        .insert(key.as_str(), value.as_slice())
+                        .map_err(backend)?;
+                }
+            }
+            txn.commit().map_err(backend)
+        })
+        .await
     }
 
     async fn load(&self, session_id: &Id) -> session_store::Result<Option<Record>> {
@@ -78,13 +160,15 @@ impl SessionStore for RedbSessionStore {
 
     async fn delete(&self, session_id: &Id) -> session_store::Result<()> {
         let key = session_id.to_string();
-        let txn = self.db.begin_write().map_err(backend)?;
-        {
-            let mut table = txn.open_table(SESSION).map_err(backend)?;
-            table.remove(key.as_str()).map_err(backend)?;
-        }
-        txn.commit().map_err(backend)?;
-        Ok(())
+        write_off_runtime(&self.db, move |db| {
+            let txn = db.begin_write().map_err(backend)?;
+            {
+                let mut table = txn.open_table(SESSION).map_err(backend)?;
+                table.remove(key.as_str()).map_err(backend)?;
+            }
+            txn.commit().map_err(backend)
+        })
+        .await
     }
 }
 
@@ -92,24 +176,39 @@ impl SessionStore for RedbSessionStore {
 impl ExpiredDeletion for RedbSessionStore {
     async fn delete_expired(&self) -> session_store::Result<()> {
         let now = OffsetDateTime::now_utc();
-        let txn = self.db.begin_write().map_err(backend)?;
-        {
-            let mut table = txn.open_table(SESSION).map_err(backend)?;
-            let expired: Vec<String> = table
-                .iter()
-                .map_err(backend)?
-                .filter_map(|entry| {
-                    let (key, value) = entry.ok()?;
-                    let record = decode(value.value()).ok()?;
-                    (record.expiry_date <= now).then(|| key.value().to_string())
-                })
-                .collect();
-            for key in expired {
-                table.remove(key.as_str()).map_err(backend)?;
+        write_off_runtime(&self.db, move |db| {
+            let txn = db.begin_write().map_err(backend)?;
+            {
+                let mut table = txn.open_table(SESSION).map_err(backend)?;
+                let expired: Vec<String> = table
+                    .iter()
+                    .map_err(backend)?
+                    .filter_map(|entry| {
+                        let (key, value) = entry.ok()?;
+                        let record = decode(value.value()).ok()?;
+                        (record.expiry_date <= now).then(|| key.value().to_string())
+                    })
+                    .collect();
+                for key in expired {
+                    table.remove(key.as_str()).map_err(backend)?;
+                }
             }
+            txn.commit().map_err(backend)
+        })
+        .await
+    }
+}
+
+/// Deletes expired records now and then once per idle window, forever: `load`
+/// only hides them, and `delete_for_admin` scans the whole table.
+pub async fn purge_expired(store: RedbSessionStore) {
+    let period = std::time::Duration::from_secs(IDLE_TIMEOUT_SECS as u64);
+    let mut interval = tokio::time::interval(period);
+    loop {
+        interval.tick().await;
+        if let Err(error) = store.delete_expired().await {
+            tracing::warn!(%error, "expired session purge failed");
         }
-        txn.commit().map_err(backend)?;
-        Ok(())
     }
 }
 

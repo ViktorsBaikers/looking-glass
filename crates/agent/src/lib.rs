@@ -3,6 +3,7 @@
 //! the enrollment logic is testable from `tests/` (a binary-only crate has no such
 //! seam).
 
+pub mod acme;
 pub mod dataplane;
 pub mod enroll;
 pub mod tunnel;

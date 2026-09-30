@@ -24,6 +24,8 @@ pub const SETUP_TOKEN: &str = "test-setup-token-0123456789abcdef";
 /// Fixed identity material so tests know central's fingerprint up front.
 pub const CENTRAL_IDENTITY: &[u8] = b"test-central-identity-material";
 pub const CENTRAL_URL: &str = "https://central.test:8443";
+/// The first administrator's (alice's) password.
+pub const PASSWORD: &str = "correct-horse-battery-staple";
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -112,12 +114,52 @@ pub async fn complete_setup(state: &AppState) {
             "POST",
             "/api/setup",
             &format!(
-                r#"{{"setup_token":"{SETUP_TOKEN}","username":"alice","password":"correct-horse-battery-staple"}}"#
+                r#"{{"setup_token":"{SETUP_TOKEN}","username":"alice","password":"{PASSWORD}"}}"#
             ),
         ),
     )
     .await;
     assert_status(&response, StatusCode::CREATED);
+}
+
+/// Sign in and return the session cookie, or `None` when the login is refused.
+pub async fn login(state: &AppState, username: &str, password: &str) -> Option<String> {
+    let response = send(
+        central::build(state.clone()),
+        secure_request(
+            "POST",
+            "/api/auth/login",
+            &serde_json::json!({ "username": username, "password": password }).to_string(),
+        ),
+    )
+    .await;
+    (response.status() == StatusCode::NO_CONTENT)
+        .then(|| session_cookie(&response).expect("session cookie from an accepted login"))
+}
+
+/// Install as alice, sign in, and return her session cookie.
+pub async fn setup_and_login(state: &AppState) -> String {
+    complete_setup(state).await;
+    login(state, "alice", PASSWORD)
+        .await
+        .expect("alice session cookie")
+}
+
+/// A trusted-proxy admin request carrying the session cookie.
+pub fn authed(method: &str, uri: &str, cookie: &str, json: &str) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("x-forwarded-proto", "https")
+        .header("cookie", cookie)
+        .extension(ConnectInfo(SocketAddr::new(TRUSTED_PROXY, 40000)))
+        .body(Body::from(json.to_string()))
+        .unwrap()
+}
+
+pub async fn json_body(response: Response<Body>) -> serde_json::Value {
+    serde_json::from_str(&body_string(response).await).expect("json body")
 }
 
 pub async fn body_string(response: Response<Body>) -> String {
@@ -141,6 +183,14 @@ pub fn assert_status(response: &Response<Body>, expected: StatusCode) {
     assert_eq!(response.status(), expected, "unexpected status");
 }
 
+/// Wall-clock unix seconds — for asserting TTL-derived timestamps.
+pub fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 use std::sync::{Mutex, OnceLock};
 
 static LOG_CAPTURE: OnceLock<Arc<Mutex<Vec<u8>>>> = OnceLock::new();
@@ -157,6 +207,8 @@ pub fn captured_logs() -> Arc<Mutex<Vec<u8>>> {
             let subscriber = tracing_subscriber::fmt()
                 .with_ansi(false)
                 .with_writer(move || CaptureWriter(Arc::clone(&writer_buffer)))
+                // Every level: a secret logged at DEBUG or TRACE must fail the test too.
+                .with_max_level(tracing::Level::TRACE)
                 .finish();
             let _ = tracing::subscriber::set_global_default(subscriber);
             buffer

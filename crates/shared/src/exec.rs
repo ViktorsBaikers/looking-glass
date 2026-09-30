@@ -22,12 +22,12 @@
 use std::io::ErrorKind;
 use std::net::IpAddr;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::template::CommandTemplate;
 use crate::validate::validate_ip;
@@ -102,10 +102,11 @@ pub struct ExecHandle {
 }
 
 /// The execution engine: the bounds plus the one global permit pool. Cheap to
-/// clone (the semaphore is shared) so it lives in shared application state.
+/// clone (the semaphore and bounds are shared) so it lives in shared application
+/// state, and a bound set on one clone applies to runs started from any clone.
 #[derive(Clone)]
 pub struct ExecEngine {
-    limits: ExecLimits,
+    limits: Arc<Mutex<ExecLimits>>,
     permits: Arc<Semaphore>,
 }
 
@@ -113,8 +114,17 @@ impl ExecEngine {
     pub fn new(limits: ExecLimits) -> Self {
         Self {
             permits: Arc::new(Semaphore::new(limits.max_concurrent)),
-            limits,
+            limits: Arc::new(Mutex::new(limits)),
         }
+    }
+
+    /// Change the per-run timeout and output cap for runs started after this
+    /// call; runs already in flight keep the bounds they started with. The
+    /// global cap is the permit pool, sized once in [`Self::new`].
+    pub fn set_run_limits(&self, timeout: Duration, max_output_bytes: usize) {
+        let mut limits = self.limits.lock().expect("exec limits mutex");
+        limits.timeout = timeout;
+        limits.max_output_bytes = max_output_bytes;
     }
 
     /// Permits currently free — used by tests to assert the cap and that a permit
@@ -139,19 +149,28 @@ impl ExecEngine {
             .try_acquire_owned()
             .map_err(|_| StartError::Busy)?;
 
-        let (tx, rx) = mpsc::channel(self.limits.channel_capacity);
-        let limits = self.limits;
-        tokio::spawn(async move {
-            // The permit is moved into the driver and dropped when it returns —
-            // released on success, timeout, cancel, disconnect, or spawn failure.
-            let _permit = permit;
-            drive(command, tx, limits).await;
-        });
+        let limits = *self.limits.lock().expect("exec limits mutex");
+        let (tx, rx) = mpsc::channel(limits.channel_capacity);
+        // The permit is moved into the driver, which releases it once the process
+        // group is gone — on success, timeout, cancel, disconnect, or spawn failure.
+        tokio::spawn(drive(command, tx, limits, permit));
         Ok(ExecHandle { events: rx })
     }
 }
 
-async fn drive(command: CommandTemplate, tx: mpsc::Sender<ExecEvent>, limits: ExecLimits) {
+/// Held while a run's group leader is spawned, and from the moment a finished
+/// run reaps its leader until its group loop is done. Once the leader is reaped
+/// and no member is left, its pid (the pgid the loop waits on) may be recycled;
+/// only a run's spawn can make a new child of ours lead a group, so no spawn
+/// may land inside that window.
+static SPAWN_OR_REAP: AsyncMutex<()> = AsyncMutex::const_new(());
+
+async fn drive(
+    command: CommandTemplate,
+    tx: mpsc::Sender<ExecEvent>,
+    limits: ExecLimits,
+    permit: OwnedSemaphorePermit,
+) {
     let start = Instant::now();
 
     let mut builder = Command::new(command.program);
@@ -163,8 +182,31 @@ async fn drive(command: CommandTemplate, tx: mpsc::Sender<ExecEvent>, limits: Ex
         .kill_on_drop(true);
     #[cfg(unix)]
     builder.process_group(0);
+    // The agent's systemd unit grants an ambient CAP_NET_BIND_SERVICE to bind
+    // :443; a diagnostic must not inherit it. File capabilities (ping, mtr)
+    // still apply at exec.
+    // SAFETY: the closure runs in the forked child before exec and only calls
+    // prctl(2), which is async-signal-safe and touches no memory. A kernel
+    // without ambient capabilities (< 4.3) returns EINVAL: nothing to clear.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        builder.pre_exec(|| {
+            libc::prctl(
+                libc::PR_CAP_AMBIENT,
+                libc::PR_CAP_AMBIENT_CLEAR_ALL as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            );
+            Ok(())
+        });
+    }
 
-    let mut child = match builder.spawn() {
+    let spawned = {
+        let _window = SPAWN_OR_REAP.lock().await;
+        builder.spawn()
+    };
+    let mut child = match spawned {
         Ok(child) => child,
         Err(error) => {
             // AC41: a missing tool (or any spawn failure) surfaces a clear,
@@ -192,7 +234,8 @@ async fn drive(command: CommandTemplate, tx: mpsc::Sender<ExecEvent>, limits: Ex
     let mut stderr_done = stderr.is_none();
     let mut sent_bytes = 0usize;
 
-    let timeout = tokio::time::sleep(limits.timeout);
+    let deadline = tokio::time::Instant::now() + limits.timeout;
+    let timeout = tokio::time::sleep_until(deadline);
     tokio::pin!(timeout);
 
     // `child.wait()` is deliberately NOT a select arm: reaping the leader here
@@ -211,23 +254,38 @@ async fn drive(command: CommandTemplate, tx: mpsc::Sender<ExecEvent>, limits: Ex
             // resets the timer.
             _ = &mut timeout => break Ended::TimedOut,
             line = read_line(&mut stdout), if !stdout_done => match line {
-                Some(line) => match emit(&tx, &mut sent_bytes, line, limits.max_output_bytes).await {
+                Some(line) => match emit(&tx, &mut sent_bytes, line, limits.max_output_bytes, deadline).await {
                     Emit::Ok => {}
                     Emit::Disconnected => break Ended::Canceled,
                     Emit::Capped => break Ended::OutputCapped,
+                    Emit::TimedOut => break Ended::TimedOut,
                 },
                 None => stdout_done = true,
             },
             line = read_line(&mut stderr), if !stderr_done => match line {
-                Some(line) => match emit(&tx, &mut sent_bytes, line, limits.max_output_bytes).await {
+                Some(line) => match emit(&tx, &mut sent_bytes, line, limits.max_output_bytes, deadline).await {
                     Emit::Ok => {}
                     Emit::Disconnected => break Ended::Canceled,
                     Emit::Capped => break Ended::OutputCapped,
+                    Emit::TimedOut => break Ended::TimedOut,
                 },
                 None => stderr_done = true,
             },
         }
     };
+
+    // Both pipes closed, but a leader may close them before it exits (GNU grep
+    // and echo do): give it a bounded grace to exit so its own status, not our
+    // SIGKILL, is reported. The wait does not reap, so the zombie keeps the pgid
+    // pinned; the deadline and a disconnect still cut it short.
+    if let (Ended::Completed, Some(pid)) = (&ended, pid) {
+        let grace_end = deadline.min(tokio::time::Instant::now() + EXIT_GRACE);
+        tokio::select! {
+            _ = tokio::task::spawn_blocking(move || wait_exited(pid)) => {}
+            _ = tokio::time::sleep_until(grace_end) => {}
+            _ = tx.closed() => {}
+        }
+    }
 
     // Kill the whole group on EVERY path, including clean completion: a command
     // can exit 0 while a process it backgrounded is still alive (`sh -c "sleep &
@@ -240,7 +298,18 @@ async fn drive(command: CommandTemplate, tx: mpsc::Sender<ExecEvent>, limits: Ex
     }
 
     // Reap the leader (and release its pid) only after the group is signalled.
+    let window = SPAWN_OR_REAP.lock().await;
     let reaped = child.wait().await;
+    // Then any other group member that became our child: when central runs as
+    // PID 1, members orphaned by the kill are reparented to us, and nothing
+    // else would ever reap them.
+    if let Some(pid) = pid {
+        let _ = tokio::task::spawn_blocking(move || reap_group(pid)).await;
+    }
+    drop(window);
+    // The process group is gone; a consumer that stopped reading must not keep
+    // the global permit while the terminal events below wait for it.
+    drop(permit);
 
     let status = match ended {
         Ended::Completed => match reaped {
@@ -284,6 +353,7 @@ enum Emit {
     Ok,
     Capped,
     Disconnected,
+    TimedOut,
 }
 
 async fn emit(
@@ -291,10 +361,15 @@ async fn emit(
     sent_bytes: &mut usize,
     line: String,
     max_output_bytes: usize,
+    deadline: tokio::time::Instant,
 ) -> Emit {
     *sent_bytes = sent_bytes.saturating_add(line.len() + 1);
-    if tx.send(ExecEvent::Line(line)).await.is_err() {
-        return Emit::Disconnected;
+    // A live consumer that stopped reading parks this send; the hard timeout
+    // must still fire while it waits.
+    match tokio::time::timeout_at(deadline, tx.send(ExecEvent::Line(line))).await {
+        Err(_) => return Emit::TimedOut,
+        Ok(Err(_)) => return Emit::Disconnected,
+        Ok(Ok(())) => {}
     }
     if *sent_bytes >= max_output_bytes {
         Emit::Capped
@@ -375,6 +450,36 @@ where
     }
 }
 
+/// How long a leader whose output is closed may take to exit on its own
+/// before the group is killed anyway.
+const EXIT_GRACE: Duration = Duration::from_millis(500);
+
+/// Block until the child `pid` has exited, WITHOUT reaping it (`WNOWAIT`): it
+/// stays a zombie, so its pid and pgid cannot be recycled before the kill.
+#[cfg(unix)]
+fn wait_exited(pid: u32) {
+    // SAFETY: an all-zero `siginfo_t` is a valid value of this plain C struct.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    loop {
+        // SAFETY: `waitid(2)` writes only `info`, which we own; `pid` is our
+        // unreaped child.
+        let waited = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if waited == 0 || std::io::Error::last_os_error().kind() != ErrorKind::Interrupted {
+            break;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn wait_exited(_pid: u32) {}
+
 /// Signal the whole process group led by `pid` (spawned with `process_group(0)`),
 /// killing the command and every descendant it started (AC14). A negative pid
 /// targets the group; a leaked orphan is a real bug this closes.
@@ -391,6 +496,25 @@ fn kill_group(pid: u32) {
 
 #[cfg(not(unix))]
 fn kill_group(_pid: u32) {}
+
+/// Reap every already-killed member of the group led by `pid` that is our
+/// child, blocking until none is left (`ECHILD`). Outside PID 1 there are
+/// none and this returns at once.
+#[cfg(unix)]
+fn reap_group(pid: u32) {
+    loop {
+        // SAFETY: `waitpid(2)` with a negative pid waits for any child in that
+        // process group; a null status pointer is allowed, and it touches no
+        // Rust memory. Only group members we just SIGKILLed can match.
+        let reaped = unsafe { libc::waitpid(-(pid as i32), std::ptr::null_mut(), 0) };
+        if reaped <= 0 && std::io::Error::last_os_error().kind() != ErrorKind::Interrupted {
+            break;
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn reap_group(_pid: u32) {}
 
 #[cfg(all(test, unix))]
 mod tests {
@@ -412,9 +536,27 @@ mod tests {
         }
     }
 
-    /// True while a process with `pid` still exists (signal 0 is an existence probe).
+    /// True while a process with `pid` still exists (signal 0 is an existence
+    /// probe) and is not a zombie: a killed orphan stays one when nothing reaps
+    /// it, as under a container whose PID 1 is cargo.
     fn process_alive(pid: i32) -> bool {
-        unsafe { libc::kill(pid, 0) == 0 }
+        let exists = unsafe { libc::kill(pid, 0) == 0 };
+        exists && !is_zombie(pid)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn is_zombie(pid: i32) -> bool {
+        // The state follows the parenthesised command name, which may itself
+        // contain ") ".
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit_once(") ")
+                .is_some_and(|(_, rest)| rest.starts_with('Z'))
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn is_zombie(_pid: i32) -> bool {
+        false
     }
 
     async fn wait_until_dead(pid: i32) -> bool {
@@ -425,6 +567,25 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         !process_alive(pid)
+    }
+
+    /// The first line a tree-kill test's command prints: its backgrounded descendant's pid.
+    async fn descendant_pid(events: &mut mpsc::Receiver<ExecEvent>) -> i32 {
+        match events.recv().await.unwrap() {
+            ExecEvent::Line(line) => line.trim().parse().expect("descendant pid"),
+            other => panic!("expected the descendant pid line, got {other:?}"),
+        }
+    }
+
+    /// Drain events until the run's terminal status (a closed channel reads as Canceled).
+    async fn final_status(events: &mut mpsc::Receiver<ExecEvent>) -> ExecStatus {
+        loop {
+            match events.recv().await {
+                Some(ExecEvent::Done { status, .. }) => break status,
+                Some(_) => {}
+                None => break ExecStatus::Canceled,
+            }
+        }
     }
 
     async fn collect(mut handle: ExecHandle) -> (Vec<String>, ExecStatus) {
@@ -499,19 +660,10 @@ mod tests {
             .unwrap();
         let mut events = handle.events;
 
-        let child_pid: i32 = match events.recv().await.unwrap() {
-            ExecEvent::Line(line) => line.trim().parse().expect("descendant pid"),
-            other => panic!("expected the descendant pid line, got {other:?}"),
-        };
+        let child_pid = descendant_pid(&mut events).await;
         assert!(process_alive(child_pid), "the descendant should be running");
 
-        let status = loop {
-            match events.recv().await {
-                Some(ExecEvent::Done { status, .. }) => break status,
-                Some(_) => {}
-                None => break ExecStatus::Canceled,
-            }
-        };
+        let status = final_status(&mut events).await;
         assert_eq!(status, ExecStatus::TimedOut);
         assert!(
             wait_until_dead(child_pid).await,
@@ -532,10 +684,7 @@ mod tests {
             .unwrap();
         let mut events = handle.events;
 
-        let child_pid: i32 = match events.recv().await.unwrap() {
-            ExecEvent::Line(line) => line.trim().parse().expect("descendant pid"),
-            other => panic!("expected the descendant pid line, got {other:?}"),
-        };
+        let child_pid = descendant_pid(&mut events).await;
         assert!(process_alive(child_pid));
 
         // Simulate the browser closing the EventSource / pressing Cancel.
@@ -680,31 +829,28 @@ mod tests {
     // descendant it backgrounded is still alive — the descendant must be killed
     // with the group, not reparented to init and orphaned. Its fds are
     // redirected off our pipe so the leader's exit is seen as EOF (a genuine
-    // clean completion), yet it remains in the process group.
+    // clean completion), yet it remains in the process group. The leader holds
+    // its exit until SIGUSR1, sent once the descendant is seen running, so the
+    // engine's kill cannot race that precondition.
     #[tokio::test]
     async fn clean_exit_still_kills_a_backgrounded_descendant() {
         let engine = ExecEngine::new(fast());
         let handle = engine
             .try_start(
-                sh("sleep 300 >/dev/null 2>&1 & printf '%s\\n' \"$!\"; exit 0"),
+                sh("trap 'exit 0' USR1; sleep 300 >/dev/null 2>&1 & \
+                    printf '%s\\n' \"$!\" \"$$\"; while :; do sleep 0.01; done"),
                 None,
             )
             .unwrap();
         let mut events = handle.events;
 
-        let child_pid: i32 = match events.recv().await.unwrap() {
-            ExecEvent::Line(line) => line.trim().parse().expect("descendant pid"),
-            other => panic!("expected the descendant pid line, got {other:?}"),
-        };
+        let child_pid = descendant_pid(&mut events).await;
+        let leader = descendant_pid(&mut events).await;
         assert!(process_alive(child_pid), "the descendant should be running");
+        // SAFETY: kill(2) takes no Rust memory; `leader` is the run's live shell.
+        unsafe { libc::kill(leader, libc::SIGUSR1) };
 
-        let status = loop {
-            match events.recv().await {
-                Some(ExecEvent::Done { status, .. }) => break status,
-                Some(_) => {}
-                None => break ExecStatus::Canceled,
-            }
-        };
+        let status = final_status(&mut events).await;
         assert_eq!(
             status,
             ExecStatus::Completed { success: true },
@@ -714,5 +860,192 @@ mod tests {
             wait_until_dead(child_pid).await,
             "a descendant backgrounded before a clean exit must still be killed — no orphan"
         );
+    }
+
+    // F-175: a leader may close stdout and stderr before it exits (GNU grep and
+    // echo do, via gnulib's close_stdout). Its own exit status must be reported,
+    // not the SIGKILL of a group kill that raced its exit.
+    #[tokio::test]
+    async fn output_closed_before_exit_still_reports_the_exit_status() {
+        let engine = ExecEngine::new(ExecLimits {
+            timeout: Duration::from_secs(5),
+            ..fast()
+        });
+        let mut wrong = Vec::new();
+        for _ in 0..200 {
+            let handle = engine
+                .try_start(sh("exec >&- 2>&-; sleep 0.01; exit 0"), None)
+                .unwrap();
+            let (_, status) = collect(handle).await;
+            if status != (ExecStatus::Completed { success: true }) {
+                wrong.push(status);
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{} of 200 runs whose leader exited 0 were reported {:?}",
+            wrong.len(),
+            wrong.first()
+        );
+    }
+
+    // The grace is bounded: a leader that closed its output but keeps running
+    // is killed shortly after, as before, not left until the hard timeout.
+    #[tokio::test]
+    async fn output_closed_leader_that_keeps_running_is_killed_after_the_grace() {
+        let engine = ExecEngine::new(ExecLimits {
+            timeout: Duration::from_secs(10),
+            ..fast()
+        });
+        let mut events = engine
+            .try_start(sh("exec >&- 2>&-; sleep 300"), None)
+            .unwrap()
+            .events;
+        match events.recv().await {
+            Some(ExecEvent::Done { status, elapsed_ms }) => {
+                assert_eq!(status, ExecStatus::Completed { success: false });
+                assert!(
+                    elapsed_ms < 5_000,
+                    "killed after {elapsed_ms} ms, not after the grace"
+                );
+            }
+            other => panic!("expected the terminal event, got {other:?}"),
+        }
+    }
+
+    // When central is PID 1, group members orphaned by the kill (mtr's
+    // mtr-packet) are reparented to us. The engine must reap the whole group,
+    // not only the leader, or each one stays a zombie. A process of ours placed
+    // in the run's group stands in for that adopted orphan.
+    #[tokio::test]
+    async fn killed_group_leaves_no_zombie() {
+        use std::os::unix::process::CommandExt;
+
+        let engine = ExecEngine::new(fast()); // 400ms timeout
+        let handle = engine
+            .try_start(sh("printf '%s\\n' \"$$\"; sleep 300"), None)
+            .unwrap();
+        let mut events = handle.events;
+        let pgid = descendant_pid(&mut events).await;
+
+        let mut member = std::process::Command::new("sleep")
+            .arg("300")
+            .process_group(pgid)
+            .spawn()
+            .expect("join the run's process group");
+
+        assert_eq!(final_status(&mut events).await, ExecStatus::TimedOut);
+        let left = member.try_wait();
+        assert!(
+            left.is_err(),
+            "the killed group member must already be reaped, not left a zombie: {left:?}"
+        );
+    }
+
+    /// Put CAP_NET_BIND_SERVICE into this thread's inheritable and ambient sets,
+    /// as the agent's systemd `AmbientCapabilities=` does. Needs the capability
+    /// in the permitted set (root); returns whether the raise succeeded.
+    #[cfg(target_os = "linux")]
+    fn raise_ambient_net_bind_service() -> bool {
+        const CAP_NET_BIND_SERVICE: u32 = 10;
+        #[repr(C)]
+        struct Header {
+            version: u32,
+            pid: libc::c_int,
+        }
+        #[repr(C)]
+        #[derive(Clone, Copy, Default)]
+        struct Data {
+            effective: u32,
+            permitted: u32,
+            inheritable: u32,
+        }
+        // _LINUX_CAPABILITY_VERSION_3; pid 0 is the calling thread.
+        let mut header = Header {
+            version: 0x2008_0522,
+            pid: 0,
+        };
+        let mut data = [Data::default(); 2];
+        // SAFETY: capget/capset read and write exactly these repr(C) structs, and
+        // prctl touches no memory. Capabilities are per thread, so only this test
+        // thread (and what it spawns) changes.
+        unsafe {
+            if libc::syscall(libc::SYS_capget, &mut header, data.as_mut_ptr()) != 0 {
+                return false;
+            }
+            data[0].inheritable |= 1 << CAP_NET_BIND_SERVICE;
+            if libc::syscall(libc::SYS_capset, &mut header, data.as_ptr()) != 0 {
+                return false;
+            }
+            libc::prctl(
+                libc::PR_CAP_AMBIENT,
+                libc::PR_CAP_AMBIENT_RAISE as libc::c_ulong,
+                CAP_NET_BIND_SERVICE as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            ) == 0
+        }
+    }
+
+    // C-098: the agent runs with an ambient CAP_NET_BIND_SERVICE to bind :443;
+    // a diagnostic child must start with an empty ambient set. The raise shows
+    // the inheritance where the test can raise one (root); the run is spawned
+    // from this thread (current-thread runtime), so the child would inherit it.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn child_starts_with_an_empty_ambient_capability_set() {
+        let raised = raise_ambient_net_bind_service();
+        eprintln!("ambient CAP_NET_BIND_SERVICE raised on the test thread: {raised}");
+        let engine = ExecEngine::new(fast());
+        // Shell builtins only: the child that reads its own status keeps its
+        // output open until it exits.
+        let command = sh("while IFS= read -r l; do case $l in CapAmb:*) printf '%s\\n' \"$l\";; esac; done </proc/self/status");
+        let (lines, status) = collect(engine.try_start(command, None).unwrap()).await;
+        assert_eq!(status, ExecStatus::Completed { success: true });
+        assert_eq!(
+            lines,
+            vec!["CapAmb:\t0000000000000000"],
+            "a spawned child must not inherit the agent's ambient capabilities"
+        );
+        if raised {
+            let own = std::fs::read_to_string("/proc/thread-self/status").unwrap();
+            assert!(
+                own.lines().any(|l| l == "CapAmb:\t0000000000000400"),
+                "the clear must happen in the child only; the spawning thread keeps its ambient set"
+            );
+        }
+    }
+
+    // A live consumer that stops reading must not hold the run past the
+    // hard timeout — the process is killed and its global permit released.
+    #[tokio::test]
+    async fn stalled_consumer_cannot_outlive_the_timeout() {
+        let engine = ExecEngine::new(ExecLimits {
+            max_concurrent: 1,
+            timeout: Duration::from_millis(300),
+            ..fast() // channel of 16
+        });
+        let handle = engine
+            .try_start(sh("printf '%s\\n' \"$$\"; seq 1000; sleep 300"), None)
+            .unwrap();
+        let mut events = handle.events;
+        let leader = descendant_pid(&mut events).await;
+
+        // Stop reading: the channel fills and the driver parks on send.
+        let mut released = false;
+        for _ in 0..150 {
+            if engine.available_permits() == 1 && !process_alive(leader) {
+                released = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            released,
+            "3s (10x the timeout) later the stalled run still holds its process or permit"
+        );
+
+        // Nothing is lost for a consumer that resumes: the run ends TimedOut.
+        assert_eq!(final_status(&mut events).await, ExecStatus::TimedOut);
     }
 }

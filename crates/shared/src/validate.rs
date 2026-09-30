@@ -135,14 +135,26 @@ pub enum TargetError {
     Rejected(RejectReason),
     /// A syntactically valid hostname that resolved to no address.
     Unresolvable,
+    /// The target has no address of the method's family: an IP literal of the other
+    /// family, or a hostname with no record of this family.
+    WrongFamily(PrefixFamily),
 }
 
 impl fmt::Display for TargetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Malformed => f.write_str("target is not a valid IP address or hostname"),
-            Self::Rejected(reason) => write!(f, "target rejected: {reason}"),
-            Self::Unresolvable => f.write_str("hostname did not resolve to any address"),
+            // One text for both: agents relay it to visitors, and telling them apart
+            // would reveal which names exist in the node's private DNS view.
+            Self::Rejected(_) | Self::Unresolvable => {
+                f.write_str("target could not be resolved to a public address")
+            }
+            Self::WrongFamily(PrefixFamily::V4) => {
+                f.write_str("target has no IPv4 address; this method runs over IPv4")
+            }
+            Self::WrongFamily(PrefixFamily::V6) => {
+                f.write_str("target has no IPv6 address; this method runs over IPv6")
+            }
         }
     }
 }
@@ -212,9 +224,12 @@ impl HostResolver for DnsResolver {
 /// An IP literal is validated directly. A hostname is validated for syntax, resolved,
 /// and **every** resolved address is re-validated against the same rules (AC12) — if any
 /// is non-public the whole target is rejected, closing the SSRF-via-DNS hole where an
-/// attacker mixes one public and one private record. The first address is pinned for use.
+/// attacker mixes one public and one private record. The first address of the method's
+/// `family` is pinned; an IP literal of the other family, or a hostname with no record of
+/// this family, is [`TargetError::WrongFamily`].
 pub async fn validate_target<R: HostResolver>(
     input: &str,
+    family: PrefixFamily,
     resolver: &R,
 ) -> Result<ValidatedTarget, TargetError> {
     let trimmed = input.trim();
@@ -222,8 +237,15 @@ pub async fn validate_target<R: HostResolver>(
         return Err(TargetError::Malformed);
     }
 
+    let in_family = |ip: &IpAddr| ip.is_ipv4() == (family == PrefixFamily::V4);
+
     if let Ok(ip) = trimmed.parse::<IpAddr>() {
+        // `::ffff:a.b.c.d` is an IPv4 target: check and pin its plain v4 form.
+        let ip = ip.to_canonical();
         validate_ip(ip).map_err(TargetError::Rejected)?;
+        if !in_family(&ip) {
+            return Err(TargetError::WrongFamily(family));
+        }
         return Ok(ValidatedTarget {
             ip,
             input: trimmed.to_string(),
@@ -238,10 +260,18 @@ pub async fn validate_target<R: HostResolver>(
         .resolve(trimmed)
         .await
         .map_err(|_| TargetError::Unresolvable)?;
-    let pinned = *addrs.first().ok_or(TargetError::Unresolvable)?;
+    if addrs.is_empty() {
+        return Err(TargetError::Unresolvable);
+    }
+    // A resolved ::ffff:a.b.c.d record is an IPv4 address, same as the literal case.
+    let addrs: Vec<IpAddr> = addrs.into_iter().map(|ip| ip.to_canonical()).collect();
     for addr in &addrs {
         validate_ip(*addr).map_err(TargetError::Rejected)?;
     }
+    let pinned = *addrs
+        .iter()
+        .find(|ip| in_family(ip))
+        .ok_or(TargetError::WrongFamily(family))?;
 
     Ok(ValidatedTarget {
         ip: pinned,
@@ -435,9 +465,9 @@ fn validate_ipv6(ip: Ipv6Addr) -> Result<(), RejectReason> {
 // reaches it (FR-072/AC36).
 // ---------------------------------------------------------------------------
 
-/// The address family a BGP prefix is locked to. `bgp` accepts only IPv4 and
-/// `bgp6` only IPv6, so a v6 literal can never reach the v4 query template and a
-/// v4 literal can never reach the v6 one.
+/// The address family a BGP prefix (or, via [`validate_target`], a diagnostic target)
+/// is locked to. `bgp` accepts only IPv4 and `bgp6` only IPv6, so a v6 literal can
+/// never reach the v4 query template and a v4 literal can never reach the v6 one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrefixFamily {
     V4,
@@ -689,6 +719,26 @@ mod tests {
             Err(RejectReason::SharedCgn)
         );
     }
+    // 100.64.0.0/10 spans 100.64.0.0-100.127.255.255: both edges are refused and
+    // the neighbours just outside it are public.
+    #[test]
+    fn shared_cgn_v4_block_is_exactly_a_slash_10() {
+        for inside in [
+            "100.64.0.0",
+            "100.95.255.255",
+            "100.96.0.0",
+            "100.127.255.255",
+        ] {
+            assert_eq!(
+                validate_ipv4(v4(inside)),
+                Err(RejectReason::SharedCgn),
+                "{inside}"
+            );
+        }
+        for outside in ["100.63.255.255", "100.128.0.0"] {
+            assert_eq!(validate_ipv4(v4(outside)), Ok(()), "{outside}");
+        }
+    }
     #[test]
     fn rejects_documentation_v4() {
         assert_eq!(
@@ -799,6 +849,34 @@ mod tests {
             validate_ipv6(v6("::ffff:10.0.0.1")),
             Err(RejectReason::Private)
         );
+    }
+    // Hostname grammar edges: a label may not start or end with a hyphen and
+    // holds at most 63 characters; the name holds at most 253.
+    #[test]
+    fn hostname_grammar_limits_hold_at_their_edges() {
+        let a = |n: usize| "a".repeat(n);
+        assert!(is_valid_hostname("a-b.example"));
+        for bad in ["-a.example", "a-.example", "a.-b", "a.b-"] {
+            assert!(!is_valid_hostname(bad), "{bad}");
+        }
+        assert!(is_valid_hostname(&format!("{}.example", a(63))));
+        assert!(!is_valid_hostname(&format!("{}.example", a(64))));
+        let name = |last: usize| format!("{0}.{0}.{0}.{1}", a(63), a(last));
+        assert_eq!(name(61).len(), 253);
+        assert!(is_valid_hostname(&name(61)));
+        assert!(!is_valid_hostname(&name(62)));
+    }
+
+    // The deprecated IPv4-compatible form (::a.b.c.d) is judged by its embedded
+    // IPv4 address, so ::10.0.0.1 is private and ::8.8.8.8 is as public as 8.8.8.8.
+    #[test]
+    fn ipv4_compatible_v6_is_judged_by_its_embedded_v4() {
+        assert_eq!(validate_ipv6(v6("::10.0.0.1")), Err(RejectReason::Private));
+        assert_eq!(
+            validate_ipv6(v6("::127.0.0.1")),
+            Err(RejectReason::Loopback)
+        );
+        assert_eq!(validate_ipv6(v6("::8.8.8.8")), Ok(()));
     }
     #[test]
     fn rejects_site_local_v6() {
@@ -1009,11 +1087,15 @@ mod tests {
     #[tokio::test]
     async fn accepts_public_ip_literal() {
         let r = StubResolver { addrs: vec![] };
-        let t = validate_target("8.8.8.8", &r).await.unwrap();
+        let t = validate_target("8.8.8.8", PrefixFamily::V4, &r)
+            .await
+            .unwrap();
         assert_eq!(t.ip(), ip("8.8.8.8"));
         assert_eq!(t.arg(), "8.8.8.8");
 
-        let t = validate_target("2606:4700:4700::1111", &r).await.unwrap();
+        let t = validate_target("2606:4700:4700::1111", PrefixFamily::V6, &r)
+            .await
+            .unwrap();
         assert_eq!(t.ip(), ip("2606:4700:4700::1111"));
         assert_eq!(t.arg(), "2606:4700:4700::1111");
     }
@@ -1022,7 +1104,7 @@ mod tests {
     async fn rejects_iana_documentation_ipv6_literal() {
         let r = StubResolver { addrs: vec![] };
         assert_eq!(
-            validate_target("3fff::1", &r).await,
+            validate_target("3fff::1", PrefixFamily::V6, &r).await,
             Err(TargetError::Rejected(RejectReason::Reserved))
         );
     }
@@ -1031,7 +1113,7 @@ mod tests {
     async fn rejects_private_ip_literal_no_resolution() {
         let r = StubResolver { addrs: vec![] };
         assert_eq!(
-            validate_target("10.1.2.3", &r).await,
+            validate_target("10.1.2.3", PrefixFamily::V4, &r).await,
             Err(TargetError::Rejected(RejectReason::Private))
         );
     }
@@ -1041,15 +1123,15 @@ mod tests {
         let r = StubResolver { addrs: vec![] };
         // Shell metacharacters and whitespace never reach the resolver.
         assert_eq!(
-            validate_target("bad;rm -rf /", &r).await,
+            validate_target("bad;rm -rf /", PrefixFamily::V4, &r).await,
             Err(TargetError::Malformed)
         );
         assert_eq!(
-            validate_target("$(whoami)", &r).await,
+            validate_target("$(whoami)", PrefixFamily::V4, &r).await,
             Err(TargetError::Malformed)
         );
         assert_eq!(
-            validate_target("   ", &r).await,
+            validate_target("   ", PrefixFamily::V4, &r).await,
             Err(TargetError::Malformed)
         );
     }
@@ -1059,7 +1141,9 @@ mod tests {
         let r = StubResolver {
             addrs: vec![ip("93.184.216.34")],
         };
-        let t = validate_target("example.com", &r).await.unwrap();
+        let t = validate_target("example.com", PrefixFamily::V4, &r)
+            .await
+            .unwrap();
         assert_eq!(t.ip(), ip("93.184.216.34"));
         // The pinned public IP, not the hostname, becomes the command argument.
         assert_eq!(t.arg(), "93.184.216.34");
@@ -1072,7 +1156,7 @@ mod tests {
             addrs: vec![ip("192.168.0.10")],
         };
         assert_eq!(
-            validate_target("internal.evil.test", &r).await,
+            validate_target("internal.evil.test", PrefixFamily::V4, &r).await,
             Err(TargetError::Rejected(RejectReason::Private))
         );
     }
@@ -1084,7 +1168,7 @@ mod tests {
             addrs: vec![ip("8.8.8.8"), ip("10.0.0.5")],
         };
         assert_eq!(
-            validate_target("split.evil.test", &r).await,
+            validate_target("split.evil.test", PrefixFamily::V4, &r).await,
             Err(TargetError::Rejected(RejectReason::Private))
         );
     }
@@ -1095,7 +1179,7 @@ mod tests {
             addrs: vec![ip("3fff::1")],
         };
         assert_eq!(
-            validate_target("documentation.example", &r).await,
+            validate_target("documentation.example", PrefixFamily::V6, &r).await,
             Err(TargetError::Rejected(RejectReason::Reserved))
         );
     }
@@ -1106,7 +1190,7 @@ mod tests {
             addrs: vec![ip("2606:4700:4700::1111"), ip("3fff::1")],
         };
         assert_eq!(
-            validate_target("split.example", &r).await,
+            validate_target("split.example", PrefixFamily::V6, &r).await,
             Err(TargetError::Rejected(RejectReason::Reserved))
         );
     }
@@ -1119,7 +1203,7 @@ mod tests {
             addrs: vec![ip("64:ff9b::c0a8:a")], // 64:ff9b::192.168.0.10
         };
         assert_eq!(
-            validate_target("dns64.evil.test", &r).await,
+            validate_target("dns64.evil.test", PrefixFamily::V6, &r).await,
             Err(TargetError::Rejected(RejectReason::Private))
         );
     }
@@ -1127,7 +1211,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_unresolvable_hostname() {
         assert_eq!(
-            validate_target("nope.invalid", &FailingResolver).await,
+            validate_target("nope.invalid", PrefixFamily::V4, &FailingResolver).await,
             Err(TargetError::Unresolvable)
         );
     }
@@ -1136,8 +1220,145 @@ mod tests {
     async fn rejects_hostname_with_no_records() {
         let r = StubResolver { addrs: vec![] };
         assert_eq!(
-            validate_target("empty.test", &r).await,
+            validate_target("empty.test", PrefixFamily::V4, &r).await,
             Err(TargetError::Unresolvable)
+        );
+    }
+
+    // F-189: a name that does not resolve and one that resolves only to a
+    // non-public address read the same to the visitor (the agent relays this
+    // Display text), so the refusal is no oracle for central's private DNS view.
+    #[tokio::test]
+    async fn unresolvable_and_private_names_share_one_refusal() {
+        let private = StubResolver {
+            addrs: vec![ip("10.0.0.5")],
+        };
+        let private = validate_target("db.internal", PrefixFamily::V4, &private).await;
+        let unresolvable =
+            validate_target("nope.invalid", PrefixFamily::V4, &FailingResolver).await;
+        let empty = validate_target(
+            "empty.test",
+            PrefixFamily::V4,
+            &StubResolver { addrs: vec![] },
+        )
+        .await;
+        let text = |r: Result<ValidatedTarget, TargetError>| r.unwrap_err().to_string();
+        let private = text(private);
+        assert_eq!(text(unresolvable), private);
+        assert_eq!(text(empty), private);
+    }
+
+    // ---- validate_target: address-family lock ----
+
+    // hickory's default strategy returns AAAA before A, so a dual-stack name resolves
+    // v6-first. A v4 method must pin the v4 record, a v6 method the v6 one.
+    #[tokio::test]
+    async fn hostname_pins_the_first_address_of_the_method_family() {
+        let r = StubResolver {
+            addrs: vec![ip("2606:4700:4700::1111"), ip("1.1.1.1")],
+        };
+        let t = validate_target("one.one.one.one", PrefixFamily::V4, &r)
+            .await
+            .unwrap();
+        assert_eq!(t.ip(), ip("1.1.1.1"));
+        let t = validate_target("one.one.one.one", PrefixFamily::V6, &r)
+            .await
+            .unwrap();
+        assert_eq!(t.ip(), ip("2606:4700:4700::1111"));
+    }
+
+    #[tokio::test]
+    async fn rejects_an_ip_literal_of_the_wrong_family() {
+        let r = StubResolver { addrs: vec![] };
+        assert_eq!(
+            validate_target("2606:4700:4700::1111", PrefixFamily::V4, &r).await,
+            Err(TargetError::WrongFamily(PrefixFamily::V4))
+        );
+        assert_eq!(
+            validate_target("8.8.8.8", PrefixFamily::V6, &r).await,
+            Err(TargetError::WrongFamily(PrefixFamily::V6))
+        );
+    }
+
+    // ::ffff:a.b.c.d is an IPv4 target: a v4 method pins the plain v4 form, a v6 method
+    // refuses it with the family error.
+    #[tokio::test]
+    async fn an_ipv4_mapped_literal_is_an_ipv4_target() {
+        let r = StubResolver { addrs: vec![] };
+        let t = validate_target("::ffff:1.1.1.1", PrefixFamily::V4, &r)
+            .await
+            .unwrap();
+        assert_eq!(t.ip(), ip("1.1.1.1"));
+        assert_eq!(t.arg(), "1.1.1.1");
+        assert_eq!(
+            validate_target("::ffff:1.1.1.1", PrefixFamily::V6, &r).await,
+            Err(TargetError::WrongFamily(PrefixFamily::V6))
+        );
+        assert_eq!(
+            validate_target("::ffff:10.0.0.1", PrefixFamily::V4, &r).await,
+            Err(TargetError::Rejected(RejectReason::Private))
+        );
+    }
+
+    // A resolved ::ffff:a.b.c.d record is an IPv4 address too — the hostname path
+    // canonicalises every record before family filtering and pinning.
+    #[tokio::test]
+    async fn a_resolved_ipv4_mapped_record_is_an_ipv4_address() {
+        let mapped = StubResolver {
+            addrs: vec![ip("::ffff:1.1.1.1")],
+        };
+        let t = validate_target("mapped.example", PrefixFamily::V4, &mapped)
+            .await
+            .unwrap();
+        assert_eq!(t.ip(), ip("1.1.1.1"));
+        assert_eq!(t.arg(), "1.1.1.1");
+        assert_eq!(
+            validate_target("mapped.example", PrefixFamily::V6, &mapped).await,
+            Err(TargetError::WrongFamily(PrefixFamily::V6))
+        );
+
+        let mixed = StubResolver {
+            addrs: vec![ip("::ffff:1.1.1.1"), ip("2606:4700:4700::1111")],
+        };
+        let t = validate_target("mixed.example", PrefixFamily::V6, &mixed)
+            .await
+            .unwrap();
+        assert_eq!(t.ip(), ip("2606:4700:4700::1111"));
+        let t = validate_target("mixed.example", PrefixFamily::V4, &mixed)
+            .await
+            .unwrap();
+        assert_eq!(t.ip(), ip("1.1.1.1"));
+
+        let private = StubResolver {
+            addrs: vec![ip("1.1.1.1"), ip("::ffff:10.0.0.1")],
+        };
+        assert_eq!(
+            validate_target("split.evil.test", PrefixFamily::V4, &private).await,
+            Err(TargetError::Rejected(RejectReason::Private))
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_a_hostname_with_no_address_of_the_method_family() {
+        let r = StubResolver {
+            addrs: vec![ip("2606:4700:4700::1111")],
+        };
+        let err = validate_target("v6only.example", PrefixFamily::V4, &r)
+            .await
+            .unwrap_err();
+        assert_eq!(err, TargetError::WrongFamily(PrefixFamily::V4));
+        assert!(err.to_string().contains("IPv4"), "{err}");
+    }
+
+    // The family filter only picks the pin; every record is still SSRF-checked.
+    #[tokio::test]
+    async fn a_private_record_of_the_other_family_still_rejects() {
+        let r = StubResolver {
+            addrs: vec![ip("fd00::1"), ip("1.1.1.1")],
+        };
+        assert_eq!(
+            validate_target("split.evil.test", PrefixFamily::V4, &r).await,
+            Err(TargetError::Rejected(RejectReason::UniqueLocal))
         );
     }
 

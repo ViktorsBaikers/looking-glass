@@ -1,23 +1,59 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/svelte';
-import userEvent from '@testing-library/user-event';
+// Seam 3 (pure logic) for the Location editor: ASN client validation must agree
+// word-for-word with central's 400 `invalid_asn`, and the Methods grid must split
+// the eight supported methods by family.
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import LocationsPage from '../../routes/admin/+page.svelte';
-import { fetchLocations } from '../public/api.js';
-import { runnableMethods } from '../public/methods.js';
 import LocationEditor from './LocationEditor.svelte';
-import { OFFERED_METHODS } from './types.js';
-import type { IperfEndpoint, LocationDetail, TestFile, TestIp } from './types.js';
+import { toast } from '$lib/toast.svelte.js';
+import { asnError, asnValue, methodsByFamily, nullIfBlank, ASN_MESSAGE } from './editor.js';
 
-type Fixture = {
-	locations: Map<string, LocationDetail>;
-	nextId: number;
-};
+describe('ASN client validation', () => {
+	it('accepts the whole 1..4294967295 range and trims whitespace', () => {
+		expect(asnValue('1')).toBe(1);
+		expect(asnValue('64501')).toBe(64501);
+		expect(asnValue(' 4294967295 ')).toBe(4294967295);
+		expect(asnError('64501')).toBeNull();
+	});
 
-let fixture: Fixture;
+	it('treats an empty value as unset', () => {
+		expect(asnValue('')).toBeNull();
+		expect(asnValue('   ')).toBeNull();
+		expect(asnError('')).toBeNull();
+	});
 
-function location(): LocationDetail {
-	return {
-		id: 'fra',
+	it.each(['0', '4294967296', '-3', '1.5', 'abc', '64 501', '0x10'])(
+		'rejects %s with the coded server message',
+		(raw) => {
+			expect(asnValue(raw)).toBeNull();
+			expect(asnError(raw)).toBe(ASN_MESSAGE);
+		}
+	);
+});
+
+describe('method families', () => {
+	it('splits the eight supported methods into v4 and v6 groups', () => {
+		expect(methodsByFamily()).toEqual({
+			v4: ['ping', 'mtr', 'traceroute', 'bgp'],
+			v6: ['ping6', 'mtr6', 'traceroute6', 'bgp6']
+		});
+	});
+});
+
+describe('nullIfBlank', () => {
+	it('maps empty optional fields to null and keeps the rest', () => {
+		expect(nullIfBlank('')).toBeNull();
+		expect(nullIfBlank('  ')).toBeNull();
+		expect(nullIfBlank('Equinix FR2')).toBe('Equinix FR2');
+	});
+});
+
+// Seam 1 (component): a successful save refreshes the location in place. The
+// editor must not swap itself for the "Loading location…" placeholder, which
+// would destroy the focused Save button and reset the scroll.
+describe('saving the location', () => {
+	const location = {
+		id: 'L1',
 		name: 'Frankfurt',
 		geo_label: 'Frankfurt, DE',
 		map_query: null,
@@ -25,488 +61,558 @@ function location(): LocationDetail {
 		facility_url: null,
 		kind: 'local',
 		data_plane_origin: null,
-		offered_methods: ['ping', 'mtr'],
-		status: 'online',
+		asn: null,
+		offered_methods: ['ping'],
 		created_at: 0,
+		last_seen: null,
+		status: 'online',
 		test_ips: [],
 		iperf: [],
 		files: []
 	};
-}
 
-function response(body: unknown, status = 200) {
-	return new Response(JSON.stringify(body), {
-		status,
-		headers: { 'content-type': 'application/json' }
+	/** The PUT succeeds at once; every GET after it answers with `reload()`. */
+	function stubSave(reload: () => Promise<Response>) {
+		let saved = false;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'PUT') {
+					saved = true;
+					return Response.json(location);
+				}
+				return saved ? reload() : Response.json(location);
+			})
+		);
+	}
+
+	afterEach(() => {
+		cleanup();
+		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
 	});
-}
 
-function invalidInput(message: string) {
-	return response({ error: 'invalid_input', message }, 422);
-}
+	it('refreshes in place: no loading state and the Save button keeps focus', async () => {
+		const success = vi.spyOn(toast, 'success');
+		let saved = false;
+		let puts = 0;
+		let release = () => {};
+		const reloadGate = new Promise<void>((resolve) => (release = resolve));
+		let finishPut = () => {};
+		const putGate = new Promise<void>((resolve) => (finishPut = resolve));
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'PUT') {
+					puts++;
+					await putGate;
+					saved = true;
+					return Response.json(location);
+				}
+				// Hold the post-save reload open so its in-flight state is observable.
+				if (saved) await reloadGate;
+				return Response.json(location);
+			})
+		);
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'settings', ontab: () => {} } });
+		const save = await screen.findByRole('button', { name: 'Save location' });
+		save.focus();
 
-function recordForChild(id: string, key: 'test_ips' | 'iperf' | 'files') {
-	for (const record of fixture.locations.values()) {
-		const item = record[key].find((candidate) => candidate.id === id);
-		if (item) return [record, item] as const;
-	}
-	return null;
-}
+		await fireEvent.submit(save.closest('form')!);
+		// While the PUT is in flight the focused button must stay enabled: a real
+		// browser blurs a focused control the moment it becomes disabled (jsdom
+		// does not), so busy is signalled with aria-busy and a double submit is
+		// swallowed by the saving guard instead.
+		await waitFor(() => expect(save.getAttribute('aria-busy')).toBe('true'));
+		expect(save.hasAttribute('disabled')).toBe(false);
+		// ...and still looks busy: aria-disabled hits the button recipe's _disabled look.
+		expect(save.getAttribute('aria-disabled')).toBe('true');
+		await fireEvent.submit(save.closest('form')!);
+		expect(puts).toBe(1);
+		finishPut();
+		await waitFor(() => expect(saved).toBe(true));
+		await tick();
+		expect(screen.queryByText('Loading location…')).toBeNull();
+		expect(save.isConnected).toBe(true);
+		// Until the refresh lands the form stays busy and read-only (the refresh
+		// overwrites every field), and success is announced only after it.
+		const asn = screen.getByLabelText(/ASN/);
+		expect(success).not.toHaveBeenCalled();
+		expect(save.closest('form')!.getAttribute('aria-busy')).toBe('true');
+		expect(asn.hasAttribute('readonly')).toBe(true);
+		expect(asn.getAttribute('aria-disabled')).toBe('true');
+		expect(save.getAttribute('aria-busy')).toBe('true');
 
-function body(init?: RequestInit) {
-	return JSON.parse(String(init?.body)) as Record<string, unknown>;
-}
+		release();
+		await waitFor(() => expect(success).toHaveBeenCalledWith('Location saved.'));
+		expect(screen.getByRole('button', { name: 'Save location' })).toBe(save);
+		expect(document.activeElement).toBe(save);
+		expect(save.hasAttribute('aria-disabled')).toBe(false);
+		expect(save.closest('form')!.hasAttribute('aria-busy')).toBe(false);
+		expect(asn.hasAttribute('readonly')).toBe(false);
+	});
 
-function adminLocationList() {
-	return [...fixture.locations.values()];
-}
+	// Locked, not natively disabled: `disabled` would blur a focused control
+	// (R-TS-05). The controls stay focusable and refuse changes instead.
+	it('keeps the Methods checkboxes locked until the refresh lands', async () => {
+		const success = vi.spyOn(toast, 'success');
+		let release = () => {};
+		const reloadGate = new Promise<void>((resolve) => (release = resolve));
+		stubSave(async () => {
+			await reloadGate;
+			return Response.json(location);
+		});
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'methods', ontab: () => {} } });
+		const save = await screen.findByRole('button', { name: 'Save methods' });
+		const bgp = screen.getByRole('checkbox', { name: 'bgp' }) as HTMLInputElement;
 
-function publicLocationList() {
-	return adminLocationList().filter((record) => record.status === 'online');
-}
+		await fireEvent.submit(save.closest('form')!);
+		await waitFor(() => expect(save.closest('form')!.getAttribute('aria-busy')).toBe('true'));
+		expect(bgp.disabled).toBe(false);
+		expect(bgp.closest('[role="group"]')!.getAttribute('aria-disabled')).toBe('true');
+		await fireEvent.click(bgp);
+		expect(bgp.checked).toBe(false);
+		expect(success).not.toHaveBeenCalled();
 
-function requiredString(draft: Record<string, unknown>, key: string) {
-	const value = draft[key];
-	return typeof value === 'string' && value.length > 0 ? value : null;
-}
+		release();
+		await waitFor(() => expect(success).toHaveBeenCalledWith('Methods saved.'));
+		expect(bgp.closest('[role="group"]')!.hasAttribute('aria-disabled')).toBe(false);
+		await fireEvent.click(bgp);
+		expect(bgp.checked).toBe(true);
+	});
 
-function nullableString(draft: Record<string, unknown>, key: string) {
-	const value = draft[key];
-	return value === undefined || value === null ? null : typeof value === 'string' ? value : undefined;
-}
+	it('keeps the Node kind select focusable but unchangeable until the refresh lands', async () => {
+		let release = () => {};
+		const reloadGate = new Promise<void>((resolve) => (release = resolve));
+		stubSave(async () => {
+			await reloadGate;
+			return Response.json(location);
+		});
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'settings', ontab: () => {} } });
+		const save = await screen.findByRole('button', { name: 'Save location' });
+		const kind = screen.getByRole('combobox');
 
-function replacementLocation(record: LocationDetail, draft: Record<string, unknown>): LocationDetail | null {
-	const name = requiredString(draft, 'name');
-	const geoLabel = draft.geo_label;
-	const mapQuery = nullableString(draft, 'map_query');
-	const facility = nullableString(draft, 'facility');
-	const facilityUrl = nullableString(draft, 'facility_url');
-	const dataPlaneOrigin = nullableString(draft, 'data_plane_origin');
-	if (
-		!name ||
-		typeof geoLabel !== 'string' ||
-		mapQuery === undefined ||
-		facility === undefined ||
-		facilityUrl === undefined ||
-		dataPlaneOrigin === undefined ||
-		(draft.kind !== 'local' && draft.kind !== 'remote') ||
-		!Array.isArray(draft.offered_methods) ||
-		!draft.offered_methods.every(
-			(method) => typeof method === 'string' && OFFERED_METHODS.includes(method as (typeof OFFERED_METHODS)[number])
-		)
-	) {
-		return null;
-	}
-	return {
-		...record,
-		name,
-		geo_label: geoLabel,
-		map_query: mapQuery,
-		facility,
-		facility_url: facilityUrl,
-		kind: draft.kind as LocationDetail['kind'],
-		data_plane_origin: dataPlaneOrigin,
-		status: draft.kind === 'local' ? 'online' : record.status,
-		offered_methods: draft.offered_methods as LocationDetail['offered_methods']
+		await fireEvent.submit(save.closest('form')!);
+		await waitFor(() => expect(save.closest('form')!.getAttribute('aria-busy')).toBe('true'));
+		expect(kind.hasAttribute('disabled')).toBe(false);
+		// ...but exposed as unavailable, like the other settings controls.
+		expect(kind.closest('[role="group"]')?.getAttribute('aria-disabled')).toBe('true');
+		await fireEvent.click(kind);
+		await fireEvent.keyDown(kind, { key: 'ArrowDown' });
+		await tick();
+		expect(kind.getAttribute('aria-expanded')).toBe('false');
+
+		release();
+		await waitFor(() => expect(save.closest('form')!.hasAttribute('aria-busy')).toBe(false));
+		expect(kind.closest('[role="group"]')?.hasAttribute('aria-disabled')).toBe(false);
+		await fireEvent.click(kind);
+		await waitFor(() => expect(kind.getAttribute('aria-expanded')).toBe('true'));
+	});
+
+	// F-353: only a first load has no editor to keep. A failed refresh leaves the
+	// editor in place and offers a retry instead of a dead-end page.
+	it('reports the save and the failed refresh when the reload errors', async () => {
+		const success = vi.spyOn(toast, 'success');
+		let reloadOk = false;
+		stubSave(async () =>
+			reloadOk ? Response.json(location) : Response.json({ error: 'internal' }, { status: 500 })
+		);
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'settings', ontab: () => {} } });
+		const save = await screen.findByRole('button', { name: 'Save location' });
+
+		await fireEvent.submit(save.closest('form')!);
+		await waitFor(() =>
+			expect(screen.getByRole('alert').textContent).toContain('This location could not be refreshed.')
+		);
+		expect(success).toHaveBeenCalledWith('Location saved.');
+		expect(save.isConnected).toBe(true);
+		expect(screen.getByRole('tab', { name: 'Settings' })).toBeTruthy();
+
+		reloadOk = true;
+		const retry = screen.getByRole('button', { name: 'Try again' });
+		retry.focus();
+		await fireEvent.click(retry);
+		await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+		// The retry button goes with the alert; focus lands on the page heading, not <body>.
+		expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1 }));
+	});
+
+	// F-363: like the Enrollment tab's retry, Try again is busy while its GET
+	// runs, a repeat press sends nothing, and a repeat failure is a fresh alert.
+	it('the refresh Try again is busy, ignores repeat presses and re-announces a repeat failure', async () => {
+		let gets = 0;
+		let release = () => {};
+		stubSave(async () => {
+			gets++;
+			if (gets === 2) await new Promise<void>((resolve) => (release = resolve));
+			return Response.json({ error: 'internal' }, { status: 500 });
+		});
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'settings', ontab: () => {} } });
+		const save = await screen.findByRole('button', { name: 'Save location' });
+		await fireEvent.submit(save.closest('form')!);
+		await waitFor(() => expect(screen.queryByRole('alert')).not.toBeNull());
+		const first = screen.getByRole('alert');
+		const retry = screen.getByRole('button', { name: 'Try again' });
+		retry.focus();
+
+		await fireEvent.click(retry);
+		await waitFor(() => expect(gets).toBe(2));
+		expect(retry.getAttribute('aria-busy')).toBe('true');
+		expect(retry.getAttribute('aria-disabled')).toBe('true');
+		await fireEvent.click(retry);
+		await fireEvent.click(retry);
+		expect(gets).toBe(2);
+
+		release();
+		await waitFor(() => expect(retry.hasAttribute('aria-busy')).toBe(false));
+		// A fresh alert node: screen readers announce an inserted alert, not an unchanged one.
+		expect(screen.getByRole('alert')).not.toBe(first);
+		expect(screen.getByRole('alert').textContent).toContain('This location could not be refreshed.');
+		expect(document.activeElement).toBe(retry);
+	});
+
+	it('shows the full-page error only when the first load fails', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => Response.json({ error: 'internal' }, { status: 500 }))
+		);
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'settings', ontab: () => {} } });
+		await waitFor(() =>
+			expect(screen.getByRole('alert').textContent).toBe('This location could not be loaded.')
+		);
+		expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
+	});
+});
+
+// F-202, F-203: the Methods save sends the whole form, and a sub-resource save
+// refreshes the location. Neither may lose or hide unsaved Settings edits.
+describe('unsaved edits across tabs', () => {
+	const location = {
+		id: 'L1',
+		name: 'Frankfurt',
+		geo_label: 'Frankfurt, DE',
+		map_query: null,
+		facility: null,
+		facility_url: null,
+		kind: 'local',
+		data_plane_origin: null,
+		asn: null,
+		offered_methods: ['ping', 'mtr'],
+		created_at: 0,
+		last_seen: null,
+		status: 'online',
+		test_ips: [{ id: 'ip1', label: 'Probe', address: '203.0.113.10', family: 'v4' }],
+		iperf: [],
+		files: []
 	};
-}
+	const TABS: Record<string, string> = { settings: 'Settings', methods: 'Methods', 'test-ips': 'Test IPs' };
+	let calls: string[] = [];
 
-async function fetchFixture(input: RequestInfo | URL, init?: RequestInit) {
-	const path = new URL(input.toString(), 'http://looking-glass.test').pathname;
-	const method = init?.method ?? 'GET';
-
-	if (method === 'GET' && path === '/api/admin/locations') return response(adminLocationList());
-	if (method === 'GET' && path === '/api/locations') return response(publicLocationList());
-
-	const locationMatch = path.match(/^\/api\/admin\/locations\/([^/]+)$/);
-	if (locationMatch) {
-		const record = fixture.locations.get(locationMatch[1]);
-		if (method === 'GET') return record ? response(record) : response({}, 404);
-		if (method === 'PUT') {
-			if (!record) return response({}, 404);
-			const updated = replacementLocation(record, body(init));
-			if (!updated) return invalidInput('Complete location details are required.');
-			fixture.locations.set(updated.id, updated);
-			return response(updated);
-		}
-		if (method === 'DELETE') {
-			fixture.locations.delete(locationMatch[1]);
-			return new Response(null, { status: 204 });
-		}
+	/** Every GET after the first answers with `after`; DELETE and PUT succeed. */
+	function stub(after: typeof location = location) {
+		calls = [];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+				const method = init?.method ?? 'GET';
+				calls.push(`${method} ${String(input)}`);
+				if (method === 'DELETE') return new Response(null, { status: 204 });
+				const gets = calls.filter((call) => call.startsWith('GET')).length;
+				return Response.json(gets > 1 ? after : location);
+			})
+		);
 	}
 
-	if (method === 'POST' && path === '/api/admin/locations') {
-		const draft = body(init);
-		if (!draft.name) return invalidInput('Display name is required.');
-		const id = `location-${fixture.nextId++}`;
-		const record: LocationDetail = {
-			...location(),
-			id,
-			name: String(draft.name),
-			geo_label: String(draft.geo_label ?? ''),
-			kind: draft.kind === 'remote' ? 'remote' : 'local',
-			offered_methods: []
-		};
-		fixture.locations.set(id, record);
-		return response(record, 201);
+	async function gotoTab(id: string) {
+		await fireEvent.click(screen.getByRole('tab', { name: TABS[id] }));
+		await waitFor(() => expect(screen.getByRole('tab', { name: TABS[id], selected: true })).toBeTruthy());
+		await tick();
 	}
 
-	const childMatch = path.match(/^\/api\/admin\/locations\/([^/]+)\/(test-ips|iperf|files)$/);
-	if (method === 'POST' && childMatch) {
-		const record = fixture.locations.get(childMatch[1]);
-		if (!record) return response({}, 404);
-		const id = `${childMatch[2]}-${fixture.nextId++}`;
-		const draft = body(init);
-		if (childMatch[2] === 'test-ips') {
-			const address = requiredString(draft, 'address');
-			const label = nullableString(draft, 'label');
-			if (!address || label === undefined || (draft.family !== 'v4' && draft.family !== 'v6')) {
-				return invalidInput('Complete Test IP details are required.');
-			}
-			const item: TestIp = {
-				id,
-				location_id: record.id,
-				address,
-				family: draft.family,
-				label
-			};
-			record.test_ips.push(item);
-			return response(item, 201);
-		}
-		if (childMatch[2] === 'iperf') {
-			const item: IperfEndpoint = {
-				id,
-				location_id: record.id,
-				label: String(draft.label),
-				host: String(draft.host),
-				port: Number(draft.port),
-				cmd_incoming: String(draft.cmd_incoming),
-				cmd_outgoing: String(draft.cmd_outgoing)
-			};
-			record.iperf.push(item);
-			return response(item, 201);
-		}
-		const item: TestFile = {
-			id,
-			location_id: record.id,
-			label: String(draft.label),
-			declared_size: String(draft.declared_size),
-			source_ref: String(draft.source_ref)
-		};
-		record.files.push(item);
-		return response(item, 201);
-	}
-
-	const childUpdateMatch = path.match(/^\/api\/admin\/(test-ips|iperf|files)\/([^/]+)$/);
-	if (childUpdateMatch) {
-		const key: 'test_ips' | 'iperf' | 'files' =
-			childUpdateMatch[1] === 'test-ips' ? 'test_ips' : childUpdateMatch[1] === 'iperf' ? 'iperf' : 'files';
-		const found = recordForChild(childUpdateMatch[2], key);
-		if (!found) return response({}, 404);
-		const [record, item] = found;
-		if (method === 'PUT') {
-			const draft = body(init);
-			if (key === 'test_ips') {
-				const address = requiredString(draft, 'address');
-				const label = nullableString(draft, 'label');
-				if (!address || label === undefined || (draft.family !== 'v4' && draft.family !== 'v6')) {
-					return invalidInput('Complete Test IP details are required.');
-				}
-				const updated: TestIp = {
-					id: item.id,
-					location_id: item.location_id,
-					family: draft.family,
-					address,
-					label
-				};
-				record.test_ips = record.test_ips.map((candidate) =>
-					candidate.id === item.id ? updated : candidate
-				);
-				return response(updated);
-			}
-			if (key === 'iperf') {
-				const label = requiredString(draft, 'label');
-				const host = requiredString(draft, 'host');
-				const cmdIncoming = requiredString(draft, 'cmd_incoming');
-				const cmdOutgoing = requiredString(draft, 'cmd_outgoing');
-				const port = typeof draft.port === 'number' ? draft.port : Number.NaN;
-				if (!label || !host || !cmdIncoming || !cmdOutgoing || !Number.isInteger(port) || port < 1) {
-					return invalidInput('Complete iperf details are required.');
-				}
-				const updated: IperfEndpoint = {
-					id: item.id,
-					location_id: item.location_id,
-					label,
-					host,
-					port,
-					cmd_incoming: cmdIncoming,
-					cmd_outgoing: cmdOutgoing
-				};
-				record.iperf = record.iperf.map((candidate) => (candidate.id === item.id ? updated : candidate));
-				return response(updated);
-			}
-			const label = requiredString(draft, 'label');
-			const declaredSize = requiredString(draft, 'declared_size');
-			const sourceRef = requiredString(draft, 'source_ref');
-			if (!label || !declaredSize || !sourceRef) return invalidInput('Complete file details are required.');
-			const updated: TestFile = {
-				id: item.id,
-				location_id: item.location_id,
-				label,
-				declared_size: declaredSize,
-				source_ref: sourceRef
-			};
-			record.files = record.files.map((candidate) => (candidate.id === item.id ? updated : candidate));
-			return response(updated);
-		}
-		if (method === 'DELETE') {
-			if (key === 'test_ips') record.test_ips = record.test_ips.filter((candidate) => candidate.id !== item.id);
-			else if (key === 'iperf') record.iperf = record.iperf.filter((candidate) => candidate.id !== item.id);
-			else record.files = record.files.filter((candidate) => candidate.id !== item.id);
-			return new Response(null, { status: 204 });
-		}
-	}
-
-	throw new Error(`unexpected fetch ${method} ${path}`);
-}
-
-async function publicLocations() {
-	const result = await fetchLocations();
-	if (!result.ok) throw new Error(result.message);
-	return result.data;
-}
-
-async function editor() {
-	render(LocationEditor, { locationId: 'fra', onclose: vi.fn() });
-	await screen.findByRole('heading', { name: 'Frankfurt' });
-	return userEvent.setup();
-}
-
-async function confirmEntryDelete() {
-	const dialog = await screen.findByRole('dialog', { name: 'Delete this entry?' });
-	await userEvent.setup().click(within(dialog).getByRole('button', { name: 'Delete' }));
-}
-
-describe('admin location CRUD', () => {
-	beforeEach(() => {
-		fixture = { locations: new Map([['fra', location()]]), nextId: 1 };
-		if (!HTMLDialogElement.prototype.showModal) {
-			HTMLDialogElement.prototype.showModal = function () {
-				this.open = true;
-			};
-			HTMLDialogElement.prototype.close = function () {
-				this.open = false;
-				this.dispatchEvent(new Event('close'));
-			};
-		}
-		vi.stubGlobal('fetch', vi.fn(fetchFixture));
+	afterEach(() => {
+		cleanup();
+		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
 	});
 
+	it('Save methods names the invalid ASN on Settings that blocks it', async () => {
+		stub();
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'settings', ontab: () => {} } });
+		const asn = await screen.findByLabelText(/ASN/);
+		await fireEvent.input(asn, { target: { value: 'abc' } });
+		await gotoTab('methods');
+		const save = await screen.findByRole('button', { name: 'Save methods' });
+		await fireEvent.click(screen.getByRole('checkbox', { name: 'bgp' }));
+
+		await fireEvent.submit(save.closest('form')!);
+		const alert = await within(save.closest('form')!).findByRole('alert');
+		expect(alert.textContent).toContain('Settings');
+		expect(alert.textContent).toContain(ASN_MESSAGE);
+		expect(calls.filter((call) => call.startsWith('PUT'))).toEqual([]);
+	});
+
+	it('a save takes the saved copy of every field, edited ones included', async () => {
+		// Central answers with its own copy (here a trimmed name): the form shows it.
+		stub({ ...location, name: 'Frankfurt Main' });
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'settings', ontab: () => {} } });
+		const name = (await screen.findByLabelText('Display name')) as HTMLInputElement;
+		await fireEvent.input(name, { target: { value: ' Frankfurt Main ' } });
+		await fireEvent.submit(name.closest('form')!);
+		await waitFor(() => expect(calls.filter((call) => call.startsWith('GET'))).toHaveLength(2));
+		await waitFor(() => expect(name.value).toBe('Frankfurt Main'));
+	});
+
+	it('a test IP delete refreshes only the fields left untouched', async () => {
+		// The refresh brings a new geo label and drops mtr; neither was edited here.
+		stub({ ...location, geo_label: 'Frankfurt am Main, DE', offered_methods: ['ping'] });
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'settings', ontab: () => {} } });
+		const name = (await screen.findByLabelText('Display name')) as HTMLInputElement;
+		await fireEvent.input(name, { target: { value: 'Unsaved name' } });
+		await gotoTab('methods');
+		await fireEvent.click(screen.getByRole('checkbox', { name: 'bgp' }));
+		await gotoTab('test-ips');
+		await fireEvent.click(await screen.findByRole('button', { name: 'Delete Probe' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+		await waitFor(() => expect(calls.filter((call) => call.startsWith('GET'))).toHaveLength(2));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		await gotoTab('methods');
+		const checked = (method: string) => (screen.getByRole('checkbox', { name: method }) as HTMLInputElement).checked;
+		expect(checked('bgp')).toBe(true);
+		expect(checked('ping')).toBe(true);
+		expect(checked('mtr')).toBe(false);
+		await gotoTab('settings');
+		expect((screen.getByLabelText('Display name') as HTMLInputElement).value).toBe('Unsaved name');
+		expect((screen.getByLabelText('Geographic label') as HTMLInputElement).value).toBe('Frankfurt am Main, DE');
+	});
+
+	it('a failed refresh after a test IP delete keeps the editor and its unsaved edits', async () => {
+		// F-353: the refresh GET hits a 502; the unsaved name must stay reachable.
+		let deleted = false;
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'DELETE') {
+					deleted = true;
+					return new Response(null, { status: 204 });
+				}
+				return deleted ? new Response('bad gateway', { status: 502 }) : Response.json(location);
+			})
+		);
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'settings', ontab: () => {} } });
+		const name = (await screen.findByLabelText('Display name')) as HTMLInputElement;
+		await fireEvent.input(name, { target: { value: 'Unsaved name' } });
+		await gotoTab('test-ips');
+		await fireEvent.click(await screen.findByRole('button', { name: 'Delete Probe' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+		await waitFor(() =>
+			expect(screen.getByText(/This location could not be refreshed\./)).toBeTruthy()
+		);
+		expect(screen.queryByText('This location could not be loaded.')).toBeNull();
+		expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+
+		await gotoTab('settings');
+		expect((screen.getByLabelText('Display name') as HTMLInputElement).value).toBe('Unsaved name');
+	});
+});
+
+// F-248: the tabs unmount the panel they leave, so a save in flight must be
+// remembered above the Test IPs section. Reopening the row after a tab switch
+// still shows the values being saved with Save busy, and a second Save sends
+// nothing that could revert the first.
+describe('a test IP save in flight across a tab switch', () => {
 	afterEach(() => {
 		cleanup();
 		vi.unstubAllGlobals();
 	});
 
-	it('rejects an invalid location without a public partial write', async () => {
-		fixture.locations.clear();
-		const user = userEvent.setup();
-		render(LocationsPage);
-		await screen.findByText('No locations yet — add your first.');
-		await user.click(screen.getAllByRole('button', { name: 'Add location' })[0]);
-		await user.click(screen.getByRole('button', { name: 'Create' }));
+	it('reopens the row on the values being saved and adopts that save', async () => {
+		const location = {
+			id: 'L1',
+			name: 'Frankfurt',
+			geo_label: 'F',
+			map_query: null,
+			facility: null,
+			facility_url: null,
+			kind: 'local',
+			data_plane_origin: null,
+			asn: null,
+			offered_methods: ['ping'],
+			created_at: 0,
+			last_seen: null,
+			status: 'online',
+			test_ips: [{ id: 'ip-f248', location_id: 'L1', label: 'Probe', address: '198.51.100.1', family: 'v4' }],
+			iperf: [],
+			files: []
+		};
+		const puts: string[] = [];
+		let release = () => {};
+		const held = new Promise<void>((resolve) => (release = resolve));
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'PUT') {
+					puts.push(JSON.parse(String(init.body)).address);
+					await held;
+					return Response.json({});
+				}
+				return Response.json(location);
+			})
+		);
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'test-ips', ontab: () => {} } });
+		const tab = async (name: string) => {
+			await fireEvent.click(screen.getByRole('tab', { name }));
+			await waitFor(() => expect(screen.getByRole('tab', { name, selected: true })).toBeTruthy());
+			await tick();
+		};
 
-		expect((await screen.findByRole('alert')).textContent).toContain('Display name is required.');
-		expect(await publicLocations()).toEqual([]);
+		await fireEvent.click(await screen.findByRole('button', { name: 'Edit Probe' }));
+		const first = (await screen.findByLabelText('IP address')) as HTMLInputElement;
+		await fireEvent.input(first, { target: { value: '198.51.100.77' } });
+		await fireEvent.submit(first.closest('form')!);
+		await waitFor(() => expect(puts).toEqual(['198.51.100.77']));
+		await fireEvent.click(screen.getByRole('button', { name: 'Close dialog' }));
+		await waitFor(() => expect(first.closest('[role="dialog"]')?.getAttribute('data-state')).toBe('closed'));
+
+		await tab('Methods');
+		// The Test IPs panel, and its section with it, is gone from the DOM.
+		await waitFor(() => expect(document.querySelector('[aria-label="Edit Probe"]')).toBeNull());
+		await tab('Test IPs');
+
+		await fireEvent.click(await screen.findByRole('button', { name: 'Edit Probe' }));
+		const reopened = (await screen.findByLabelText('IP address')) as HTMLInputElement;
+		await tick();
+		const form = reopened.closest('form')!;
+		expect(reopened.value).toBe('198.51.100.77');
+		expect(form.getAttribute('aria-busy')).toBe('true');
+		await fireEvent.submit(form);
+		await tick();
+		expect(puts).toEqual(['198.51.100.77']);
+
+		release();
+		await waitFor(() => expect(form.getAttribute('aria-busy')).toBeNull());
+		expect(reopened.value).toBe('198.51.100.77');
+		expect(puts).toEqual(['198.51.100.77']);
+	});
+});
+
+// F-284: a 2xx save whose body is not JSON (a proxy page, a truncated body)
+// is a failed request; request() settles it as one instead of rejecting. The
+// form, or the one that adopted the save after a tab switch, must leave busy
+// and say so, and the row must not stay remembered as in flight: reopening it
+// is editable and a retry is sent. Soft checks, so a failure reports every
+// symptom.
+describe('a test IP save whose response cannot be parsed', () => {
+	const location = {
+		id: 'L1',
+		name: 'Frankfurt',
+		geo_label: 'F',
+		map_query: null,
+		facility: null,
+		facility_url: null,
+		kind: 'local',
+		data_plane_origin: null,
+		asn: null,
+		offered_methods: ['ping'],
+		created_at: 0,
+		last_seen: null,
+		status: 'online',
+		test_ips: [{ id: 'ip-f284', location_id: 'L1', label: 'Probe', address: '198.51.100.1', family: 'v4' }],
+		iperf: [],
+		files: []
+	};
+	const message = 'The request could not be completed.';
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+	let puts: string[];
+	let hold: Promise<void>;
+	let unhandled: unknown[];
+	const onUnhandled = (reason: unknown) => unhandled.push(reason);
+
+	beforeEach(() => {
+		puts = [];
+		hold = Promise.resolve();
+		unhandled = [];
+		process.on('unhandledRejection', onUnhandled);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+				if (init?.method === 'PUT') {
+					puts.push(JSON.parse(String(init.body)).address);
+					await hold;
+					return new Response('<html>proxy</html>', { status: 200, headers: { 'content-type': 'text/html' } });
+				}
+				return Response.json(location);
+			})
+		);
+		render(LocationEditor, { props: { locationId: 'L1', tab: 'test-ips', ontab: () => {} } });
 	});
 
-	it('rejects a partial location update without changing public data', async () => {
-		const before = await publicLocations();
-		const result = await fetch('/api/admin/locations/fra', {
-			method: 'PUT',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ name: 'Patch' })
-		});
-
-		expect(result.status).toBe(422);
-		expect(await result.json()).toMatchObject({ error: 'invalid_input' });
-		expect(await publicLocations()).toEqual(before);
+	afterEach(() => {
+		process.off('unhandledRejection', onUnhandled);
+		cleanup();
+		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
 	});
 
-	it('rejects a Test IP without a family before writing public data', async () => {
-		const result = await fetch('/api/admin/locations/fra/test-ips', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ address: '203.0.113.9', label: 'edge' })
-		});
+	const tab = async (name: string) => {
+		await fireEvent.click(screen.getByRole('tab', { name }));
+		await waitFor(() => expect(screen.getByRole('tab', { name, selected: true })).toBeTruthy());
+		await tick();
+	};
+	const openProbe = async () => {
+		await fireEvent.click(await screen.findByRole('button', { name: 'Edit Probe' }));
+		return ((await screen.findByLabelText('IP address')) as HTMLInputElement).closest('form')!;
+	};
+	const closeAndSwitchTabs = async (form: HTMLFormElement) => {
+		await fireEvent.click(screen.getByRole('button', { name: 'Close dialog' }));
+		await waitFor(() => expect(form.closest('[role="dialog"]')?.getAttribute('data-state')).toBe('closed'));
+		await tab('Methods');
+		await waitFor(() => expect(document.querySelector('[aria-label="Edit Probe"]')).toBeNull());
+		await tab('Test IPs');
+	};
+	const saveProbe = async (form: HTMLFormElement) => {
+		await fireEvent.input(within(form).getByLabelText('IP address'), { target: { value: '198.51.100.77' } });
+		await fireEvent.submit(form);
+		await waitFor(() => expect(puts).toHaveLength(1));
+	};
 
-		expect(result.status).toBe(422);
-		expect(await result.json()).toMatchObject({ error: 'invalid_input' });
-		expect((await publicLocations())[0].test_ips).toEqual([]);
+	it('leaves busy, shows the error and lets the row be saved again', async () => {
+		const errors = vi.spyOn(toast, 'error');
+		const form = await openProbe();
+		await saveProbe(form);
+		await settle();
+		expect.soft(form.getAttribute('aria-busy'), 'busy after the failed save').toBeNull();
+		expect.soft(within(form).queryByRole('alert')?.textContent, 'error in the form').toBe(message);
+		expect.soft(errors, 'error toast').toHaveBeenCalledWith(message);
+
+		await closeAndSwitchTabs(form);
+		const reopened = await openProbe();
+		await settle();
+		expect.soft(reopened.getAttribute('aria-busy'), 'busy after a tab switch and reopen').toBeNull();
+		expect.soft((within(reopened).getByLabelText('IP address') as HTMLInputElement).value, 'reopen shows the stored address').toBe('198.51.100.1');
+		expect.soft(within(reopened).queryByRole('alert'), 'no stale error after reopen').toBeNull();
+		await fireEvent.submit(reopened);
+		await settle();
+		expect.soft(puts, 'the retry sends a request').toHaveLength(2);
+		expect.soft(unhandled, 'unhandled rejections').toEqual([]);
 	});
 
-	it('adds, edits, and deletes Test IPs in public data', async () => {
-		const user = await editor();
-		await user.click(screen.getByRole('tab', { name: 'Test IPs' }));
-		await user.click(screen.getByRole('button', { name: 'Add IP' }));
-		await user.type(screen.getByLabelText('Address'), '203.0.113.9');
-		await user.type(screen.getByLabelText('Label (optional)'), 'edge');
-		await user.click(screen.getByRole('button', { name: 'Save' }));
+	it('a form that adopted the save leaves busy with the error', async () => {
+		let release = () => {};
+		hold = new Promise<void>((resolve) => (release = resolve));
+		const form = await openProbe();
+		await saveProbe(form);
+		await closeAndSwitchTabs(form);
+		const adopted = await openProbe();
+		expect(adopted.getAttribute('aria-busy')).toBe('true');
 
-		await screen.findByText('203.0.113.9 · v4 · edge');
-		expect((await publicLocations())[0].test_ips).toMatchObject([
-			{ family: 'v4', address: '203.0.113.9', label: 'edge' }
-		]);
-		await user.click(screen.getByRole('button', { name: 'Edit Test IP addresses' }));
-		await user.clear(screen.getByLabelText('Address'));
-		await user.type(screen.getByLabelText('Address'), '198.51.100.7');
-		await user.click(screen.getByRole('button', { name: 'Save' }));
-
-		await screen.findByText('198.51.100.7 · v4 · edge');
-		expect((await publicLocations())[0].test_ips).toMatchObject([
-			{ family: 'v4', address: '198.51.100.7', label: 'edge' }
-		]);
-		await user.click(screen.getByRole('button', { name: 'Delete Test IP addresses' }));
-		await confirmEntryDelete();
-		await screen.findByText('Nothing here yet.');
-		expect((await publicLocations())[0].test_ips).toEqual([]);
-	});
-
-	it('adds, edits, and deletes iperf endpoints in public data', async () => {
-		const user = await editor();
-		await user.click(screen.getByRole('tab', { name: 'iperf' }));
-		await user.click(screen.getByRole('button', { name: 'Add endpoint' }));
-		await user.type(screen.getByLabelText('Label'), 'Frankfurt 10G');
-		await user.type(screen.getByLabelText('Host'), 'speed.example.test');
-		await user.type(screen.getByLabelText('Port'), '5201');
-		await user.type(screen.getByLabelText('Incoming command'), 'iperf3 -c speed.example.test');
-		await user.type(screen.getByLabelText('Outgoing command'), 'iperf3 -c speed.example.test -R');
-		await user.click(screen.getByRole('button', { name: 'Save' }));
-
-		await screen.findByText('Frankfurt 10G · speed.example.test:5201');
-		expect((await publicLocations())[0].iperf).toMatchObject([
-			{
-				label: 'Frankfurt 10G',
-				host: 'speed.example.test',
-				port: 5201,
-				cmd_incoming: 'iperf3 -c speed.example.test',
-				cmd_outgoing: 'iperf3 -c speed.example.test -R'
-			}
-		]);
-		await user.click(screen.getByRole('button', { name: 'Edit iperf endpoints' }));
-		await user.clear(screen.getByLabelText('Host'));
-		await user.type(screen.getByLabelText('Host'), 'iperf.example.test');
-		await user.click(screen.getByRole('button', { name: 'Save' }));
-
-		await screen.findByText('Frankfurt 10G · iperf.example.test:5201');
-		expect((await publicLocations())[0].iperf).toMatchObject([
-			{
-				label: 'Frankfurt 10G',
-				host: 'iperf.example.test',
-				port: 5201,
-				cmd_incoming: 'iperf3 -c speed.example.test',
-				cmd_outgoing: 'iperf3 -c speed.example.test -R'
-			}
-		]);
-		await user.click(screen.getByRole('button', { name: 'Delete iperf endpoints' }));
-		await confirmEntryDelete();
-		await screen.findByText('Nothing here yet.');
-		expect((await publicLocations())[0].iperf).toEqual([]);
-	});
-
-	it('adds, edits, and deletes downloadable files in public data', async () => {
-		const user = await editor();
-		await user.click(screen.getByRole('tab', { name: 'Files' }));
-		await user.click(screen.getByRole('button', { name: 'Add file' }));
-		await user.type(screen.getByLabelText('Label'), '1 GB');
-		await user.type(screen.getByLabelText('Declared size'), '1 GB');
-		await user.type(screen.getByLabelText('Source on node'), '/files/1g.bin');
-		await user.click(screen.getByRole('button', { name: 'Save' }));
-
-		await screen.findByText('1 GB · 1 GB');
-		expect((await publicLocations())[0].files).toMatchObject([
-			{ label: '1 GB', declared_size: '1 GB', source_ref: '/files/1g.bin' }
-		]);
-		await user.click(screen.getByRole('button', { name: 'Edit Downloadable test files' }));
-		await user.clear(screen.getByLabelText('Declared size'));
-		await user.type(screen.getByLabelText('Declared size'), '1024 MB');
-		await user.click(screen.getByRole('button', { name: 'Save' }));
-
-		await screen.findByText('1 GB · 1024 MB');
-		expect((await publicLocations())[0].files).toMatchObject([
-			{ label: '1 GB', declared_size: '1024 MB', source_ref: '/files/1g.bin' }
-		]);
-		await user.click(screen.getByRole('button', { name: 'Delete Downloadable test files' }));
-		await confirmEntryDelete();
-		await screen.findByText('Nothing here yet.');
-		expect((await publicLocations())[0].files).toEqual([]);
-	});
-
-	it('removes a disabled offered method from the runnable public methods', async () => {
-		const user = await editor();
-		await user.click(screen.getByRole('tab', { name: 'Methods' }));
-		await user.click(screen.getByLabelText('ping'));
-		await user.click(screen.getByRole('button', { name: 'Save methods' }));
-
-		await waitFor(async () => expect((await publicLocations())[0].offered_methods).toEqual(['mtr']));
-		expect(runnableMethods((await publicLocations())[0])).toEqual([{ value: 'mtr', label: 'MTR' }]);
-	});
-
-	it('gives every offered method a 44px touch target', async () => {
-		const user = await editor();
-		await user.click(screen.getByRole('tab', { name: 'Methods' }));
-		const panel = screen.getByRole('group', { name: 'Offered methods' });
-
-		for (const method of OFFERED_METHODS) {
-			const checkboxes = within(panel).getAllByRole('checkbox', { name: method });
-			expect(checkboxes).toHaveLength(1);
-			expect(checkboxes[0].closest('label')?.classList.contains('min-h-11')).toBe(true);
-		}
-		expect(within(panel).getAllByRole('checkbox')).toHaveLength(OFFERED_METHODS.length);
-	});
-
-	it('removes a confirmed location and its children from public data', async () => {
-		const record = fixture.locations.get('fra')!;
-		fixture.locations.set('offline', {
-			...location(),
-			id: 'offline',
-			name: 'Offline sibling',
-			kind: 'remote',
-			status: 'offline'
-		});
-		record.test_ips.push({ id: 'ip-1', location_id: 'fra', address: '203.0.113.9', family: 'v4', label: null });
-		record.iperf.push({
-			id: 'iperf-1',
-			location_id: 'fra',
-			label: 'Frankfurt',
-			host: 'iperf.example.test',
-			port: 5201,
-			cmd_incoming: 'iperf3 -c iperf.example.test',
-			cmd_outgoing: 'iperf3 -c iperf.example.test -R'
-		});
-		record.files.push({
-			id: 'file-1',
-			location_id: 'fra',
-			label: '1 GB',
-			declared_size: '1 GB',
-			source_ref: '/files/1g.bin'
-		});
-		const beforeDelete = await publicLocations();
-		expect(beforeDelete.map((location) => location.id)).toEqual(['fra']);
-		expect(beforeDelete).toMatchObject([
-			{
-				test_ips: [{ address: '203.0.113.9' }],
-				iperf: [{ host: 'iperf.example.test' }],
-				files: [{ source_ref: '/files/1g.bin' }]
-			}
-		]);
-		const user = userEvent.setup();
-		render(LocationsPage);
-		await screen.findByText('Frankfurt');
-		await user.click(screen.getByRole('button', { name: 'Delete Frankfurt' }));
-		const dialog = await screen.findByRole('dialog', { name: 'Delete this location?' });
-		await user.click(within(dialog).getByRole('button', { name: 'Delete location' }));
-
-		await screen.findByText('Offline sibling');
-		expect(await publicLocations()).toEqual([]);
+		release();
+		await settle();
+		expect.soft(adopted.getAttribute('aria-busy'), 'adopting form busy after the failed save').toBeNull();
+		expect.soft(within(adopted).queryByRole('alert')?.textContent, 'error in the adopting form').toBe(message);
+		await fireEvent.submit(adopted);
+		await settle();
+		expect.soft(puts, 'the retry sends a request').toHaveLength(2);
+		expect.soft(unhandled, 'unhandled rejections').toEqual([]);
 	});
 });
