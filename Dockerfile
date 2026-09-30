@@ -35,13 +35,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=backend /app/target/release/central /usr/local/bin/central
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/looking-glass/
+# release.yml fills these with the tag's asset URLs and README pins; a plain
+# `docker build` leaves them empty, so central refuses to hand out install commands.
+ARG LG_AGENT_URL= \
+    LG_AGENT_SHA256= \
+    LG_AGENT_INSTALL_SCRIPT_URL= \
+    LG_AGENT_INSTALL_SCRIPT_SHA256=
 ENV PORT=8080 \
     LG_DB_PATH=/data/lookingglass.redb \
-    LG_FILES_DIR=/data/files
-EXPOSE 8080
+    LG_FILES_DIR=/data/files \
+    LG_AGENT_URL=$LG_AGENT_URL \
+    LG_AGENT_SHA256=$LG_AGENT_SHA256 \
+    LG_AGENT_INSTALL_SCRIPT_URL=$LG_AGENT_INSTALL_SCRIPT_URL \
+    LG_AGENT_INSTALL_SCRIPT_SHA256=$LG_AGENT_INSTALL_SCRIPT_SHA256
+EXPOSE 8080 8443
 USER lookingglass
 # No curl in the image: bash's /dev/tcp probes /health directly.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --start-interval=2s \
     CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/$PORT && printf "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && head -n1 <&3 | grep -q " 200 "'
 # tini is PID 1: it forwards `docker stop`'s SIGTERM to central (which shuts
 # down on it) and reaps any orphaned process a diagnostic tool leaves behind.

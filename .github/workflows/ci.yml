@@ -83,3 +83,18 @@ jobs:
         run: |
           docker build -t looking-glass:ci .
           docker run --rm --entrypoint cat looking-glass:ci /usr/share/doc/looking-glass/THIRD_PARTY_NOTICES.md > /dev/null
+
+      - name: Agent pins are empty by default and baked from build args
+        run: |
+          vars="LG_AGENT_URL LG_AGENT_SHA256 LG_AGENT_INSTALL_SCRIPT_URL LG_AGENT_INSTALL_SCRIPT_SHA256"
+          args=; for v in $vars; do args="$args --build-arg $v=ci-$v"; done
+          docker build -q -t looking-glass:ci-pins $args . > /dev/null
+          plain=$(docker inspect --format '{{json .Config.Env}}' looking-glass:ci)
+          pinned=$(docker inspect --format '{{json .Config.Env}}' looking-glass:ci-pins)
+          for v in $vars; do
+            grep -qF "\"$v=\"" <<<"$plain" || { echo "plain build: $v is not empty: $plain"; exit 1; }
+            grep -qF "\"$v=ci-$v\"" <<<"$pinned" || { echo "build arg $v not baked: $pinned"; exit 1; }
+          done
+
+      - name: Compose smoke test
+        run: bash scripts/test-compose.sh looking-glass:ci

@@ -29,6 +29,7 @@ tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring
 tokio-tungstenite = "0.29.0"
 futures-util = { version = "0.3.32", default-features = false, features = ["sink", "std"] }
 hyper-util = { version = "0.1.20", features = ["http1", "server", "service", "tokio"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem", "crypto"] }
 
 [dev-dependencies]
 shared = { path = "../shared" }

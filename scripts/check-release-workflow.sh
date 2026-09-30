@@ -143,6 +143,22 @@ def verify_run():
     )
 
 
+def pins_run():
+    # The verified pins, plus download URLs for this tag's assets, become the image's build args.
+    return verify_run() + (
+        'base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"\n'
+        "/usr/bin/printf '%s\\n' \\\n"
+        '  "agent_url=$base/lg-agent-x86_64-unknown-linux-gnu" \\\n'
+        '  "agent_sha256=$lg_agent_sha256" \\\n'
+        '  "installer_url=$base/install-agent.sh" \\\n'
+        '  "installer_sha256=$lg_installer_sha256" \\\n'
+        '  >> "$GITHUB_OUTPUT"\n'
+    )
+
+
+PIN_OUTPUTS = ("agent_url", "agent_sha256", "installer_url", "installer_sha256")
+
+
 def validate(document):
     root = mapping(document, "workflow mapping")
     expect(set(root), {"name", "on", "permissions", "concurrency", "env", "jobs"}, "root allowlist")
@@ -158,7 +174,8 @@ def validate(document):
     expect(set(jobs), {"prepare-release-assets", "release-assets", "image"}, "exact jobs")
 
     prepare = mapping(jobs["prepare-release-assets"], "prepare mapping")
-    expect(set(prepare), {"if", "runs-on", "permissions", "defaults", "env", "steps"}, "prepare allowlist")
+    expect(set(prepare), {"if", "runs-on", "outputs", "permissions", "defaults", "env", "steps"}, "prepare allowlist")
+    expect(prepare["outputs"], {name: f"${{{{ steps.pins.outputs.{name} }}}}" for name in PIN_OUTPUTS}, "prepare pin outputs")
     expect(prepare["if"], "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}", "prepare tag guard")
     expect(prepare["runs-on"], "ubuntu-latest", "prepare runner")
     expect(prepare["defaults"], {"run": {"shell": "/usr/bin/bash --noprofile --norc -e -o pipefail {0}"}}, "prepare shell")
@@ -172,8 +189,9 @@ def validate(document):
     expect(set(prepare_steps[1]), {"name", "run"}, "prepare builder")
     if "cargo build --locked --release --package agent" not in prepare_steps[1]["run"]:
         fail("prepare agent build")
-    expect(set(prepare_steps[2]), {"name", "run"}, "prepare verification")
-    expect(prepare_steps[2]["run"], verify_run(), "prepare strict README verification")
+    expect(set(prepare_steps[2]), {"name", "id", "run"}, "prepare verification")
+    expect(prepare_steps[2]["id"], "pins", "prepare verification id")
+    expect(prepare_steps[2]["run"], pins_run(), "prepare strict README verification")
     expect(pinned(prepare_steps[3], "Upload verified release assets", "actions/upload-artifact", "prepare artifact"), {
         "with": {
             "name": "release-assets",
@@ -204,8 +222,29 @@ def validate(document):
     }, "publisher strict verification and fixed gh release")
 
     image = mapping(jobs["image"], "image mapping")
-    expect(set(image), {"runs-on", "permissions", "steps"}, "image allowlist")
+    expect(set(image), {"needs", "if", "runs-on", "permissions", "steps"}, "image allowlist")
     expect(image["permissions"], {"contents": "read", "packages": "write"}, "image permissions")
+    # The image carries the pins, so it is never built for a tag whose assets failed verification.
+    expect(image["needs"], "prepare-release-assets", "image dependencies")
+    expect(image["if"], "${{ !cancelled() && (needs.prepare-release-assets.result == 'success'"
+           " || github.event_name == 'workflow_dispatch') }}", "image verification guard")
+    builders = [step for step in image["steps"] if step.get("uses", "").startswith("docker/build-push-action@")]
+    if len(builders) != 1 or not isinstance(builders[0].get("with"), dict):
+        fail("image build step")
+    expect(builders[0]["with"].get("build-args"), "".join(
+        f"{arg}=${{{{ needs.prepare-release-assets.outputs.{name} }}}}\n"
+        for arg, name in zip(
+            ("LG_AGENT_URL", "LG_AGENT_SHA256", "LG_AGENT_INSTALL_SCRIPT_URL", "LG_AGENT_INSTALL_SCRIPT_SHA256"),
+            PIN_OUTPUTS,
+        )
+    ), "image pin build args")
+    # A manual run skips the pin job, so on a tag ref it must never push over the release tags.
+    push_guard = ("${{ github.event_name != 'workflow_dispatch'"
+                  " || (inputs.push == true && !startsWith(github.ref, 'refs/tags/')) }}")
+    expect(builders[0]["with"].get("push"), push_guard, "image push guard")
+    logins = [step for step in image["steps"] if step.get("uses", "").startswith("docker/login-action@")]
+    if len(logins) != 1 or logins[0].get("if") != push_guard:
+        fail("image login guard")
 
     for job_name, job in jobs.items():
         for step in job["steps"]:
@@ -214,7 +253,8 @@ def validate(document):
         for value in scalar_values(job):
             if "GITHUB_ENV" in value or "PATH" in value:
                 fail("environment-file or PATH mutation")
-            if job_name != "release-assets" and ("gh release" in value or "/releases" in value):
+            # Only the exact pins script may name a release download URL outside the publisher.
+            if job_name != "release-assets" and ("gh release" in value or ("/releases" in value and value != pins_run())):
                 fail("alternate publication path")
 
 
@@ -264,6 +304,17 @@ try:
         "altered-default-shell": lambda value: value["jobs"]["prepare-release-assets"].update({"defaults": {"run": {"shell": "bash {0}"}}}),
         "tag-pinned-checkout": lambda value: value["jobs"]["release-assets"]["steps"][0].update({"uses": "actions/checkout@v4"}),
         "tag-pinned-image-action": lambda value: value["jobs"]["image"]["steps"][0].update({"uses": "actions/checkout@v4"}),
+        "image-before-verification": lambda value: value["jobs"]["image"].pop("needs"),
+        "image-guard-bypass": lambda value: value["jobs"]["image"].update({"if": "${{ always() }}"}),
+        "image-unpinned-agent": lambda value: value["jobs"]["image"]["steps"][-1]["with"].update(
+            {"build-args": "LG_AGENT_URL=https://example.invalid/agent\n"}
+        ),
+        "manual-push-over-release-tag": lambda value: value["jobs"]["image"]["steps"][-1]["with"].update(
+            {"push": "${{ github.event_name != 'workflow_dispatch' || inputs.push == true }}"}
+        ),
+        "release-api-in-pins": lambda value: value["jobs"]["prepare-release-assets"]["steps"][2].update(
+            {"run": pins_run() + "/usr/bin/curl -X POST https://api.github.com/repos/x/y/releases\n"}
+        ),
         "notices-not-published": lambda value: value["jobs"]["release-assets"]["steps"][2].update(
             {"run": publish_run().replace(" THIRD_PARTY_NOTICES.md", "")}
         ),

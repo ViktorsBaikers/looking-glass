@@ -14,7 +14,7 @@ use redb::{Database, TableDefinition};
 use serde_json::{json, Value};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use central::AppState;
+use central::{AppState, EnrollConfig};
 use common::{
     assert_status, authed, json_body, login, secure_request, send, setup_and_login, temp_db_path,
     test_state, test_state_at, CENTRAL_URL, PASSWORD,
@@ -180,6 +180,49 @@ async fn creating_a_peer_returns_a_one_time_activation_link() {
         })
         .collect();
     assert!(usernames.contains(&("bob".to_string(), "pending".to_string())));
+}
+
+/// The activation URL an admin gets with only `vars` set among the central and
+/// tunnel URL/identity env. Only this binary's one env test calls it.
+async fn activation_url_with_env(vars: &[(&str, &str)]) -> String {
+    for name in [
+        "LG_CENTRAL_URL",
+        "LG_CENTRAL_CERT",
+        "LG_CENTRAL_IDENTITY",
+        "LG_TUNNEL_URL",
+    ] {
+        std::env::remove_var(name);
+    }
+    for (name, value) in vars {
+        std::env::set_var(name, value);
+    }
+    let config = EnrollConfig::from_env(Some("tunnel-pin")).expect("valid enrollment config");
+    for (name, _) in vars {
+        std::env::remove_var(name);
+    }
+    let mut state = test_state();
+    state.enroll = config;
+    let cookie = setup_and_login(&state).await;
+    let link = create_pending(&state, &cookie, "bob").await;
+    link["activation_url"].as_str().unwrap().to_string()
+}
+
+// The tunnel port serves only agents, so with the tunnel default (no
+// LG_CENTRAL_*) invite links use the tunnel host on the default HTTPS port;
+// a configured LG_CENTRAL_URL still names the web origin.
+#[tokio::test]
+async fn activation_links_use_the_web_origin_not_the_tunnel_port() {
+    let tunnel = ("LG_TUNNEL_URL", "https://lg.example.net:8443");
+
+    let url = activation_url_with_env(&[tunnel]).await;
+    assert!(url.starts_with("https://lg.example.net/activate/"), "{url}");
+
+    let url =
+        activation_url_with_env(&[tunnel, ("LG_CENTRAL_URL", "https://api.central.example")]).await;
+    assert!(
+        url.starts_with("https://api.central.example/activate/"),
+        "{url}"
+    );
 }
 
 // Spec #1 activation happy path: GET reveals the username, POST sets the

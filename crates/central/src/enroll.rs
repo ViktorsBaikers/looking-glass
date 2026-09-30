@@ -12,9 +12,11 @@
 //!
 //! The agent verifies **central's** pinned identity at enrollment (AC35): the pin's
 //! origin is the fingerprint in the install command, checked agent-side against the
-//! identity central presents at the HTTPS API origin serving `/api/enroll` — no
-//! trust-on-first-use. The long-running tunnel is a separate Slice-8 listener; this
-//! slice defines the API identity central pins by and the token/credential exchange.
+//! identity central presents at the origin serving `/api/enroll` — no
+//! trust-on-first-use. With no `LG_CENTRAL_URL`, `LG_CENTRAL_CERT` or
+//! `LG_CENTRAL_IDENTITY` that origin is the tunnel listener, which serves
+//! `/api/enroll` too, and the pin is its certificate's; setting them keeps a
+//! separate HTTPS API origin and certificate.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -81,12 +83,11 @@ impl AppState {
 
 /// Central's API identity — the certificate an enrolling agent pins.
 /// Its [`Self::fingerprint`] (SHA-256 hex of the certificate's public key, so a
-/// renewal that keeps the key keeps it) is what the install command carries. In
-/// production it should be the DER end-entity certificate presented by the HTTPS
-/// API origin that serves `/api/enroll`, not the separate tunnel listener.
+/// renewal that keeps the key keeps it) is what the install command carries: the
+/// pin of the certificate presented by the origin that serves `/api/enroll`.
 pub struct CentralIdentity {
-    material: Vec<u8>,
-    /// Whether `material` is a DER certificate. The agent pins the certificate TLS
+    fingerprint: String,
+    /// Whether the pin comes from a certificate. The agent pins the certificate TLS
     /// presents, so any other material can never match.
     certificate: bool,
 }
@@ -100,12 +101,7 @@ impl CentralIdentity {
         if let Ok(cert_path) = std::env::var(CERT_ENV) {
             if !cert_path.is_empty() {
                 match load_end_entity_cert(&cert_path) {
-                    Ok(material) => {
-                        return Self {
-                            material,
-                            certificate: true,
-                        }
-                    }
+                    Ok(material) => return Self::from_material(material),
                     Err(error) => tracing::warn!(
                         %error,
                         "{CERT_ENV} could not be loaded; falling back to {ID_ENV} or ephemeral identity"
@@ -115,17 +111,17 @@ impl CentralIdentity {
         }
         match std::env::var(ID_ENV) {
             Ok(value) if !value.is_empty() => Self {
-                material: value.into_bytes(),
+                fingerprint: identity_pin(value.as_bytes()),
                 certificate: false,
             },
             _ => {
-                let material = random_hex(SECRET_BYTES).into_bytes();
+                let material = random_hex(SECRET_BYTES);
                 tracing::warn!(
                     "{CERT_ENV}/{ID_ENV} unset — using an ephemeral central API identity; install commands are \
                      refused until {CERT_ENV} names the certificate the HTTPS API presents."
                 );
                 Self {
-                    material,
+                    fingerprint: identity_pin(material.as_bytes()),
                     certificate: false,
                 }
             }
@@ -134,15 +130,21 @@ impl CentralIdentity {
 
     /// Identity from explicit DER certificate material — the seam tests use.
     pub fn from_material(material: Vec<u8>) -> Self {
+        Self::from_certificate_pin(identity_pin(&material))
+    }
+
+    /// Identity from the pin of a certificate central presents, such as the
+    /// tunnel listener's.
+    fn from_certificate_pin(fingerprint: String) -> Self {
         Self {
-            material,
+            fingerprint,
             certificate: true,
         }
     }
 
     /// The pin the install command embeds and the agent verifies: see [`identity_pin`].
     pub fn fingerprint(&self) -> String {
-        identity_pin(&self.material)
+        self.fingerprint.clone()
     }
 }
 
@@ -162,6 +164,9 @@ fn load_end_entity_cert(path: &str) -> std::io::Result<Vec<u8>> {
 #[derive(Clone)]
 pub struct EnrollConfig {
     pub central_url: Arc<str>,
+    /// The web origin admin activation links use: `central_url`, or with the
+    /// tunnel default, the tunnel host on the default HTTPS port.
+    pub web_url: Arc<str>,
     pub tunnel_url: Arc<str>,
     pub identity: Arc<CentralIdentity>,
     pub agent_url: Arc<str>,
@@ -174,9 +179,14 @@ pub struct EnrollConfig {
 }
 
 impl EnrollConfig {
-    pub fn from_env() -> Result<Self, String> {
-        let central_url =
-            std::env::var(URL_ENV).unwrap_or_else(|_| DEFAULT_CENTRAL_URL.to_string());
+    /// Read the enrollment config. `tunnel_pin` is the running tunnel listener's
+    /// pin. With it and none of `LG_CENTRAL_URL`, `LG_CENTRAL_CERT` or
+    /// `LG_CENTRAL_IDENTITY` set, agents enroll at the tunnel origin under the
+    /// tunnel pin; otherwise those variables apply as before.
+    pub fn from_env(tunnel_pin: Option<&str>) -> Result<Self, String> {
+        let unset = |name| std::env::var(name).map_or(true, |value| value.is_empty());
+        let tunnel_default =
+            tunnel_pin.filter(|_| unset(URL_ENV) && unset(CERT_ENV) && unset(ID_ENV));
         let tunnel_url =
             std::env::var(TUNNEL_URL_ENV).unwrap_or_else(|_| DEFAULT_TUNNEL_URL.to_string());
         if !is_tunnel_origin(&tunnel_url) {
@@ -184,21 +194,59 @@ impl EnrollConfig {
                 "{TUNNEL_URL_ENV} must be https://host:port with an explicit port and no bracketed IPv6 literal, got {tunnel_url:?}"
             ));
         }
+        let (central_url, web_url, identity) = match tunnel_default {
+            Some(pin) => {
+                tracing::info!(
+                    %tunnel_url,
+                    "{URL_ENV}/{CERT_ENV}/{ID_ENV} unset — agents enroll at the tunnel origin under its pin"
+                );
+                if unset(TUNNEL_URL_ENV) {
+                    tracing::warn!(
+                        "{TUNNEL_URL_ENV} unset — install commands point at {DEFAULT_TUNNEL_URL}, \
+                         which remote agents cannot reach; set {TUNNEL_URL_ENV} (or LG_DOMAIN with \
+                         Compose) to central's public name"
+                    );
+                }
+                // A valid tunnel URL is `https://host:port`, so this drops the port.
+                let host = tunnel_url
+                    .rsplit_once(':')
+                    .map_or(tunnel_url.as_str(), |(host, _)| host);
+                (
+                    tunnel_url.clone(),
+                    host.to_string(),
+                    CentralIdentity::from_certificate_pin(pin.to_string()),
+                )
+            }
+            None => {
+                let central_url =
+                    std::env::var(URL_ENV).unwrap_or_else(|_| DEFAULT_CENTRAL_URL.to_string());
+                (
+                    central_url.clone(),
+                    central_url,
+                    CentralIdentity::from_env_or_generate(),
+                )
+            }
+        };
         let agent_url = std::env::var(AGENT_URL_ENV).unwrap_or_default();
         let agent_sha256 = std::env::var(AGENT_SHA_ENV).unwrap_or_default();
         let agent_install_script_url =
             std::env::var(AGENT_INSTALL_SCRIPT_URL_ENV).unwrap_or_default();
         let agent_install_script_sha256 =
             std::env::var(AGENT_INSTALL_SCRIPT_SHA_ENV).unwrap_or_default();
-        Ok(Self {
+        let config = Self {
             central_url: Arc::from(central_url.as_str()),
+            web_url: Arc::from(web_url.as_str()),
             tunnel_url: Arc::from(tunnel_url.as_str()),
-            identity: Arc::new(CentralIdentity::from_env_or_generate()),
+            identity: Arc::new(identity),
             agent_url: Arc::from(agent_url.as_str()),
             agent_sha256: Arc::from(agent_sha256.as_str()),
             agent_install_script_url: Arc::from(agent_install_script_url.as_str()),
             agent_install_script_sha256: Arc::from(agent_install_script_sha256.as_str()),
             tunnel_pin: None,
+        };
+        Ok(match tunnel_pin {
+            Some(pin) => config.with_tunnel_pin(pin),
+            None => config,
         })
     }
 
@@ -226,6 +274,7 @@ impl EnrollConfig {
         let identity = CentralIdentity::from_material(identity_material);
         Self {
             central_url: Arc::from(central_url),
+            web_url: Arc::from(central_url),
             tunnel_url: Arc::from("https://central.test:8443"),
             // A running tunnel listener whose key matches the enrollment pin.
             tunnel_pin: Some(Arc::from(identity.fingerprint())),
@@ -280,7 +329,7 @@ fn tunnel_unavailable() -> ApiError {
     ApiError::Coded(
         StatusCode::SERVICE_UNAVAILABLE,
         "tunnel_unavailable",
-        "Central's agent tunnel is not running, so an enrolled agent could never connect; the operator must set LG_TUNNEL_CERT and LG_TUNNEL_KEY to a loadable certificate and key.",
+        "Central's agent tunnel is not running, so an enrolled agent could never connect. Either central's own tunnel.crt and tunnel.key beside its database are missing or damaged (repair or remove them; see central's log), or the configured LG_TUNNEL_CERT and LG_TUNNEL_KEY do not load.",
     )
 }
 
@@ -300,7 +349,12 @@ fn identity_mismatch() -> ApiError {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/admin/locations/{id}/enroll", post(create_enrollment))
-        .route("/api/enroll", post(enroll_agent))
+        .merge(agent_route())
+}
+
+/// The agent-facing enroll endpoint alone, which the tunnel listener serves too.
+pub(crate) fn agent_route() -> Router<AppState> {
+    Router::new().route("/api/enroll", post(enroll_agent))
 }
 
 /// What the admin sees after minting a token: the no-edit install command, the raw
@@ -625,7 +679,7 @@ mod tests {
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
     use axum::Json;
-    use shared::protocol::{sha256_hex, EnrollRequest, PROTOCOL_VERSION};
+    use shared::protocol::{identity_pin, sha256_hex, EnrollRequest, PROTOCOL_VERSION};
 
     use super::{create_enrollment, enroll_agent, CentralIdentity, DEFAULT_CENTRAL_URL};
     use crate::auth::{random_id, AdminSession, ClientContext};
@@ -889,12 +943,12 @@ mod tests {
         ] {
             std::env::set_var("LG_TUNNEL_URL", tunnel_url);
             assert!(
-                EnrollConfig::from_env().is_err(),
+                EnrollConfig::from_env(None).is_err(),
                 "central must refuse LG_TUNNEL_URL={tunnel_url:?} at startup"
             );
         }
         std::env::set_var("LG_TUNNEL_URL", "https://tunnel.central.example:8443");
-        let accepted = EnrollConfig::from_env();
+        let accepted = EnrollConfig::from_env(None);
         std::env::remove_var("LG_TUNNEL_URL");
         assert!(accepted.is_ok(), "an explicit host:port tunnel URL starts");
     }
@@ -984,7 +1038,7 @@ mod tests {
             std::env::remove_var("LG_CENTRAL_CERT");
             identity
         };
-        assert_eq!(identity.material, der);
+        assert_eq!(identity.fingerprint(), identity_pin(der));
 
         let mut state = test_state();
         state.enroll.tunnel_pin = Some(Arc::from(identity.fingerprint()));

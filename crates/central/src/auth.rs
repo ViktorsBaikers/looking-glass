@@ -126,10 +126,16 @@ pub(crate) fn random_id() -> String {
     random_hex(16)
 }
 
+/// Marks a request that reached central over its own TLS listener (the tunnel
+/// port), so the transport is secure with no proxy attestation. Only that
+/// listener inserts it; nothing a client sends to the web port can.
+#[derive(Clone, Copy)]
+pub(crate) struct DirectTls;
+
 /// The trusted-proxy-derived client identity plus whether the external leg was
 /// TLS. Extraction never fails; an absent peer or untrusted forwarded data
 /// simply yields `ip: None` / `secure: false`, which the handlers treat as
-/// fail-closed.
+/// fail-closed. A [`DirectTls`] request is secure and its peer is the client.
 pub struct ClientContext {
     pub ip: Option<IpAddr>,
     pub secure: bool,
@@ -146,6 +152,12 @@ impl FromRequestParts<AppState> for ClientContext {
             .extensions
             .get::<ConnectInfo<SocketAddr>>()
             .map(|conn| conn.0.ip());
+        if parts.extensions.get::<DirectTls>().is_some() {
+            return Ok(Self {
+                ip: peer,
+                secure: true,
+            });
+        }
         Ok(Self {
             ip: state.transport.client_ip(peer, &parts.headers),
             secure: state.transport.tls_attested(peer, &parts.headers),

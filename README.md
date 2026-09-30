@@ -12,42 +12,88 @@ console and agent enrollment. Light and dark screenshots of every screen are und
 
 ## Install the central container
 
-The central app needs one writable volume for the redb database, local test files,
-and the generated first-run setup token. It also needs a publicly reachable HTTPS
-name for the admin API and a direct HTTPS listener for the outbound agent tunnel.
+The quickest setup is Docker Compose. `compose.yaml` runs central behind a bundled
+[Caddy](https://caddyserver.com) that serves the web UI over HTTPS. You need a host
+with Docker Compose and free ports 80, 443 and 8443.
 
-Prepare a certificate whose subject/SAN covers the public name you will use below.
-For a quick local smoke test, replace `lg.example.net` with the name in your test
-certificate and generate a test pair with OpenSSL:
+Get `compose.yaml`:
 
 ```sh
-mkdir -p tls
-openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 30 \
-  -subj '/CN=lg.example.net' \
-  -addext 'subjectAltName=DNS:lg.example.net' \
-  -keyout tls/looking-glass.key -out tls/looking-glass.crt
-chmod 600 tls/looking-glass.key
-sudo chown 999:999 tls/looking-glass.key
+mkdir looking-glass && cd looking-glass
+curl -fsSLO https://raw.githubusercontent.com/ViktorsBaikers/looking-glass/main/compose.yaml
 ```
 
-The published immutable `v0.1.3` image is available:
+The Compose setup needs the first release after `v0.1.3`, and `latest` points at
+`v0.1.3` until then. Meanwhile, build the image yourself, as in
+[Run a build of your own tree](#run-a-build-of-your-own-tree).
+
+Point a public DNS name at the host, open TCP 80, 443 and 8443 to the internet, and
+put the name in `.env` beside `compose.yaml`:
 
 ```sh
-LG_IMAGE=ghcr.io/viktorsbaikers/looking-glass:v0.1.3
-docker pull "$LG_IMAGE"
+echo 'LG_DOMAIN=lg.example.net' > .env
 ```
 
-For a local source validation, build the same deployment from a checked-out tree:
+Without `.env`, `LG_DOMAIN` is `localhost`. Caddy then signs the UI's certificate
+with its own internal CA and the browser warns about it: enough to try the UI on
+your own machine, but remote agents need a name they can reach.
+
+Start the stack and read the one-time setup token:
 
 ```sh
-docker build -t looking-glass:local .
-LG_IMAGE=looking-glass:local
+docker compose up -d
+docker compose exec central cat /data/setup-token
+```
+
+Open `https://lg.example.net` (your `LG_DOMAIN`), enter the token on the installer
+page, create the first administrator, then remove or restrict access to the token
+file.
+
+What the stack does:
+
+- Caddy gets a Let's Encrypt certificate for `LG_DOMAIN` on ports 80 and 443 and
+  forwards to central's plain-HTTP port 8080, which is not published. Central trusts
+  `X-Forwarded-*` headers from Caddy's fixed address only.
+- On first start, central generates its own agent tunnel key and certificate and
+  keeps them in the `central-data` volume beside the database.
+- Agents enroll and connect on port 8443, straight to central's TLS, and pin that
+  key. Caddy's certificate can renew as often as it likes without touching them.
+
+Back up the `central-data` volume (see [Upgrade and rollback](#upgrade-and-rollback)).
+It holds the database and the tunnel key. Losing it, for example with
+`docker compose down -v`, means starting over, and every agent has to be re-enrolled.
+If the database survives but both `tunnel.crt` and `tunnel.key` are gone, central
+generates a new pair and logs an error with the number of enrolled agents that must
+re-enroll. If only one of the two files is left, central leaves it alone and keeps the
+agent tunnel off until you restore the missing file or remove the one left.
+
+The Compose network is IPv4-only. On a host with IPv6, Docker still publishes 80, 443
+and 8443 on the host's IPv6 addresses, and relays each IPv6 visitor to the container
+from the network gateway. Central then sees every IPv6 visitor as one client: they
+share one run budget, and five failed logins from any of them lock every IPv6
+administrator out for up to a minute. Agents that reach 8443 over IPv6 share the
+tunnel port's per-address connection limit the same way. To keep a key per IPv6
+visitor, run central without Compose behind a host-networked proxy (see
+[Advanced](#advanced-central-without-compose)).
+
+### Run a build of your own tree
+
+To run a checkout of this repository instead of the published image, build it under
+the image name `compose.yaml` uses, then start the stack as usual. A later
+`docker compose pull` replaces it with the published image.
+
+```sh
+docker build -t ghcr.io/viktorsbaikers/looking-glass:latest .
+docker compose up -d
 ```
 
 A central built from source needs an agent and installer built from the same tree.
-Central hands its agents a public-key (SPKI) pin, and the published `v0.1.3` agent
-checks a whole-certificate pin, so every enrollment from a source-built central with
-the `v0.1.3` assets fails. Build both from the tree, the way `release.yml` does:
+A release image carries the URLs and SHA-256 pins of its own release's installer and
+agent; a source build carries none, so central refuses to generate install commands
+until you set them. The published `v0.1.3` agent also checks a whole-certificate pin,
+while central hands its agents a public-key (SPKI) pin, so every enrollment from a
+source-built central with the `v0.1.3` assets fails. Build both from the tree, the
+way `release.yml` does:
 
 ```sh
 mkdir -p assets
@@ -59,52 +105,66 @@ sha256sum assets/install-agent.sh assets/lg-agent
 
 The agent is built for the Docker host's CPU; add `--platform linux/amd64` (or
 `linux/arm64`) to `docker run` to match the node. Serve both files over HTTPS from a
-host the node can reach, and set `LG_INSTALLER_URL`, `LG_INSTALLER_SHA256`,
-`LG_AGENT_URL` and `LG_AGENT_SHA256` in the start command below to those URLs and
-hashes.
+host the node can reach, and give central their URLs and hashes in a
+`compose.override.yaml` beside `compose.yaml`, which Compose merges by itself:
 
-Choose one image path above, then set `LG_PUBLIC_NAME` to the public DNS name covered
-by your certificate and `LG_TRUSTED_PROXIES` to the real proxy-to-container source IP.
-The URL/SHA-256 values below identify the published `v0.1.3` release assets. They
-pair with the published `v0.1.3` image only. The following is the complete central
-start command:
+```yaml
+services:
+  central:
+    environment:
+      LG_AGENT_INSTALL_SCRIPT_URL: https://files.example.net/install-agent.sh
+      LG_AGENT_INSTALL_SCRIPT_SHA256: <sha256 of install-agent.sh>
+      LG_AGENT_URL: https://files.example.net/lg-agent
+      LG_AGENT_SHA256: <sha256 of lg-agent>
+```
+
+With `docker run` (below), pass the same four variables as `-e` options.
+
+### Advanced: central without Compose
+
+To run central alone behind a TLS proxy you already have, pull the published image
+(or build it from a checkout, as above):
+
+```sh
+docker pull ghcr.io/viktorsbaikers/looking-glass:latest
+```
+
+Then set `LG_PUBLIC_NAME` to the public DNS name agents use to reach this host and
+`LG_TRUSTED_PROXIES` to the real proxy-to-container source IP. The following is the
+complete central start command:
 
 ```sh
 LG_PUBLIC_NAME=lg.example.net
 # Set this to the source IP the container sees for the TLS-terminating proxy.
 LG_TRUSTED_PROXIES=SET_THE_REAL_PROXY_TO_CONTAINER_SOURCE_IP
-LG_INSTALLER_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/install-agent.sh
-LG_INSTALLER_SHA256=d824313a58f19e937f5365b9f5db019e05ba5163e00ec6249513b118142a7880
-LG_AGENT_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/lg-agent-x86_64-unknown-linux-gnu
-LG_AGENT_SHA256=9bb238a79847683432e9f20066b37ea1fbd027829ebb792d14fc983b6e9bb8c7
-docker volume create looking-glass-data
-docker run --rm --user 0 -v looking-glass-data:/data --entrypoint chown "$LG_IMAGE" -R 999:999 /data
 docker run -d --name looking-glass \
   -p 127.0.0.1:8080:8080 \
   -p 8443:8443 \
   -v looking-glass-data:/data \
-  -v "$PWD/tls/looking-glass.crt:/run/looking-glass/tls.crt:ro" \
-  -v "$PWD/tls/looking-glass.key:/run/looking-glass/tls.key:ro" \
-  -e LG_DB_PATH=/data/lookingglass.redb \
-  -e LG_FILES_DIR=/data/files \
   -e LG_TRUSTED_PROXIES="$LG_TRUSTED_PROXIES" \
-  -e LG_CENTRAL_URL="https://$LG_PUBLIC_NAME" \
   -e LG_TUNNEL_URL="https://$LG_PUBLIC_NAME:8443" \
-  -e LG_CENTRAL_CERT=/run/looking-glass/tls.crt \
-  -e LG_TUNNEL_CERT=/run/looking-glass/tls.crt \
-  -e LG_TUNNEL_KEY=/run/looking-glass/tls.key \
-  -e LG_AGENT_INSTALL_SCRIPT_URL="$LG_INSTALLER_URL" \
-  -e LG_AGENT_INSTALL_SCRIPT_SHA256="$LG_INSTALLER_SHA256" \
-  -e LG_AGENT_URL="$LG_AGENT_URL" \
-  -e LG_AGENT_SHA256="$LG_AGENT_SHA256" \
-  "$LG_IMAGE"
+  ghcr.io/viktorsbaikers/looking-glass:latest
 ```
+
+Docker creates the `looking-glass-data` volume on first use, owned by the container
+user. As with Compose, central generates its tunnel key into that volume, install
+commands point agents at `LG_TUNNEL_URL` and pin that key, and a release image
+supplies the agent download settings (a source build needs them set, as above). The
+one-time setup token is in the volume too:
+
+```sh
+docker exec looking-glass cat /data/setup-token
+```
+
+To provide the token yourself instead of generating a file, set `LG_SETUP_TOKEN`
+before the first start.
 
 Put the web surface behind a TLS-terminating reverse proxy that forwards to port
 8080. `LG_TRUSTED_PROXIES` must be the real source IP that container receives from
 that proxy, not a client address or a copied example. The proxy must attest
-`X-Forwarded-Proto: https`; admin login and agent enrollment are refused without
-that trusted attestation. The HTTPS enrollment proxy must present the same leaf certificate configured at `LG_CENTRAL_CERT`; agents pin it when they enroll. Publish port 8443 directly so enrolled agents can reach the TLS/WebSocket tunnel at `LG_TUNNEL_URL`.
+`X-Forwarded-Proto: https`; first-run setup and admin login are refused without that
+trusted attestation. Publish port 8443 directly so agents can enroll and reach the
+TLS/WebSocket tunnel at `LG_TUNNEL_URL`.
 
 The proxy must pass the original `Host` header through unchanged. Central compares
 it with the browser's `Origin`, so behind a proxy that rewrites `Host`, admin login,
@@ -123,7 +183,7 @@ visitor sent cannot replace the one the proxy appends.
 nginx sends no `X-Forwarded-Proto` by default either; add
 `proxy_set_header X-Forwarded-Proto $scheme;`. Without it, central cannot tell that
 the visitor used HTTPS, so first-run setup, admin login, install-command generation
-and agent enrollment answer 403 `insecure_transport`.
+and proxy enrollment answer 403 `insecure_transport`.
 
 The start command above publishes the plain-HTTP port 8080 on `127.0.0.1` only, for a
 proxy on the same host. Published on every address, it would also take connections
@@ -157,7 +217,8 @@ proxy container with `--network lg-proxy --ip 172.30.0.2`, publish its HTTPS por
 and point it at central's fixed address (nginx: `proxy_pass http://172.30.0.3:8080;`).
 `--ip-range` keeps the addresses Docker assigns by itself in the upper half of the
 subnet, so Docker never gives the proxy's address to another container. Choose
-another subnet if `172.30.0.0/24` is already in use on the host.
+another subnet if `172.30.0.0/24` is already in use on the host. `compose.yaml` uses
+this same layout.
 
 On a host with IPv6, Docker also publishes the proxy's HTTPS port on the host's IPv6
 addresses. `lg-proxy` is IPv4-only, so Docker's userland proxy (`docker-proxy`)
@@ -178,7 +239,24 @@ docker network create --ipv6 --subnet 172.30.0.0/24 --ip-range 172.30.0.128/25 \
   --subnet fd00:172:30::/64 lg-proxy
 ```
 
-### Renewing the TLS certificate
+#### Your own tunnel certificate and proxy enrollment
+
+Both are optional. To have the tunnel present a certificate you manage, mount it and
+set `LG_TUNNEL_CERT` and `LG_TUNNEL_KEY` to the PEM files; central then uses them and
+generates nothing. The private key must be readable by the container user (uid 999).
+
+Earlier releases had agents enroll through the web proxy instead of port 8443. That
+still works: set `LG_CENTRAL_URL` to the proxy's HTTPS origin and `LG_CENTRAL_CERT`
+to the certificate the proxy presents; agents pin it when they enroll. The HTTPS enrollment proxy must present the same leaf certificate configured at `LG_CENTRAL_CERT`.
+It must also be the tunnel's certificate, so set `LG_TUNNEL_CERT` and `LG_TUNNEL_KEY`
+to that same pair; otherwise install-command generation answers 503
+`identity_mismatch`. Deployments configured this way keep working unchanged after an
+upgrade.
+
+#### Renewing the TLS certificate
+
+This applies only to a tunnel certificate you provide. The certificate central
+generates is valid until the year 4096 and never needs renewing.
 
 The published `v0.1.3` image and agent pin the SHA-256 of the whole certificate. With
 them, every renewal disconnects every agent, even a renewal that keeps the private
@@ -197,22 +275,26 @@ before this release pinned the whole certificate. Each one moves its stored pin 
 public key on its first successful connection, so upgrade the agents and let them
 connect once before the first renewal.
 
-On first start, the app writes the one-time setup token beside the database:
-
-```sh
-docker exec looking-glass cat /data/setup-token
-```
-
-Enter that token on the installer page, create the first administrator, then remove
-or restrict access to the token file. To provide the token yourself instead of
-generating a file, set `LG_SETUP_TOKEN` before the first start.
-
 ## Remote agent install
 
-The complete central command above configures the four planned release-asset values
-required for enrollment-command generation. Central refuses to generate an enrollment
-command if any URL or SHA-256 pin is missing or invalid. Remote installation uses the
-published `v0.1.3` assets and the URL/SHA-256 values shown above.
+Enrollment-command generation needs four release-asset values: the installer and
+agent URLs and their SHA-256 pins. A release image carries its own release's values,
+so neither setup above sets them; a source build needs them set by hand (see
+[Run a build of your own tree](#run-a-build-of-your-own-tree)). Central refuses to
+generate an enrollment command if any URL or SHA-256 pin is missing or invalid.
+The URL/SHA-256 values below identify the published `v0.1.3` release assets. They
+pair with the published `v0.1.3` image only:
+
+```sh
+LG_INSTALLER_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/install-agent.sh
+LG_INSTALLER_SHA256=d824313a58f19e937f5365b9f5db019e05ba5163e00ec6249513b118142a7880
+LG_AGENT_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/lg-agent-x86_64-unknown-linux-gnu
+LG_AGENT_SHA256=9bb238a79847683432e9f20066b37ea1fbd027829ebb792d14fc983b6e9bb8c7
+```
+
+In central's environment the installer pair is named `LG_AGENT_INSTALL_SCRIPT_URL`
+and `LG_AGENT_INSTALL_SCRIPT_SHA256`. Remote installation from a release central uses
+the published `v0.1.3` assets and the URL/SHA-256 values shown above.
 
 After the central container is healthy, finish first-run setup with the token, sign
 in as the administrator, create a remote location, and use that location's
@@ -331,21 +413,22 @@ not add arbitrary tools to that path.
 
 | Variable | Applies to | Default | Notes |
 | --- | --- | --- | --- |
+| `LG_DOMAIN` | compose | `localhost` | Public DNS name. Caddy serves the web UI for it, and central's `LG_TUNNEL_URL` becomes `https://LG_DOMAIN:8443`. |
 | `PORT` | central | `8080` | HTTP listener inside the container. |
 | `LG_DB_PATH` | central | `data/lookingglass.redb` | redb database path. In containers, mount this under a volume. |
 | `LG_FILES_DIR` | central | `data/files` | Local-node downloadable test files root. |
 | `LG_SETUP_TOKEN` | central | generated file | Optional first-run setup token. If unset, central writes `setup-token` beside `LG_DB_PATH`. |
-| `LG_TRUSTED_PROXIES` | central | empty | Comma-separated proxy IPs trusted for client identity and TLS attestation. Empty fails closed for admin/enroll TLS checks. |
-| `LG_CENTRAL_URL` | central | `https://localhost` | Plain HTTPS API origin that serves `/api/enroll`; no path/query/fragment. |
+| `LG_TRUSTED_PROXIES` | central | empty | Comma-separated proxy IPs trusted for client identity and TLS attestation. Empty fails closed for the admin and proxy-enrollment TLS checks. |
+| `LG_CENTRAL_URL` | central | tunnel origin, when the tunnel is running | Plain HTTPS origin agents enroll at (`/api/enroll`); no path/query/fragment. With every `LG_CENTRAL_*` variable unset and the tunnel running, it is `LG_TUNNEL_URL`; otherwise it defaults to `https://localhost`. |
 | `LG_TUNNEL_URL` | central | `https://localhost:8443` | Plain HTTPS tunnel origin embedded in agent install commands. It needs an explicit port (`https://host:8443`); no path/query/fragment and no bracketed IPv6 literal. Central refuses to start on an invalid value. |
-| `LG_CENTRAL_CERT` | central | unset | PEM certificate used as central API identity material for enrollment fingerprinting. Required to generate install commands. |
-| `LG_CENTRAL_IDENTITY` | central | ephemeral | Legacy identity material. It cannot replace `LG_CENTRAL_CERT`: without a certificate, generating an install command fails with 422. |
-| `LG_TUNNEL_CERT` / `LG_TUNNEL_KEY` | central | unset | PEM cert/key for the direct agent TLS tunnel listener. If unset, remote agents cannot connect. |
+| `LG_CENTRAL_CERT` | central | tunnel pin | PEM certificate the HTTPS enrollment proxy presents, for proxy enrollment only. With every `LG_CENTRAL_*` variable unset, install commands carry the tunnel certificate's pin instead. It must match the tunnel certificate, or install-command generation answers 503. |
+| `LG_CENTRAL_IDENTITY` | central | unset | Legacy identity material. It cannot replace `LG_CENTRAL_CERT`: set alone, generating an install command fails with 422. |
+| `LG_TUNNEL_CERT` / `LG_TUNNEL_KEY` | central | generated | PEM cert/key for the direct agent TLS tunnel listener. With both unset, central generates `tunnel.crt` and `tunnel.key` beside `LG_DB_PATH` on first start and loads them after that. With only one set, the tunnel stays off. |
 | `LG_TUNNEL_BIND` | central | `0.0.0.0:8443` | Direct TLS/WebSocket tunnel bind address. |
-| `LG_AGENT_INSTALL_SCRIPT_URL` | central | unset | HTTPS URL embedded in generated agent install commands. |
-| `LG_AGENT_INSTALL_SCRIPT_SHA256` | central | unset | SHA-256 pin for the installer script. |
-| `LG_AGENT_URL` | central | unset | HTTPS URL for the prebuilt agent binary release asset. |
-| `LG_AGENT_SHA256` | central | unset | SHA-256 pin for the agent binary. |
+| `LG_AGENT_INSTALL_SCRIPT_URL` | central | set in release images | HTTPS URL embedded in generated agent install commands. Empty in a source build. |
+| `LG_AGENT_INSTALL_SCRIPT_SHA256` | central | set in release images | SHA-256 pin for the installer script. Empty in a source build. |
+| `LG_AGENT_URL` | central | set in release images | HTTPS URL for the prebuilt agent binary release asset. Empty in a source build. |
+| `LG_AGENT_SHA256` | central | set in release images | SHA-256 pin for the agent binary. Empty in a source build. |
 | `LG_EXEC_MAX_CONCURRENT` | central | `8` | Global in-flight diagnostic cap per node. |
 | `LG_EXEC_TIMEOUT_SECS` | central | `30` | Per-command timeout. |
 | `LG_EXEC_MAX_OUTPUT_KIB` | central | `256` | Total output cap per command. |
@@ -380,7 +463,9 @@ Publication is ordered, not atomic: the image job pushes to GHCR before the
 release-assets job verifies and publishes the installer and agent assets. That job
 creates the GitHub Release for the tag and attaches `install-agent.sh`, the agent
 binary and `THIRD_PARTY_NOTICES.md`. Do not create the Release by hand first:
-`gh release create` fails when one already exists for the tag.
+`gh release create` fails when one already exists for the tag. The image job waits
+for that verification and bakes the tag's asset URLs and the README's SHA-256 pins
+into the image as the `LG_AGENT_*` defaults.
 
 Manual dispatch with `push=false` runs the same build path without logging in or
 pushing, which is the no-credential dry-run equivalent. Manual dispatch with
@@ -396,29 +481,41 @@ the SHA-256 pins in this README, so update the README pins before tagging:
 1. Build the agent exactly as `release.yml` does: the digest-pinned
    `rust:1.96-bookworm` container running `cargo build --locked --release --package agent`.
    Hash that binary and `scripts/install-agent.sh` with `sha256sum`.
-2. Update the image tag, both release-asset URLs, `LG_INSTALLER_SHA256` and
-   `LG_AGENT_SHA256` in this README and the matching lines in `scripts/check-readme.sh`.
+2. Update both release-asset URLs, `LG_INSTALLER_SHA256` and `LG_AGENT_SHA256` in
+   this README, and the matching lines in `scripts/check-readme.sh`.
    If dependencies changed, run `python3 scripts/third-party-notices.py`. Run
    `make verify` and commit.
 3. Push the `vX.Y.Z` tag.
 
 ## Upgrade and rollback
 
-1. Select an immutable image tag (for example `v0.1.3`), never `latest`, and pull it.
+1. Pull the new image: `docker compose pull` with Compose,
+   `docker pull ghcr.io/viktorsbaikers/looking-glass:latest` without. To pin a
+   version, replace `latest` with a tag such as `v0.1.3` in `compose.yaml` (or the
+   `docker run` command).
 2. Stop the old central container and back up the data volume (below).
-3. Remove the old container (`docker rm looking-glass`), because the start command
-   reuses its name. Start the new image with the same mounted data volume,
-   certificate/key mounts, and environment, except the agent download settings.
-   In the same step, switch `LG_AGENT_URL`, `LG_AGENT_SHA256`,
+3. With Compose, `docker compose up -d` starts the new image on the same volume.
+   Without it, remove the old container (`docker rm looking-glass`), because the start
+   command reuses its name, and start the new image with the same data volume,
+   certificate/key mounts and environment. A release image brings its own agent
+   download settings. If you set them yourself, then
+   in the same step, switch `LG_AGENT_URL`, `LG_AGENT_SHA256`,
    `LG_AGENT_INSTALL_SCRIPT_URL` and `LG_AGENT_INSTALL_SCRIPT_SHA256` to the new
    release's agent and installer assets. A new central must never hand out a
    previous-release agent.
 4. Verify `/health`, admin login, public location list, and one local diagnostic.
 
+A deployment that already sets `LG_TUNNEL_CERT`, `LG_TUNNEL_KEY`, `LG_CENTRAL_URL`
+and `LG_CENTRAL_CERT` behaves as before after the upgrade: central uses those files,
+generates no key, and keeps enrollment on the proxy.
+
 The redb file holds the session signing key and live sessions, so the backup goes
 into a new root-owned 0700 directory; `cp -a` keeps the volume's own owner and modes
 inside it. The copy lands in `looking-glass-data-backup/data/`. The command refuses
-to run while `looking-glass-data-backup` exists, so move an earlier backup aside first:
+to run while `looking-glass-data-backup` exists, so move an earlier backup aside first.
+With Compose, stop central with `docker compose stop central`, and use the volume name
+`docker volume ls` shows for `central-data` (`looking-glass_central-data` in a
+`looking-glass` directory) in place of `looking-glass-data`:
 
 ```sh
 docker stop looking-glass
@@ -429,9 +526,10 @@ docker run --rm -v looking-glass-data:/data -v "$PWD":/backup alpine \
 Rollback needs the backup. A newer release migrates the database when it first opens
 it, and an older release started on the migrated volume can lock every administrator
 out. To roll back, stop and remove the new container, restore the pre-upgrade copy
-into the volume, then start the previous immutable image tag. Changes made after the
+into the volume, then start the previous release by its tag (for example
+`ghcr.io/viktorsbaikers/looking-glass:v0.1.3`). Changes made after the
 upgrade are lost. `cp -a` keeps the backup's modes, and `chown -R 999:999 /data`
-gives the files back to the container user, as the setup step does: on a macOS
+gives the files back to the container user: on a macOS
 Docker host (Docker Desktop, OrbStack) the copy in `$PWD` loses the uid 999
 ownership, and the previous image then cannot open its database:
 
@@ -499,8 +597,9 @@ formatting, clippy, Playwright, the repository checks (`scripts/check-readme.sh`
 `scripts/check-release-workflow.sh`, `scripts/third-party-notices.py --check`) and a
 release build. CI runs all of that on push and pull request with the release
 toolchain (Rust 1.96), plus the Linux-only installer test
-(`scripts/test-install-agent.sh`) and a Docker image build. Enable branch protection
-to make a red result block merges.
+(`scripts/test-install-agent.sh`), a Docker image build and the Compose smoke test
+(`scripts/test-compose.sh`). Enable branch protection to make a red result block
+merges.
 
 Playwright (`npm run test:e2e`, and so `make verify`) runs in Chromium and WebKit.
 Install both browsers once, as CI does:

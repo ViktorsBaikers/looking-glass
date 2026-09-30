@@ -17,10 +17,13 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use axum::extract::{ConnectInfo, DefaultBodyLimit};
+use axum::{Extension, Router};
 use futures_util::{SinkExt, StreamExt};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -31,14 +34,14 @@ use shared::protocol::{
     identity_pin, server_handshake, AuthChannel, CertificateReport, FrameTransport, TunnelError,
     TunnelMessage, TUNNEL_KEY_BYTES,
 };
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::{protocol::WebSocketConfig, Message};
 use tokio_tungstenite::WebSocketStream;
 
-use crate::auth::{tunnel_argon2_off_runtime, verify_password};
+use crate::auth::{tunnel_argon2_off_runtime, verify_password, DirectTls};
 use crate::observability::new_correlation_id;
 use crate::ratelimit::IpWindows;
 use crate::store::Store;
@@ -46,6 +49,8 @@ use crate::store::Store;
 const ENV_TUNNEL_BIND: &str = "LG_TUNNEL_BIND";
 const ENV_TUNNEL_CERT: &str = "LG_TUNNEL_CERT";
 const ENV_TUNNEL_KEY: &str = "LG_TUNNEL_KEY";
+const TUNNEL_CERT_FILE: &str = "tunnel.crt";
+const TUNNEL_KEY_FILE: &str = "tunnel.key";
 const DEFAULT_TUNNEL_BIND: &str = "0.0.0.0:8443";
 
 const PREAUTH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -56,6 +61,9 @@ const PREAUTH_FAILURE_WINDOW: Duration = Duration::from_secs(60);
 // Keep one authenticated protocol message comfortably above that while preventing
 // unauthenticated peers from claiming tungstenite's 64 MiB default per connection.
 const TUNNEL_MAX_MESSAGE_BYTES: usize = 512 * 1024;
+/// An enrollment request is a protocol version and a token; anything larger on
+/// the tunnel port is refused before it is buffered.
+const ENROLL_MAX_BODY_BYTES: usize = 4 * 1024;
 
 /// Backstop on inter-frame silence during a relayed run: if no frame arrives for
 /// this long the connection is torn down so a silent agent can never hang the
@@ -838,21 +846,32 @@ pub struct TunnelIdentity {
 }
 
 impl TunnelIdentity {
-    /// Load the tunnel certificate + key from the PEM paths in the environment,
-    /// or `None` if they are unset or fail to load. An absent identity disables
-    /// the tunnel listener with a warning (fail-safe, not fail-open) — the same
-    /// posture as the Slice-7 ephemeral identity.
-    pub fn from_env() -> Option<Self> {
+    /// Resolve the tunnel identity at startup. With `LG_TUNNEL_CERT` and
+    /// `LG_TUNNEL_KEY` both set, load those files and write nothing. With both
+    /// unset, use (or on first start generate) `tunnel.crt`/`tunnel.key` beside
+    /// the database. `None` disables the tunnel listener (fail-safe, not
+    /// fail-open); the web surface keeps serving.
+    pub fn from_env(db_path: &str, store: &Store) -> Option<Self> {
         let cert_path = std::env::var(ENV_TUNNEL_CERT).unwrap_or_default();
         let key_path = std::env::var(ENV_TUNNEL_KEY).unwrap_or_default();
+        Self::resolve(&cert_path, &key_path, db_path, store)
+    }
+
+    fn resolve(cert_path: &str, key_path: &str, db_path: &str, store: &Store) -> Option<Self> {
+        if cert_path.is_empty() && key_path.is_empty() {
+            let dir = Path::new(db_path)
+                .parent()
+                .unwrap_or_else(|| Path::new("."));
+            return Self::from_dir(dir, store);
+        }
         if cert_path.is_empty() || key_path.is_empty() {
             tracing::warn!(
-                "{ENV_TUNNEL_CERT}/{ENV_TUNNEL_KEY} not set — agent tunnel listener DISABLED; \
-                 no remote agents can connect until a tunnel certificate is configured"
+                "only one of {ENV_TUNNEL_CERT}/{ENV_TUNNEL_KEY} is set — agent tunnel listener \
+                 DISABLED; no remote agents can connect until both are configured"
             );
             return None;
         }
-        match Self::load(&cert_path, &key_path) {
+        match Self::load(cert_path, key_path) {
             Ok(identity) => Some(identity),
             Err(error) => {
                 tracing::warn!(
@@ -865,7 +884,86 @@ impl TunnelIdentity {
         }
     }
 
-    fn load(cert_path: &str, key_path: &str) -> io::Result<Self> {
+    /// Load `tunnel.crt`/`tunnel.key` from `dir`, or generate both when neither
+    /// exists. Anything else (one file alone, unreadable, corrupt) is left
+    /// untouched: overwriting it would strand every enrolled agent's pin.
+    fn from_dir(dir: &Path, store: &Store) -> Option<Self> {
+        let cert_path = dir.join(TUNNEL_CERT_FILE);
+        let key_path = dir.join(TUNNEL_KEY_FILE);
+        let resolved = match (file_present(&cert_path), file_present(&key_path)) {
+            (Ok(false), Ok(false)) => {
+                Self::generate(&cert_path, &key_path).map(|identity| (identity, "generated"))
+            }
+            (Ok(true), Ok(true)) => {
+                warn_if_key_exposed(&key_path);
+                Self::load(&cert_path, &key_path).map(|identity| (identity, "loaded"))
+            }
+            (Err(error), _) | (_, Err(error)) => Err(error),
+            _ => Err(io::Error::other(format!(
+                "{TUNNEL_CERT_FILE} and {TUNNEL_KEY_FILE} must both exist; found only one"
+            ))),
+        };
+        let (identity, source) = match resolved {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    path = %dir.display(),
+                    "tunnel identity files not usable and left untouched — agent tunnel \
+                     listener DISABLED; fix or remove both files to continue"
+                );
+                return None;
+            }
+        };
+        tracing::info!(
+            fingerprint = %identity.fingerprint,
+            path = %dir.display(),
+            "tunnel identity {source}"
+        );
+        if source == "generated" {
+            match store.all_agents() {
+                Ok(agents) => {
+                    let stranded = agents.iter().filter(|agent| !agent.revoked).count();
+                    if stranded > 0 {
+                        tracing::error!(
+                            agents = stranded,
+                            path = %dir.display(),
+                            "generated a new tunnel identity while {stranded} agents are enrolled; \
+                             they no longer match its pin and must re-enroll"
+                        );
+                    }
+                }
+                Err(error) => tracing::error!(
+                    %error,
+                    path = %dir.display(),
+                    "generated a new tunnel identity but could not count enrolled agents; \
+                     any enrolled agent must re-enroll"
+                ),
+            }
+        }
+        Some(identity)
+    }
+
+    /// A fresh self-signed identity. The agent pins the SPKI, not the name, so
+    /// `localhost` is enough. Each file lands by temp-file-then-rename.
+    fn generate(cert_path: &Path, key_path: &Path) -> io::Result<Self> {
+        let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .map_err(io::Error::other)?;
+        write_owner_only(key_path, &generated.signing_key.serialize_pem())?;
+        write_owner_only(cert_path, &generated.cert.pem())?;
+        // Make both renames durable, so a crash cannot leave only one file.
+        #[cfg(unix)]
+        {
+            let dir = cert_path
+                .parent()
+                .filter(|dir| !dir.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            std::fs::File::open(dir)?.sync_all()?;
+        }
+        Self::load(cert_path, key_path)
+    }
+
+    fn load(cert_path: impl AsRef<Path>, key_path: impl AsRef<Path>) -> io::Result<Self> {
         let certs = CertificateDer::pem_file_iter(cert_path)
             .map_err(pem_error)?
             .collect::<Result<Vec<_>, _>>()
@@ -892,6 +990,52 @@ fn pem_error(error: rustls::pki_types::pem::Error) -> io::Error {
     io::Error::other(format!("{error:?}"))
 }
 
+/// Whether `path` exists, without following a symlink. Only "not found" counts
+/// as absent; any other error keeps the caller from writing.
+fn file_present(path: &Path) -> io::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Warn when the default `tunnel.key` is not an owner-only regular file: others
+/// on the host may read the tunnel's private key. It still loads.
+fn warn_if_key_exposed(key_path: &Path) {
+    let Ok(metadata) = std::fs::symlink_metadata(key_path) else {
+        return;
+    };
+    #[cfg(unix)]
+    let group_or_other = std::os::unix::fs::PermissionsExt::mode(&metadata.permissions()) & 0o077;
+    #[cfg(not(unix))]
+    let group_or_other = 0;
+    if !metadata.is_file() || group_or_other != 0 {
+        tracing::warn!(
+            path = %key_path.display(),
+            "{TUNNEL_KEY_FILE} is not an owner-only regular file; make it a plain file \
+             with mode 0600 so only central can read the tunnel private key"
+        );
+    }
+}
+
+/// Write `contents` to a fresh 0600 temp file beside `path`, then rename it in.
+fn write_owner_only(path: &Path, contents: &str) -> io::Result<()> {
+    use std::io::Write;
+
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = path.with_file_name(format!(".{name}.tmp"));
+    let _ = std::fs::remove_file(&tmp);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(&tmp)?;
+    file.write_all(contents.as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&tmp, path)
+}
+
 /// The bound tunnel listener address (`LG_TUNNEL_BIND`, default `0.0.0.0:8443`).
 pub fn bind_addr() -> SocketAddr {
     std::env::var(ENV_TUNNEL_BIND)
@@ -907,12 +1051,14 @@ pub fn bind_addr() -> SocketAddr {
 /// Run the direct TLS tunnel listener: accept outbound agent connections, TLS +
 /// WebSocket + authenticate each, and serve it. Separate from the HTTP surface
 /// (its own socket), so the tunnel is end-to-end TLS and never behind the web
-/// proxy (FR-071b).
+/// proxy (FR-071b). A connection that opens with `POST ` is served by `enroll`
+/// instead, so an agent can enroll under the same pinned key.
 pub async fn serve(
     bind: SocketAddr,
     identity: TunnelIdentity,
     store: Store,
     hub: TunnelHub,
+    enroll: Router,
 ) -> io::Result<()> {
     // Log the pinned fingerprint so an operator can confirm it matches the value
     // baked into the install command (the agent verifies central against it).
@@ -946,10 +1092,17 @@ pub async fn serve(
         let acceptor = acceptor.clone();
         let store = store.clone();
         let hub = hub.clone();
+        let enroll = enroll.clone();
         let preauth_failures = preauth_failures.clone();
         tokio::spawn(async move {
-            match handle_connection(acceptor, tcp, store, hub, permit).await {
-                Ok(()) => preauth_failures.clear(peer.ip()),
+            match handle_connection(acceptor, tcp, peer, store, hub, enroll, permit).await {
+                // An enrollment exchange, even a successful one, keeps its
+                // admission: only an authenticated agent clears the window.
+                Ok(authenticated) => {
+                    if authenticated {
+                        preauth_failures.clear(peer.ip());
+                    }
+                }
                 Err(error) => {
                     // Expected on a failed handshake / dropped agent — info, not error.
                     tracing::info!(%peer, %error, "agent tunnel connection ended");
@@ -1009,16 +1162,40 @@ fn build_acceptor(identity: TunnelIdentity) -> io::Result<TlsAcceptor> {
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
-async fn handle_connection(
+/// Serve one tunnel connection; `Ok(true)` when an agent authenticated on it.
+/// The pre-auth `permit` is held until then, or until an enrollment ends.
+async fn handle_connection<S>(
     acceptor: TlsAcceptor,
-    tcp: tokio::net::TcpStream,
+    tcp: S,
+    peer: SocketAddr,
     store: Store,
     hub: TunnelHub,
+    enroll: Router,
     permit: OwnedSemaphorePermit,
-) -> io::Result<()> {
-    let tls = preauth_timeout(acceptor.accept(tcp), "tls handshake").await?;
+) -> io::Result<bool>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    // The request's first bytes pick its server; they ride the TLS step's
+    // timeout so a connection still spends at most three pre-auth steps.
+    let (method, reader, writer) = preauth_timeout(
+        async {
+            let (mut reader, writer) = tokio::io::split(acceptor.accept(tcp).await?);
+            let mut method = [0u8; 5];
+            reader.read_exact(&mut method).await?;
+            Ok((method, reader, writer))
+        },
+        "tls handshake",
+    )
+    .await?;
+    // Replay the consumed bytes to whichever server takes the connection.
+    let stream = tokio::io::join(std::io::Cursor::new(method).chain(reader), writer);
+    if &method == b"POST " {
+        preauth_timeout(serve_enrollment(stream, peer, enroll), "enrollment").await?;
+        return Ok(false);
+    }
     let ws = ws_preauth_timeout(
-        tokio_tungstenite::accept_async_with_config(tls, Some(tunnel_websocket_config())),
+        tokio_tungstenite::accept_async_with_config(stream, Some(tunnel_websocket_config())),
         "websocket handshake",
     )
     .await?;
@@ -1035,7 +1212,30 @@ async fn handle_connection(
     drop(permit);
 
     serve_agent(channel, hub, store, agent_id).await;
-    Ok(())
+    Ok(true)
+}
+
+/// Serve one HTTP/1 request with `enroll`, then close. [`DirectTls`] tells the
+/// handler the request came over central's own TLS, which a proxy header on the
+/// web port cannot claim. Any other route answers 404 without reaching the store.
+async fn serve_enrollment<S>(stream: S, peer: SocketAddr, enroll: Router) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+    use hyper_util::server::conn::auto::Builder;
+    use hyper_util::service::TowerToHyperService;
+
+    let app = enroll
+        .layer(DefaultBodyLimit::max(ENROLL_MAX_BODY_BYTES))
+        .layer(Extension(DirectTls))
+        .layer(Extension(ConnectInfo(peer)));
+    let mut builder = Builder::new(TokioExecutor::new()).http1_only();
+    builder.http1().keep_alive(false);
+    builder
+        .serve_connection(TokioIo::new(stream), TowerToHyperService::new(app))
+        .await
+        .map_err(io::Error::other)
 }
 
 fn tunnel_websocket_config() -> WebSocketConfig {
@@ -1468,7 +1668,19 @@ mod tests {
         hub: TunnelHub,
     ) -> (
         SocketAddr,
-        tokio::task::JoinHandle<io::Result<()>>,
+        tokio::task::JoinHandle<io::Result<bool>>,
+        ClientConfig,
+    ) {
+        start_enroll_connection(store, hub, Router::new()).await
+    }
+
+    async fn start_enroll_connection(
+        store: Store,
+        hub: TunnelHub,
+        enroll: Router,
+    ) -> (
+        SocketAddr,
+        tokio::task::JoinHandle<io::Result<bool>>,
         ClientConfig,
     ) {
         let identity = test_identity();
@@ -1479,12 +1691,12 @@ mod tests {
             .expect("test listener");
         let address = listener.local_addr().expect("test listener address");
         let task = tokio::spawn(async move {
-            let (tcp, _) = listener.accept().await?;
+            let (tcp, peer) = listener.accept().await?;
             let permit = Arc::new(Semaphore::new(1))
                 .acquire_owned()
                 .await
                 .expect("test pre-auth permit");
-            handle_connection(acceptor, tcp, store, hub, permit).await
+            handle_connection(acceptor, tcp, peer, store, hub, enroll, permit).await
         });
         (address, task, client)
     }
@@ -1537,6 +1749,196 @@ mod tests {
             expected,
             "tunnel listener pin"
         );
+    }
+
+    fn identity_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "lg-tunnel-{label}-{}-{}",
+            std::process::id(),
+            crate::auth::random_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn default_identity_is_generated_once_then_reloaded_with_the_same_pin() {
+        let logs = captured_logs();
+        let dir = identity_dir("generate");
+        let db_path = dir.join("lookingglass.redb");
+        let store = Store::open(&db_path).expect("test store");
+        let db_path = db_path.to_str().unwrap();
+
+        let generated = TunnelIdentity::resolve("", "", db_path, &store).expect("generated");
+        let cert = std::fs::read(dir.join("tunnel.crt")).expect("tunnel.crt written");
+        let key = std::fs::read(dir.join("tunnel.key")).expect("tunnel.key written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.join("tunnel.key"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "tunnel.key is owner-only");
+        }
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files renamed away: {leftovers:?}"
+        );
+
+        let reloaded = TunnelIdentity::resolve("", "", db_path, &store).expect("reloaded");
+        assert_eq!(reloaded.fingerprint(), generated.fingerprint());
+        assert_eq!(std::fs::read(dir.join("tunnel.crt")).unwrap(), cert);
+        assert_eq!(std::fs::read(dir.join("tunnel.key")).unwrap(), key);
+
+        let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+        let path = dir.display().to_string();
+        for source in ["generated", "loaded"] {
+            let message = format!("tunnel identity {source}");
+            let line = logs
+                .lines()
+                .find(|line| line.contains(&path) && line.contains(&message))
+                .unwrap_or_else(|| panic!("{message} logged"));
+            assert!(line.contains("INFO"), "{line}");
+            assert!(
+                contains_field(line, "fingerprint", generated.fingerprint()),
+                "{line}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn configured_identity_writes_nothing_beside_the_database() {
+        let configured = identity_dir("configured");
+        let (cert_path, key_path) = (configured.join("custom.crt"), configured.join("custom.key"));
+        std::fs::write(&cert_path, TEST_CERT).unwrap();
+        std::fs::write(&key_path, TEST_KEY).unwrap();
+        let data = identity_dir("configured-data");
+        let db_path = data.join("lookingglass.redb");
+        let store = Store::open(&db_path).expect("test store");
+        let db_path = db_path.to_str().unwrap();
+        let (cert_path, key_path) = (cert_path.to_str().unwrap(), key_path.to_str().unwrap());
+
+        let identity =
+            TunnelIdentity::resolve(cert_path, key_path, db_path, &store).expect("env identity");
+        assert_eq!(identity.fingerprint(), test_identity().fingerprint());
+        assert!(TunnelIdentity::resolve(cert_path, "", db_path, &store).is_none());
+        assert!(TunnelIdentity::resolve("", key_path, db_path, &store).is_none());
+
+        for name in ["tunnel.crt", "tunnel.key"] {
+            assert!(!data.join(name).exists(), "{name} must not be generated");
+        }
+        let _ = std::fs::remove_dir_all(&configured);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn damaged_default_identity_is_left_untouched_and_disables_the_tunnel() {
+        let cases: [(&str, Option<&str>, Option<&str>); 3] = [
+            ("corrupt-key", Some(TEST_CERT), Some("not a key\n")),
+            ("lone-cert", Some(TEST_CERT), None),
+            ("lone-key", None, Some(TEST_KEY)),
+        ];
+        for (label, cert, key) in cases {
+            let dir = identity_dir(label);
+            let db_path = dir.join("lookingglass.redb");
+            let store = Store::open(&db_path).expect("test store");
+            for (name, contents) in [("tunnel.crt", cert), ("tunnel.key", key)] {
+                if let Some(contents) = contents {
+                    std::fs::write(dir.join(name), contents).unwrap();
+                }
+            }
+
+            let identity = TunnelIdentity::resolve("", "", db_path.to_str().unwrap(), &store);
+            assert!(identity.is_none(), "{label}: tunnel stays disabled");
+            for (name, contents) in [("tunnel.crt", cert), ("tunnel.key", key)] {
+                let on_disk = std::fs::read_to_string(dir.join(name)).ok();
+                assert_eq!(on_disk.as_deref(), contents, "{label}: {name} untouched");
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn generating_a_new_identity_logs_how_many_agents_must_reenroll() {
+        let logs = captured_logs();
+        let dir = identity_dir("reenroll");
+        let db_path = dir.join("lookingglass.redb");
+        let store = Store::open(&db_path).expect("test store");
+        enrolled_agent(&store, "a1");
+        enrolled_agent(&store, "a2");
+        store
+            .put_agent(&crate::store::Agent {
+                id: "a3".to_string(),
+                location_id: "loc-1".to_string(),
+                credential_hash: "$argon2id$stub".to_string(),
+                enrolled_at: 0,
+                last_seen: None,
+                revoked: true,
+            })
+            .unwrap();
+
+        TunnelIdentity::resolve("", "", db_path.to_str().unwrap(), &store).expect("generated");
+
+        let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+        let path = dir.display().to_string();
+        let line = logs
+            .lines()
+            .find(|line| line.contains(&path) && line.contains("must re-enroll"))
+            .expect("re-enroll error logged");
+        assert!(line.contains("ERROR"), "{line}");
+        assert!(contains_field(line, "agents", "2"), "{line}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A default tunnel.key that others may read, or that is not a regular
+    // file, still loads, with a warning; an owner-only one loads quietly.
+    #[cfg(unix)]
+    #[test]
+    fn an_exposed_default_key_loads_with_a_warning() {
+        use std::os::unix::fs::PermissionsExt;
+        let logs = captured_logs();
+        let dir = identity_dir("exposed-key");
+        let db_path = dir.join("lookingglass.redb");
+        let store = Store::open(&db_path).expect("test store");
+        let db_path = db_path.to_str().unwrap();
+        let key_path = dir.join("tunnel.key");
+        std::fs::write(dir.join("tunnel.crt"), TEST_CERT).unwrap();
+        std::fs::write(&key_path, TEST_KEY).unwrap();
+        let key = key_path.display().to_string();
+        let warnings = || {
+            let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+            logs.lines()
+                .filter(|line| line.contains("WARN") && line.contains(&key))
+                .filter(|line| line.contains("owner-only"))
+                .count()
+        };
+        let mode = |path: &Path, mode| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+        };
+
+        mode(&key_path, 0o600);
+        assert!(TunnelIdentity::resolve("", "", db_path, &store).is_some());
+        assert_eq!(warnings(), 0, "an owner-only key loads quietly");
+
+        mode(&key_path, 0o640);
+        assert!(TunnelIdentity::resolve("", "", db_path, &store).is_some());
+        assert_eq!(warnings(), 1, "a group-readable key warns");
+
+        // A symlink is not a regular file, whatever its target's mode.
+        let target = dir.join("real.key");
+        std::fs::rename(&key_path, &target).unwrap();
+        mode(&target, 0o600);
+        std::os::unix::fs::symlink(&target, &key_path).unwrap();
+        assert!(TunnelIdentity::resolve("", "", db_path, &store).is_some());
+        assert_eq!(warnings(), 2, "a symlinked key warns");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1744,7 +2146,13 @@ mod tests {
             .port();
         FAILING_ACCEPTS.lock().unwrap().push(port);
         let address = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
-        tokio::spawn(serve(address, identity, store, TunnelHub::new()));
+        tokio::spawn(serve(
+            address,
+            identity,
+            store,
+            TunnelHub::new(),
+            Router::new(),
+        ));
 
         let handshake = async {
             loop {
@@ -1924,6 +2332,7 @@ mod tests {
             identity,
             store,
             TunnelHub::new(),
+            Router::new(),
         ));
         let attacker = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
         let mut holders = Vec::new();
@@ -1956,6 +2365,328 @@ mod tests {
             holders.len()
         );
         drop(holders);
+    }
+
+    /// App state whose install command pins the test tunnel certificate, with
+    /// no trusted proxy, so only the tunnel's own TLS can make a request secure.
+    fn tunnel_enroll_state(store: Store) -> crate::AppState {
+        let cert = CertificateDer::from_pem_slice(TEST_CERT.as_bytes()).expect("test certificate");
+        crate::AppState {
+            store,
+            transport: crate::TransportConfig::new(std::iter::empty()),
+            login_limiter: Arc::new(crate::LoginLimiter::default()),
+            setup_token: None,
+            run: crate::RunService::for_test(8, Duration::from_secs(30), 100),
+            files_root: Arc::from(std::env::temp_dir().as_path()),
+            enroll: crate::EnrollConfig::for_test("https://central.test", cert.as_ref().to_vec()),
+            tunnel_hub: TunnelHub::new(),
+        }
+    }
+
+    /// A store with one remote location holding a live and an expired token;
+    /// returns the store, the live token and the expired one.
+    fn enrollment_store() -> (Store, String, String) {
+        let store = Store::open(unique_db_path()).unwrap();
+        store
+            .put_location(&crate::store::Location {
+                id: "loc-1".to_string(),
+                name: "Remote".to_string(),
+                geo_label: "DE".to_string(),
+                map_query: None,
+                facility: None,
+                facility_url: None,
+                kind: crate::store::NodeKind::Remote,
+                data_plane_origin: None,
+                asn: None,
+                offered_methods: vec![],
+                status: crate::store::LocationStatus::Offline,
+                created_at: 0,
+            })
+            .unwrap();
+        let (live, expired) = ("live-enrollment-token", "expired-enrollment-token");
+        for (id, token, expires_at) in [("t-live", live, u64::MAX), ("t-expired", expired, 1)] {
+            store
+                .put_enrollment_token(&crate::store::EnrollmentToken {
+                    id: id.to_string(),
+                    location_id: "loc-1".to_string(),
+                    token_hash: shared::protocol::sha256_hex(token.as_bytes()),
+                    expires_at,
+                    used_at: None,
+                })
+                .unwrap();
+        }
+        (store, live.to_string(), expired.to_string())
+    }
+
+    fn token_used(store: &Store, token: &str) -> bool {
+        store
+            .find_token_by_hash(&shared::protocol::sha256_hex(token.as_bytes()))
+            .unwrap()
+            .expect("seeded token")
+            .used_at
+            .is_some()
+    }
+
+    fn http_request(head: &str, token: &str) -> String {
+        let body =
+            serde_json::json!({ "protocol_version": PROTOCOL_VERSION, "token": token }).to_string();
+        format!(
+            "{head} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn response_body(response: &str) -> &str {
+        response.split_once("\r\n\r\n").map_or("", |(_, body)| body)
+    }
+
+    /// Send `request` over a pinned TLS connection and read until central closes.
+    async fn tunnel_exchange(address: SocketAddr, client: ClientConfig, request: &str) -> String {
+        use tokio::io::AsyncWriteExt;
+        let tcp = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connect test tunnel");
+        let mut tls = TlsConnector::from(Arc::new(client))
+            .connect(ServerName::try_from("localhost").unwrap(), tcp)
+            .await
+            .expect("pinned TLS handshake");
+        tls.write_all(request.as_bytes())
+            .await
+            .expect("send request");
+        let mut response = Vec::new();
+        // A refused request may close without close_notify; what arrived counts.
+        let _ = tls.read_to_end(&mut response).await;
+        String::from_utf8_lossy(&response).into_owned()
+    }
+
+    /// One request on a fresh tunnel connection, pinned to the install
+    /// command's fingerprint; returns the response and the handler's result.
+    async fn tunnel_request(state: &crate::AppState, request: &str) -> (String, io::Result<bool>) {
+        let enroll = crate::enroll::agent_route().with_state(state.clone());
+        let (address, handler, _) =
+            start_enroll_connection(state.store.clone(), state.tunnel_hub.clone(), enroll).await;
+        let client = test_client_config(state.enroll.identity.fingerprint());
+        let response = tunnel_exchange(address, client, request).await;
+        let served = tokio::time::timeout(Duration::from_secs(30), handler)
+            .await
+            .expect("the tunnel connection must end")
+            .expect("handler task");
+        (response, served)
+    }
+
+    // An agent enrolls on the tunnel port under the key the install command
+    // pins, spending its token once; a spent, expired or unknown token gets the
+    // web route's 401.
+    #[tokio::test]
+    async fn an_agent_enrolls_on_the_tunnel_port_under_the_install_pin() {
+        let (store, live, expired) = enrollment_store();
+        let state = tunnel_enroll_state(store.clone());
+        assert_eq!(
+            state.enroll.identity.fingerprint(),
+            test_identity().fingerprint(),
+            "the install command pins the key the tunnel presents"
+        );
+
+        let (response, served) =
+            tunnel_request(&state, &http_request("POST /api/enroll", &live)).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(
+            matches!(served, Ok(false)),
+            "an enrollment never clears the peer's admissions: {served:?}"
+        );
+        let issued: shared::protocol::EnrollResponse =
+            serde_json::from_str(response_body(&response)).expect("enroll response");
+        let agent = store
+            .get_agent(&issued.agent_id)
+            .unwrap()
+            .expect("agent stored");
+        assert_eq!(agent.location_id, "loc-1");
+        assert!(verify_password(&issued.credential, &agent.credential_hash));
+        assert!(token_used(&store, &live), "the token is spent");
+
+        let refused =
+            axum::response::IntoResponse::into_response(crate::auth::ApiError::Unauthorized);
+        let refused = axum::body::to_bytes(refused.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        for token in [live.as_str(), expired.as_str(), "unknown-token"] {
+            let (response, _) =
+                tunnel_request(&state, &http_request("POST /api/enroll", token)).await;
+            assert!(response.starts_with("HTTP/1.1 401"), "{token}: {response}");
+            assert_eq!(response_body(&response).as_bytes(), &refused[..], "{token}");
+        }
+        assert_eq!(store.all_agents().unwrap().len(), 1, "one credential only");
+    }
+
+    // Only POST /api/enroll and a WebSocket GET / are served on the tunnel
+    // port; anything else closes without reaching the store, valid token or not.
+    #[tokio::test]
+    async fn other_requests_on_the_tunnel_port_close_without_touching_the_store() {
+        let (store, live, _) = enrollment_store();
+        let state = tunnel_enroll_state(store.clone());
+        for request in [
+            http_request("POST /api/enroll/extra", &live),
+            http_request("POST /", &live),
+            http_request("PUT /api/enroll", &live),
+            http_request("GET /api/enroll", &live),
+            "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n".to_string(),
+        ] {
+            let (response, served) = tunnel_request(&state, &request).await;
+            assert!(!matches!(served, Ok(true)), "{request}");
+            assert!(
+                !response.starts_with("HTTP/1.1 200"),
+                "{request}: {response}"
+            );
+            assert!(!token_used(&store, &live), "{request}");
+            assert!(store.all_agents().unwrap().is_empty(), "{request}");
+        }
+    }
+
+    // The tunnel port refuses an enrollment body past its small bound before
+    // the handler runs, live token or not.
+    #[tokio::test]
+    async fn an_oversized_enrollment_body_on_the_tunnel_port_is_refused() {
+        let (store, live, _) = enrollment_store();
+        let state = tunnel_enroll_state(store.clone());
+        let body =
+            serde_json::json!({ "protocol_version": PROTOCOL_VERSION, "token": live }).to_string();
+        // Trailing whitespace keeps it valid JSON: only its size is wrong.
+        let body = format!("{body}{}", " ".repeat(ENROLL_MAX_BODY_BYTES));
+        let request = format!(
+            "POST /api/enroll HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+
+        let (response, _) = tunnel_request(&state, &request).await;
+
+        assert!(response.starts_with("HTTP/1.1 413"), "{response}");
+        assert!(!token_used(&store, &live), "the token is not spent");
+        assert!(store.all_agents().unwrap().is_empty(), "no agent is stored");
+    }
+
+    /// Open a pinned TLS connection and send `request` as two TLS records, the
+    /// first `split` bytes alone, so central reads them before the rest arrives.
+    async fn split_request(
+        address: SocketAddr,
+        client: ClientConfig,
+        request: &str,
+        split: usize,
+    ) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
+        use tokio::io::AsyncWriteExt;
+        let tcp = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connect test tunnel");
+        let mut tls = TlsConnector::from(Arc::new(client))
+            .connect(ServerName::try_from("localhost").unwrap(), tcp)
+            .await
+            .expect("pinned TLS handshake");
+        let (first, rest) = request.as_bytes().split_at(split);
+        tls.write_all(first).await.expect("send the first bytes");
+        tls.flush().await.expect("flush the first bytes");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tls.write_all(rest).await.expect("send the rest");
+        tls.flush().await.expect("flush the rest");
+        tls
+    }
+
+    // A client may send a request's first bytes in a TLS record of their own;
+    // central still routes the request by its whole method.
+    #[tokio::test]
+    async fn a_method_split_across_tls_records_still_reaches_its_server() {
+        let (store, live, _) = enrollment_store();
+        let state = tunnel_enroll_state(store.clone());
+        let enroll = crate::enroll::agent_route().with_state(state.clone());
+        let (address, handler, client) =
+            start_enroll_connection(store.clone(), state.tunnel_hub.clone(), enroll).await;
+        let mut tls =
+            split_request(address, client, &http_request("POST /api/enroll", &live), 2).await;
+        let mut response = Vec::new();
+        let _ = tls.read_to_end(&mut response).await;
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(token_used(&store, &live), "the split enrollment is served");
+        let served = tokio::time::timeout(Duration::from_secs(30), handler)
+            .await
+            .expect("the enrollment connection must end")
+            .expect("handler task");
+        assert!(matches!(served, Ok(false)), "{served:?}");
+
+        let (address, handler, client) = start_test_connection(store, TunnelHub::new()).await;
+        let upgrade = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\n\
+                       Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+                       Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+        let mut tls = split_request(address, client, upgrade, 2).await;
+        let mut response = Vec::new();
+        while !response.ends_with(b"\r\n\r\n") {
+            let mut byte = [0u8; 1];
+            match tls.read(&mut byte).await {
+                Ok(1) => response.push(byte[0]),
+                _ => break,
+            }
+        }
+        let response = String::from_utf8_lossy(&response);
+        assert!(
+            response.starts_with("HTTP/1.1 101"),
+            "WebSocket handshake: {response}"
+        );
+        drop(tls);
+        let ended = tokio::time::timeout(Duration::from_secs(30), handler)
+            .await
+            .expect("the tunnel connection must end")
+            .expect("handler task");
+        assert!(!matches!(ended, Ok(true)), "no agent authenticated");
+    }
+
+    // A stalled enrollment holds one pre-auth slot and is cut at the pre-auth
+    // timeout, its token unspent.
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_enrollment_is_cut_at_the_preauth_timeout() {
+        use tokio::io::AsyncWriteExt;
+        let (store, live, _) = enrollment_store();
+        let enroll = crate::enroll::agent_route().with_state(tunnel_enroll_state(store.clone()));
+        let identity = test_identity();
+        let client = test_client_config(identity.fingerprint().to_string());
+        let acceptor = build_acceptor(identity).unwrap();
+        let (central_io, agent_io) = tokio::io::duplex(64 * 1024);
+        let slots = Arc::new(Semaphore::new(1));
+        let permit = slots.clone().acquire_owned().await.unwrap();
+        let peer = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 40000));
+        let handler = tokio::spawn(handle_connection(
+            acceptor,
+            central_io,
+            peer,
+            store.clone(),
+            TunnelHub::new(),
+            enroll,
+            permit,
+        ));
+
+        let mut tls = TlsConnector::from(Arc::new(client))
+            .connect(ServerName::try_from("localhost").unwrap(), agent_io)
+            .await
+            .expect("pinned TLS handshake");
+        let request = http_request("POST /api/enroll", &live);
+        // Headers and most of the body, then silence.
+        tls.write_all(&request.as_bytes()[..request.len() - 4])
+            .await
+            .unwrap();
+        tls.flush().await.unwrap();
+        let started = tokio::time::Instant::now();
+
+        tokio::time::sleep(PREAUTH_TIMEOUT - Duration::from_secs(1)).await;
+        assert!(!handler.is_finished(), "cut too early");
+        assert_eq!(slots.available_permits(), 0, "the stall holds its slot");
+
+        let error = tokio::time::timeout(PREAUTH_TIMEOUT * 2, handler)
+            .await
+            .expect("a stalled enrollment must be cut")
+            .unwrap()
+            .expect_err("a stalled enrollment ends in an error");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() <= PREAUTH_TIMEOUT + Duration::from_secs(1));
+        assert_eq!(slots.available_permits(), 1, "the slot comes back");
+        assert!(!token_used(&store, &live));
+        drop(tls);
     }
 
     /// Establish an authenticated central↔"agent" channel pair over an in-memory

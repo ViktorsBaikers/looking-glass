@@ -99,13 +99,15 @@ pub fn app() -> Router {
     let files_dir = files_dir_from(std::env::var("LG_FILES_DIR").ok());
     let _ = std::fs::create_dir_all(&files_dir);
 
-    // Enrollment pins the HTTPS API origin that serves `/api/enroll`. The tunnel
-    // listener is a separate TLS/WebSocket socket and must not become LG_CENTRAL_URL.
-    let tunnel_identity = tunnel::TunnelIdentity::from_env();
-    let mut enroll = EnrollConfig::from_env().expect("invalid enrollment configuration");
-    if let Some(identity) = &tunnel_identity {
-        enroll = enroll.with_tunnel_pin(identity.fingerprint());
-    }
+    // The tunnel listener serves `/api/enroll` too, so with no LG_CENTRAL_* env
+    // install commands point agents at the tunnel origin under its pin.
+    let tunnel_identity = tunnel::TunnelIdentity::from_env(&path, &store);
+    let enroll = EnrollConfig::from_env(
+        tunnel_identity
+            .as_ref()
+            .map(|identity| identity.fingerprint()),
+    )
+    .expect("invalid enrollment configuration");
 
     tokio::spawn(session::purge_expired(session::RedbSessionStore::new(
         &store,
@@ -122,12 +124,16 @@ pub fn app() -> Router {
         enroll,
         tunnel_hub: tunnel_hub.clone(),
     };
+    // Agents may enroll on the tunnel port too, under the same handler and state.
+    let tunnel_enroll = enroll::agent_route().with_state(state.clone());
     let router = build(state);
 
     if let Some(identity) = tunnel_identity {
         let bind = tunnel::bind_addr();
         tokio::spawn(async move {
-            if let Err(error) = tunnel::serve(bind, identity, store, tunnel_hub).await {
+            if let Err(error) =
+                tunnel::serve(bind, identity, store, tunnel_hub, tunnel_enroll).await
+            {
                 tracing::error!(%error, "agent tunnel listener stopped");
             }
         });
