@@ -4,7 +4,7 @@ A self-hosted network diagnostics console. The central container serves the web 
 stores state in one mounted directory, runs diagnostics on its built-in local node,
 and coordinates enrolled remote agents over an outbound tunnel.
 
-[![Looking Glass product tour](docs/media/looking-glass-tour.jpg)](docs/media/looking-glass-tour.mp4)
+https://github.com/user-attachments/assets/f79d6b9f-1ee7-49e2-8dae-4ef273a30f7b
 
 A 50-second tour: an MTR run from a remote location, the theme switch, the admin
 console and agent enrollment. Light and dark screenshots of every screen are under
