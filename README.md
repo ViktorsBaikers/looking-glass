@@ -4,10 +4,11 @@ A self-hosted network diagnostics console. The central container serves the web 
 stores state in one mounted directory, runs diagnostics on its built-in local node,
 and coordinates enrolled remote agents over an outbound tunnel.
 
-![Network diagnostics page](docs/screenshots/diagnostics.png)
+[![Looking Glass product tour](docs/media/looking-glass-tour.jpg)](docs/media/looking-glass-tour.mp4)
 
-The screenshot above is the public diagnostics page after a ping run. More screens are
-under [Screenshots](#screenshots).
+A 50-second tour: an MTR run from a remote location, the theme switch, the admin
+console and agent enrollment. Light and dark screenshots of every screen are under
+[Screenshots](#screenshots).
 
 ## Install the central container
 
@@ -468,13 +469,17 @@ That is version skew between central and agent, not an impostor.
 Captured from the SPA against the e2e fixture API (`frontend/tests/fixture-server.mjs`),
 so every location, address and ASN is sample data from documentation ranges. The
 visitor address, administrator usernames and the enrollment command are blurred.
+The tour video is built from clips of the same fixture UI.
 
-| | |
-| --- | --- |
-| ![Diagnostics, dark theme](docs/screenshots/diagnostics-dark.png) Diagnostics, dark theme | ![First-run installer](docs/screenshots/installer.png) First-run installer |
-| ![Locations](docs/screenshots/admin-locations.png) Locations | ![Location editor](docs/screenshots/location-editor.png) Location editor |
-| ![Agent enrollment](docs/screenshots/enrollment.png) Agent enrollment | ![Settings](docs/screenshots/settings.png) Settings |
-| ![Administrators](docs/screenshots/administrators.png) Administrators | |
+| Screen | Dark | Light |
+| --- | --- | --- |
+| Diagnostics | ![Diagnostics, dark](docs/screenshots/dark/diagnostics.png) | ![Diagnostics, light](docs/screenshots/light/diagnostics.png) |
+| First-run installer | ![Installer, dark](docs/screenshots/dark/installer.png) | ![Installer, light](docs/screenshots/light/installer.png) |
+| Locations | ![Locations, dark](docs/screenshots/dark/admin-locations.png) | ![Locations, light](docs/screenshots/light/admin-locations.png) |
+| Location editor | ![Location editor, dark](docs/screenshots/dark/location-editor.png) | ![Location editor, light](docs/screenshots/light/location-editor.png) |
+| Agent enrollment | ![Agent enrollment, dark](docs/screenshots/dark/enrollment.png) | ![Agent enrollment, light](docs/screenshots/light/enrollment.png) |
+| Settings | ![Settings, dark](docs/screenshots/dark/settings.png) | ![Settings, light](docs/screenshots/light/settings.png) |
+| Administrators | ![Administrators, dark](docs/screenshots/dark/administrators.png) | ![Administrators, light](docs/screenshots/light/administrators.png) |
 
 ## Develop and verify
 
