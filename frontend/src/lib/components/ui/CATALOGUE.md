@@ -314,7 +314,8 @@ sun/moon icon. Already placed in the public header.
 - **Public header/footer**: `routes/+layout.svelte`. Header = operator logo or
   interchange-ring mark + site title (left), Diagnostics / Administration nav + ThemeToggle (right;
   Administration only when `GET /api/admin/me` succeeds). Footer = Terms link +
-  custom content block from public settings (hidden when both are empty). Auth
+  custom content block from public settings (each only when set) + a "Powered by
+  Looking Glass" link to the project repository. Auth
   routes (`/login`, `/install`, `/activate*`) render bare: a terminus panel.
 - **Admin shell**: `routes/admin/+layout.svelte`. Fail-closed session gate, persistent
   sidebar at `md+` (sections as stations on a vertical line: Locations,

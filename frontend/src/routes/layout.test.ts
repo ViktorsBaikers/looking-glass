@@ -22,4 +22,13 @@ describe('root layout', () => {
 		expect(screen.getByRole('link', { name: 'Looking Glass' })).toBeTruthy();
 		expect(document.title).toBe('Looking Glass');
 	});
+
+	it('credits the project in the footer even with no terms or custom block', async () => {
+		vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))));
+		render(Layout);
+		const credit = await screen.findByRole('link', { name: 'Powered by Looking Glass' });
+		expect(credit.getAttribute('href')).toBe('https://github.com/ViktorsBaikers/looking-glass');
+		expect(credit.getAttribute('target')).toBe('_blank');
+		expect(credit.getAttribute('rel')).toBe('noopener noreferrer');
+	});
 });

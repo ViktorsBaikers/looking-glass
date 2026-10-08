@@ -139,6 +139,14 @@ export const termsLink = css({
 	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' }
 });
 export const customText = css({ textStyle: 'body-sm', color: 'ink-muted', maxWidth: '72ch', whiteSpace: 'pre-line' });
+export const credit = css({
+	textStyle: 'body-sm',
+	color: 'ink-muted',
+	flexShrink: 0,
+	md: { marginInlineStart: 'auto' },
+	_hover: { color: 'ink', textDecoration: 'underline' },
+	_focusVisible: { outline: '2px solid {colors.ink}', outlineOffset: '2px' }
+});
 
 // ----- admin shell (routes/admin/+layout.svelte) -----
 export const checking = css({

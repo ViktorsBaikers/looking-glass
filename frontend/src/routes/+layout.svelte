@@ -30,7 +30,8 @@
 		footer,
 		footerInner,
 		termsLink,
-		customText
+		customText,
+		credit
 	} from '$lib/styles.js';
 
 	let { children } = $props();
@@ -65,7 +66,7 @@
 	$effect(() => {
 		document.title = section ? `${section} · ${siteTitle}` : siteTitle;
 	});
-	const showFooter = $derived(!isAuthRoute && !isAdminRoute && !!(termsUrl || customBlock));
+	const showFooter = $derived(!isAuthRoute && !isAdminRoute);
 
 	// Re-check the session after every navigation so the Administration link
 	// appears right after an in-app sign-in and disappears after log-out.
@@ -150,6 +151,14 @@
 				{#if customBlock}
 					<p class={customText}>{customBlock}</p>
 				{/if}
+				<a
+					href="https://github.com/ViktorsBaikers/looking-glass"
+					target="_blank"
+					rel="noopener noreferrer"
+					class={credit}
+				>
+					Powered by Looking Glass
+				</a>
 			</div>
 		</footer>
 	{/if}
