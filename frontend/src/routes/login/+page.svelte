@@ -1,10 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
+	import Field from '$lib/components/ui/field.svelte';
 	import {
 		Card,
 		CardContent,
@@ -13,6 +12,14 @@
 		CardTitle
 	} from '$lib/components/ui/card/index.js';
 	import { fetchSetupStatus, postJson } from '$lib/api.js';
+	import {
+		authPage,
+		authCard,
+		authTitle,
+		formStack,
+		formErrorText,
+		fullWidth
+	} from '$lib/auth/styles.js';
 
 	let username = $state('');
 	let password = $state('');
@@ -33,59 +40,54 @@
 		formError = '';
 		const result = await postJson('/api/auth/login', { username, password });
 		submitting = false;
-	if (result.ok) {
-		goto('/admin');
-		return;
-	}
+		if (result.ok) {
+			goto('/admin');
+			return;
+		}
 		formError = result.message;
 	}
 </script>
 
-<div class="mx-auto flex max-w-md flex-col justify-center">
-	<Card>
+<div class={authPage}>
+	<Card class={authCard}>
 		<CardHeader>
-			<CardTitle>Sign in</CardTitle>
+			<CardTitle class={authTitle}>Sign in</CardTitle>
 			<CardDescription>Sign in to manage locations and settings.</CardDescription>
 		</CardHeader>
 		<CardContent>
-			<form class="space-y-4" onsubmit={submit} novalidate>
-				<div class="space-y-2">
-					<Label for="username">Username</Label>
+			<form class={formStack} onsubmit={submit} novalidate aria-busy={submitting || undefined}>
+				<Field label="Username" for="username">
 					<Input
 						id="username"
 						name="username"
 						autocomplete="username"
 						bind:value={username}
-						disabled={submitting}
+						readonly={submitting}
+						aria-disabled={submitting || undefined}
 						required
 					/>
-				</div>
+				</Field>
 
-				<div class="space-y-2">
-					<Label for="password">Password</Label>
+				<Field label="Password" for="password">
 					<Input
 						id="password"
 						name="password"
 						type="password"
 						autocomplete="current-password"
 						bind:value={password}
-						disabled={submitting}
+						readonly={submitting}
+						aria-disabled={submitting || undefined}
 						aria-describedby={formError ? 'login-error' : undefined}
 						required
 					/>
-				</div>
+				</Field>
 
 				{#if formError}
-					<p id="login-error" class="text-sm text-destructive" role="alert">{formError}</p>
+					<p id="login-error" class={formErrorText} role="alert">{formError}</p>
 				{/if}
 
-				<Button type="submit" class="w-full" disabled={!canSubmit}>
-					{#if submitting}
-						<LoaderCircle class="animate-spin" aria-hidden="true" />
-						Signing in
-					{:else}
-						Sign in
-					{/if}
+				<Button type="submit" class={fullWidth} loading={submitting} disabled={!canSubmit}>
+					{submitting ? 'Signing in' : 'Sign in'}
 				</Button>
 			</form>
 		</CardContent>

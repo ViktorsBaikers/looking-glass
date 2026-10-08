@@ -8,11 +8,16 @@ const config = {
 		adapter: adapter({
 			pages: 'build',
 			assets: 'build',
-			fallback: 'index.html',
+			// `/` is prerendered to index.html (its route chunks preload with the
+			// entry); every other route gets this route-agnostic shell.
+			fallback: '200.html',
 			precompress: false
 		}),
 		alias: {
-			$lib: 'src/lib'
+			$lib: 'src/lib',
+			// Panda CSS generated runtime; kit.alias wires both Vite resolve and
+			// the generated tsconfig paths so `styled-system/css` imports typecheck.
+			'styled-system': './styled-system'
 		}
 	}
 };

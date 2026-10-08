@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runnableMethods, targetPlaceholder } from './methods.js';
+import { runnableMethods, targetPlaceholder, targetPreflightError } from './methods.js';
 import type { LocationDetail } from '../admin/types.js';
 
 function location(offered: string[]): LocationDetail {
@@ -48,5 +48,29 @@ describe('targetPlaceholder', () => {
 	it('hints an IP or hostname for diagnostic methods', () => {
 		expect(targetPlaceholder('ping')).toBe('e.g. 1.1.1.1 or example.com');
 		expect(targetPlaceholder('traceroute')).toBe('e.g. 1.1.1.1 or example.com');
+	});
+});
+
+describe('targetPreflightError', () => {
+	it('refuses clearly non-public IPv4 literals for diagnostics', () => {
+		for (const target of ['10.0.0.1', '127.0.0.1', '169.254.1.1', '172.16.0.1', '192.168.1.1']) {
+			expect(targetPreflightError('ping', target)).toBe(
+				'Enter a publicly routable IPv4 address or hostname.'
+			);
+		}
+	});
+
+	it('accepts public addresses, hostnames and ambiguous input for server validation', () => {
+		expect(targetPreflightError('ping', '1.1.1.1')).toBe('');
+		expect(targetPreflightError('mtr', 'example.com')).toBe('');
+		expect(targetPreflightError('ping', '999.1.1.1')).toBe('');
+		expect(targetPreflightError('ping', '172.15.0.1')).toBe('');
+		expect(targetPreflightError('ping6', 'fc00::1')).toBe('');
+		expect(targetPreflightError('ping', '')).toBe('');
+	});
+
+	it('exempts BGP prefixes', () => {
+		expect(targetPreflightError('bgp', '10.0.0.0/8')).toBe('');
+		expect(targetPreflightError('bgp6', 'fc00::/7')).toBe('');
 	});
 });

@@ -10,7 +10,7 @@ export async function measureLatency(samples = 4): Promise<number | null> {
 		try {
 			await fetch('/api/visitor', { cache: 'no-store' });
 		} catch {
-			return best;
+			break;
 		}
 		const rtt = performance.now() - start;
 		if (best === null || rtt < best) best = rtt;

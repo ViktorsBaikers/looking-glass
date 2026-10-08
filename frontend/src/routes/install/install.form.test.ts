@@ -56,7 +56,12 @@ describe('installer form', () => {
 		const password = screen.getByLabelText('Password');
 		const confirm = screen.getByLabelText('Confirm password');
 
+		// F-234: a hint while typing, an error once the field is left.
 		await user.type(password, 'too-short');
+		expect(screen.queryByRole('alert')).toBeNull();
+		expect(document.getElementById('password-hint')?.textContent).toBe('At least 12 characters.');
+		expect(password.hasAttribute('aria-invalid')).toBe(false);
+		await user.tab();
 		expect(screen.getByRole('alert').textContent).toBe('At least 12 characters.');
 		expect(password.getAttribute('aria-invalid')).toBe('true');
 
@@ -67,6 +72,47 @@ describe('installer form', () => {
 		expect(screen.queryByText('Passwords do not match.')).toBeNull();
 		expect(password.hasAttribute('aria-invalid')).toBe(false);
 		expect(confirm.hasAttribute('aria-invalid')).toBe(false);
+	});
+
+	// F-194: central counts password length in UTF-8 bytes (12 to 512), so the
+	// form does too; a non-ASCII password gets a note on how it is counted.
+	it('counts the password length in UTF-8 bytes like central, with a limit on both ends', async () => {
+		render(InstallPage);
+		const user = userEvent.setup();
+		const password = screen.getByLabelText('Password');
+		const confirm = screen.getByLabelText('Confirm password');
+		await user.type(screen.getByLabelText('Setup token'), 'setup-token');
+		await user.type(screen.getByLabelText('Username'), 'admin');
+		const submit = screen.getByRole('button', { name: 'Create account' }) as HTMLButtonElement;
+
+		// 4 CJK characters are 12 bytes: central accepts them.
+		await user.type(password, '中中中中');
+		await user.type(confirm, '中中中中');
+		expect(screen.queryByRole('alert')).toBeNull();
+		expect(submit.disabled).toBe(false);
+
+		// 300 x é is 300 UTF-16 units but 600 bytes: central refuses it.
+		await user.clear(password);
+		await user.click(password);
+		await user.paste('é'.repeat(300));
+		await user.clear(confirm);
+		await user.click(confirm);
+		await user.paste('é'.repeat(300));
+		expect(document.getElementById('password-error')?.textContent).toMatch(/^At most 512 characters\. .*count as 2 to 4/);
+		expect(submit.disabled).toBe(true);
+
+		await user.clear(password);
+		await user.click(password);
+		await user.paste('x'.repeat(513));
+		await user.clear(confirm);
+		await user.click(confirm);
+		await user.paste('x'.repeat(513));
+		expect(document.getElementById('password-error')?.textContent).toBe('At most 512 characters.');
+		expect(submit.disabled).toBe(true);
+
+		await user.clear(password);
+		await user.type(password, 'éééée');
+		expect(document.getElementById('password-hint')?.textContent).toMatch(/^At least 12 characters\. .*count as 2 to 4/);
 	});
 
 	it('enables only a complete form and submits once while showing progress', async () => {
@@ -95,8 +141,22 @@ describe('installer form', () => {
 
 		await user.click(submit);
 		expect(fetchMock.mock.calls.filter(([input]) => input === '/api/setup')).toHaveLength(1);
-		expect((screen.getByRole('button', { name: 'Creating account' }) as HTMLButtonElement).disabled).toBe(true);
-		expect(screen.getByRole('button', { name: 'Creating account' }).querySelector('svg')).not.toBeNull();
+		const busy = screen.getByRole('button', { name: 'Creating account' }) as HTMLButtonElement;
+		// Busy, not native disabled: a real browser drops focus from a control that becomes disabled.
+		expect(busy.disabled).toBe(false);
+		expect(busy.getAttribute('aria-busy')).toBe('true');
+		expect(busy.getAttribute('aria-disabled')).toBe('true');
+		expect(busy.querySelector('svg')).not.toBeNull();
+		await user.click(busy);
+		busy.focus();
+		await user.keyboard('{Enter}');
+		await user.keyboard(' ');
+		// Busy fields are read-only, not disabled: they keep focus and ignore typing and Enter.
+		const username = screen.getByLabelText('Username') as HTMLInputElement;
+		await user.type(username, 'x{Enter}');
+		expect(username.value).toBe('admin');
+		expect(document.activeElement).toBe(username);
+		expect(fetchMock.mock.calls.filter(([input]) => input === '/api/setup')).toHaveLength(1);
 
 		completeSetup?.(new Response(null, { status: 204 }));
 		await waitFor(() => expect(goto).toHaveBeenCalledWith('/login'));
