@@ -78,8 +78,22 @@ describe('login form', () => {
 
 		await user.click(submit);
 		expect(fetchMock.mock.calls.filter(([input]) => input === '/api/auth/login')).toHaveLength(1);
-		expect((screen.getByRole('button', { name: 'Signing in' }) as HTMLButtonElement).disabled).toBe(true);
-		expect(screen.getByRole('button', { name: 'Signing in' }).querySelector('svg')).not.toBeNull();
+		const busy = screen.getByRole('button', { name: 'Signing in' }) as HTMLButtonElement;
+		// Busy, not native disabled: a real browser drops focus from a control that becomes disabled.
+		expect(busy.disabled).toBe(false);
+		expect(busy.getAttribute('aria-busy')).toBe('true');
+		expect(busy.getAttribute('aria-disabled')).toBe('true');
+		expect(busy.querySelector('svg')).not.toBeNull();
+		await user.click(busy);
+		busy.focus();
+		await user.keyboard('{Enter}');
+		await user.keyboard(' ');
+		// Busy fields are read-only, not disabled: they keep focus and ignore typing and Enter.
+		const username = screen.getByLabelText('Username') as HTMLInputElement;
+		await user.type(username, 'x{Enter}');
+		expect(username.value).toBe('admin');
+		expect(document.activeElement).toBe(username);
+		expect(fetchMock.mock.calls.filter(([input]) => input === '/api/auth/login')).toHaveLength(1);
 
 		completeLogin?.(new Response(null, { status: 204 }));
 		await waitFor(() => expect(goto).toHaveBeenCalledWith('/admin'));

@@ -1,0 +1,65 @@
+# Central behind Caddy. Caddy terminates HTTPS for LG_DOMAIN (a public name gets
+# a Let's Encrypt certificate, `localhost` gets Caddy's internal CA) and forwards
+# to central's plain :8080, which is never published. Agents enroll and connect
+# on 8443 straight to central's own TLS, whose key central generates and keeps
+# in the central-data volume.
+services:
+  central:
+    image: ghcr.io/viktorsbaikers/looking-glass:latest
+    restart: unless-stopped
+    environment:
+      # Only Caddy's fixed address may attest HTTPS with X-Forwarded-Proto. Every
+      # other container on the network gets an address from ip_range.
+      LG_TRUSTED_PROXIES: 172.30.0.2
+      LG_TUNNEL_URL: https://${LG_DOMAIN:-localhost}:8443
+    ports:
+      - "8443:8443"
+    volumes:
+      - central-data:/data
+    networks:
+      lg:
+        ipv4_address: 172.30.0.3
+
+  caddy:
+    image: caddy:2.11
+    restart: unless-stopped
+    command: caddy reverse-proxy --from ${LG_DOMAIN:-localhost} --to central:8080
+    depends_on:
+      central:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+    networks:
+      lg:
+        ipv4_address: 172.30.0.2
+    # `caddy reverse-proxy` runs without the admin API, so probe central's
+    # /health through Caddy's own HTTPS. The start period covers a first ACME
+    # issuance for a public name.
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsSk
+        - -o
+        - /dev/null
+        - --resolve
+        - ${LG_DOMAIN:-localhost}:443:127.0.0.1
+        - https://${LG_DOMAIN:-localhost}/health
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      start_interval: 2s
+
+networks:
+  lg:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          ip_range: 172.30.0.128/25
+
+volumes:
+  central-data:
+  caddy-data:

@@ -1,17 +1,31 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+	import { cx } from 'styled-system/css';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
-	import { toaster } from '$lib/toast.svelte.js';
+	import Textarea from '$lib/components/ui/textarea.svelte';
+	import Field from '$lib/components/ui/field.svelte';
+	import Select from '$lib/components/ui/select.svelte';
+	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card/index.js';
+	import { toast } from '$lib/toast.svelte.js';
+	import { spin, adminPage, adminPageHead, adminTitle, adminLede } from '$lib/styles.js';
+	import { lineStyle } from '$lib/lines.js';
 	import { getSettings, saveSettings } from '$lib/admin/api.js';
+	import { isDirty, toPayload, type SettingsDraft } from '$lib/admin/settings.js';
+	import * as s from '$lib/admin/settings-styles.js';
+	import Spinner from '~icons/material-symbols/progress-activity';
 	import type { GlobalSettings } from '$lib/admin/types.js';
 
+	const THEME_ITEMS = [
+		{ label: 'Follow system', value: 'system' },
+		{ label: 'Light', value: 'light' },
+		{ label: 'Dark', value: 'dark' }
+	];
+
 	let phase = $state<'loading' | 'ready' | 'error'>('loading');
-	let form = $state<GlobalSettings | null>(null);
+	let saved = $state<GlobalSettings | null>(null);
+	let form = $state<SettingsDraft | null>(null);
 	let saving = $state(false);
-	let formError = $state('');
 
 	onMount(load);
 
@@ -19,160 +33,289 @@
 		phase = 'loading';
 		const result = await getSettings();
 		if (result.ok) {
-			form = result.data;
+			saved = result.data;
+			form = { ...result.data };
 			phase = 'ready';
 		} else {
 			phase = 'error';
 		}
 	}
 
-	function nullIfBlank(value: string | null): string | null {
-		return value && value.trim() !== '' ? value : null;
-	}
+	const dirty = $derived(saved !== null && form !== null && isDirty(saved, form));
+	const hasLogo = $derived(!!form?.logo_url && form.logo_url.trim() !== '');
+	const hasTerms = $derived(!!form?.terms_url && form.terms_url.trim() !== '');
+	const defaultThemeLabel = $derived(
+		THEME_ITEMS.find((item) => item.value === form?.default_theme)?.label ?? form?.default_theme
+	);
+	const message = $derived(
+		form && form.custom_block && form.custom_block.trim() !== ''
+			? form.custom_block
+			: 'No custom message configured.'
+	);
 
 	async function submit(event: SubmitEvent) {
 		event.preventDefault();
 		if (!form || saving) return;
 		saving = true;
-		formError = '';
-		// Coerce the numeric fields: form inputs surface strings, and the server
-		// expects integers, so build the payload explicitly.
-		const payload: GlobalSettings = {
-			site_title: form.site_title,
-			logo_url: nullIfBlank(form.logo_url),
-			default_theme: form.default_theme,
-			terms_url: nullIfBlank(form.terms_url),
-			custom_block: nullIfBlank(form.custom_block),
-			exec_max_concurrent: Number(form.exec_max_concurrent),
-			exec_timeout_secs: Number(form.exec_timeout_secs),
-			exec_max_output_kib: Number(form.exec_max_output_kib),
-			exec_rate_max: Number(form.exec_rate_max),
-			exec_rate_window_secs: Number(form.exec_rate_window_secs)
-		};
-		const result = await saveSettings(payload);
+		const result = await saveSettings(toPayload(form));
 		saving = false;
 		if (result.ok) {
-			form = result.data;
-			toaster.success('Settings saved.');
+			saved = result.data;
+			form = { ...result.data };
+			toast.success('Settings saved.');
 		} else {
-			formError = result.message;
+			toast.error(result.message);
 		}
+	}
+
+	// While saving, the controls refuse changes without `disabled`, which would
+	// drop a focused control's focus to <body>: the saved copy replaces the whole
+	// form, so anything typed meanwhile would be lost. Capturing at the form keeps
+	// the Ark select from seeing the event, as in LocationEditor.
+	function holdWhileSaving(event: Event) {
+		if (!saving) return;
+		event.stopPropagation();
+		if (event.type === 'click') event.preventDefault();
+	}
+
+	// WebKit ignores scroll-padding when focus scrolls, so keep a keyboard-focused
+	// field clear of the sticky site header and Save row, focus ring included.
+	// Focus from a press is left alone: a scroll before the release loses the click.
+	// (Text fields match :focus-visible on a press too; the caret still lands.)
+	function keepClearOfStickyBars(event: FocusEvent) {
+		const row = (event.currentTarget as HTMLElement).querySelector('[data-sticky-actions]');
+		const field = event.target as Element;
+		if (!row || row.contains(field) || !field.matches(':focus-visible')) return;
+		const rect = field.getBoundingClientRect();
+		const room = rect.top - 8 - (document.querySelector('header')?.getBoundingClientRect().bottom ?? 0);
+		const overlap = rect.bottom + 8 - row.getBoundingClientRect().top;
+		// A field taller than the gap keeps its top in view.
+		if (room < 0) window.scrollBy(0, room);
+		else if (overlap > 0) window.scrollBy(0, Math.min(overlap, room));
 	}
 </script>
 
-<div class="max-w-2xl space-y-6">
-	<div>
-		<h1 class="text-xl font-semibold tracking-tight">Settings</h1>
-		<p class="text-sm text-muted-foreground">Branding and the limits every run is held to.</p>
-	</div>
-
-	{#if phase === 'loading'}
-		<div class="flex items-center gap-2 text-muted-foreground">
-			<LoaderCircle class="size-5 animate-spin" aria-hidden="true" />
-			Loading settings…
-		</div>
-	{:else if phase === 'error'}
-		<div class="rounded-md border border-destructive/40 px-4 py-6 text-sm text-destructive" role="alert">
-			<p>Settings could not be loaded.</p>
-			<Button variant="outline" size="sm" class="mt-3" onclick={load}>Try again</Button>
-		</div>
-	{:else if form}
-		<form class="space-y-8" onsubmit={submit} novalidate>
-			<fieldset class="space-y-4">
-				<legend class="text-sm font-semibold text-muted-foreground">Branding</legend>
-				<div class="space-y-2">
-					<Label for="site-title">Site title</Label>
-					<Input id="site-title" bind:value={form.site_title} disabled={saving} required />
-				</div>
-				<div class="space-y-2">
-					<Label for="logo-url">Logo URL (optional)</Label>
-					<Input id="logo-url" bind:value={form.logo_url} disabled={saving} />
-				</div>
-				<div class="space-y-2">
-					<Label for="theme">Default theme</Label>
-					<select
-						id="theme"
-						bind:value={form.default_theme}
-						disabled={saving}
-						class="h-11 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					>
-						<option value="system">Follow system</option>
-						<option value="light">Light</option>
-						<option value="dark">Dark</option>
-					</select>
-				</div>
-				<div class="space-y-2">
-					<Label for="terms-url">Terms-of-service URL (optional)</Label>
-					<Input id="terms-url" bind:value={form.terms_url} disabled={saving} />
-				</div>
-				<div class="space-y-2">
-					<Label for="custom-block">Custom content block (optional)</Label>
-					<textarea
-						id="custom-block"
-						bind:value={form.custom_block}
-						disabled={saving}
-						rows="3"
-						class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					></textarea>
-				</div>
-			</fieldset>
-
-			<fieldset class="space-y-4">
-				<legend class="text-sm font-semibold text-muted-foreground">Execution limits</legend>
-				<div class="grid gap-4 sm:grid-cols-2">
-					<div class="space-y-2">
-						<Label for="max-concurrent">Global concurrency cap</Label>
-						<Input
-							id="max-concurrent"
-							type="number"
-							min="1"
-							bind:value={form.exec_max_concurrent}
-							disabled={saving}
-						/>
-					</div>
-					<div class="space-y-2">
-						<Label for="timeout">Per-run timeout (seconds)</Label>
-						<Input id="timeout" type="number" min="1" bind:value={form.exec_timeout_secs} disabled={saving} />
-					</div>
-					<div class="space-y-2">
-						<Label for="output">Output cap (KiB)</Label>
-						<Input
-							id="output"
-							type="number"
-							min="1"
-							bind:value={form.exec_max_output_kib}
-							disabled={saving}
-						/>
-					</div>
-					<div class="space-y-2">
-						<Label for="rate-max">Rate limit (runs)</Label>
-						<Input id="rate-max" type="number" min="1" bind:value={form.exec_rate_max} disabled={saving} />
-					</div>
-					<div class="space-y-2">
-						<Label for="rate-window">Rate window (seconds)</Label>
-						<Input
-							id="rate-window"
-							type="number"
-							min="1"
-							bind:value={form.exec_rate_window_secs}
-							disabled={saving}
-						/>
-					</div>
-				</div>
-			</fieldset>
-
-			{#if formError}
-				<p class="text-sm text-destructive" role="alert">{formError}</p>
-			{/if}
-
-			<Button type="submit" disabled={saving}>
-				{#if saving}
-					<LoaderCircle class="size-4 animate-spin" aria-hidden="true" />
-					Saving…
+{#snippet previewCard(dark: boolean)}
+	{#if form}
+		<div class={cx(s.previewCard, dark ? 'dark' : 'light')}>
+			<div class={s.previewBar}>
+				{#if hasLogo}
+					<img src={form.logo_url ?? ''} alt="" class={s.previewLogo} />
 				{:else}
-					Save settings
+					<span class={s.previewMark} aria-hidden="true"></span>
 				{/if}
-			</Button>
-		</form>
+				<span class={s.previewTitle}>{form.site_title}</span>
+				<span class={s.previewNav} aria-hidden="true">Diagnostics</span>
+			</div>
+			<div class={s.previewBody}>
+				<div class={s.previewLine} data-line style={lineStyle('preview')} aria-hidden="true">
+					<span class={s.previewRoundel}>LG</span>
+				</div>
+				<p class={s.previewMessage}>{message}</p>
+				<p class={s.previewMeta}>
+					<span class={s.previewScheme}>{dark ? 'Dark theme' : 'Light theme'}</span> ⋅
+					<span>{hasLogo ? 'Custom logo' : 'Default mark'}</span> ⋅
+					<span>{hasTerms ? 'Terms link' : 'No terms link'}</span> ⋅
+					<span>Default: {defaultThemeLabel}</span>
+				</p>
+			</div>
+		</div>
 	{/if}
-</div>
+{/snippet}
+
+{#if phase === 'loading'}
+	<div class={s.loadingRow}>
+		<Spinner class={spin} aria-hidden="true" />
+		Loading settings…
+	</div>
+{:else if phase === 'error'}
+	<Card>
+		<CardContent>
+			<p class={s.errorText} role="alert">Settings could not be loaded.</p>
+			<Button variant="secondary" size="sm" onclick={load}>Try again</Button>
+		</CardContent>
+	</Card>
+{:else if form}
+	<div class={adminPage}>
+	<header class={adminPageHead}>
+		<div>
+			<h1 class={adminTitle}>Settings</h1>
+			<p class={adminLede}>
+				Branding, the default theme, and the limits every run must follow. The preview shows changes before you save.
+			</p>
+		</div>
+	</header>
+
+	<div class={s.pageGrid}>
+		<form
+			class={s.formCol}
+			onsubmit={submit}
+			onfocusin={keepClearOfStickyBars}
+			onclickcapture={holdWhileSaving}
+			onkeydowncapture={holdWhileSaving}
+			novalidate
+			aria-busy={saving || undefined}
+		>
+			<Card>
+				<CardHeader><CardTitle class={s.sectionTitle}>Branding</CardTitle></CardHeader>
+				<CardContent>
+					<div class={s.fieldStack}>
+						<Field label="Site title" for="site-title">
+							<Input
+								id="site-title"
+								bind:value={form.site_title}
+								required
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
+						</Field>
+						<Field label="Logo URL (optional)" for="logo-url">
+							<Input
+								id="logo-url"
+								bind:value={form.logo_url}
+								placeholder="https://example.test/logo.svg"
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
+						</Field>
+						<Field label="Terms-of-service URL (optional)" for="terms-url">
+							<Input
+								id="terms-url"
+								bind:value={form.terms_url}
+								placeholder="https://example.test/terms"
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
+						</Field>
+						<Field label="Custom content block (optional)" for="custom-block">
+							<Textarea
+								id="custom-block"
+								bind:value={form.custom_block}
+								rows={4}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
+						</Field>
+					</div>
+				</CardContent>
+			</Card>
+
+			<Card>
+				<CardHeader><CardTitle class={s.sectionTitle}>Appearance</CardTitle></CardHeader>
+				<CardContent>
+					<Field
+						label="Default theme"
+						for="default-theme"
+						hint="This changes the default only. It does not replace a visitor's saved preference."
+					>
+						<!-- Select takes no aria-disabled; the group exposes it to the trigger. -->
+						<div class="locked" role="group" aria-disabled={saving || undefined}>
+							<Select id="default-theme" items={THEME_ITEMS} bind:value={form.default_theme} />
+						</div>
+					</Field>
+				</CardContent>
+			</Card>
+
+			<Card>
+				<CardHeader><CardTitle class={s.sectionTitle}>Execution limits</CardTitle></CardHeader>
+				<CardContent>
+					<div class={s.limitsGrid}>
+						<Field
+							label="Global concurrency cap"
+							for="max-concurrent"
+							info="The most runs that can execute at the same time. When every slot is taken, a new run is refused as busy until one finishes."
+						>
+							<Input
+								id="max-concurrent"
+								type="number"
+								min={1}
+								bind:value={form.exec_max_concurrent}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
+						</Field>
+						<Field
+							label="Per-run timeout (seconds)"
+							for="timeout"
+							info="The longest one run may take. A run still going after this many seconds is stopped, and the visitor is told it timed out."
+						>
+							<Input
+								id="timeout"
+								type="number"
+								min={1}
+								bind:value={form.exec_timeout_secs}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
+						</Field>
+						<Field
+							label="Output cap (KiB)"
+							for="output"
+							info="The most output one run may produce, in KiB. A run that goes past it is stopped, and the visitor is told the output was too large."
+						>
+							<Input
+								id="output"
+								type="number"
+								min={1}
+								bind:value={form.exec_max_output_kib}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
+						</Field>
+						<Field
+							label="Rate limit (runs)"
+							for="rate-max"
+							info="How many runs one visitor, by IP address, may start within each rate window. Further attempts are refused until the window resets. Speed test uploads count too."
+						>
+							<Input
+								id="rate-max"
+								type="number"
+								min={1}
+								bind:value={form.exec_rate_max}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
+						</Field>
+						<Field
+							label="Rate window (seconds)"
+							for="rate-window"
+							info="The period, in seconds, the rate limit is counted over. With a limit of 20 and a window of 60, each visitor can start 20 runs per minute."
+						>
+							<Input
+								id="rate-window"
+								type="number"
+								min={1}
+								bind:value={form.exec_rate_window_secs}
+								readonly={saving}
+								aria-disabled={saving || undefined}
+							/>
+						</Field>
+					</div>
+				</CardContent>
+			</Card>
+
+			<div class={s.actionsRow} data-sticky-actions>
+				<Button type="submit" loading={saving}>Save settings</Button>
+				<span class={s.indicator}>{dirty ? 'Unsaved changes.' : 'No unsaved changes.'}</span>
+			</div>
+		</form>
+
+		<aside class={s.previewCol} aria-label="Preview">
+			<h2 class={s.previewHeading}>Preview</h2>
+			<p class={s.previewLabel}>{dirty ? 'Unsaved changes preview.' : 'Saved settings preview.'}</p>
+			{@render previewCard(false)}
+			{@render previewCard(true)}
+		</aside>
+	</div>
+	</div>
+{/if}
+
+<style>
+	/* While saving, the group's aria-disabled gives the locked select its
+	   recipe's disabled look. Panda does not extract css() from .svelte files. */
+	.locked[aria-disabled='true'] :global([data-part='trigger']) {
+		opacity: 0.55;
+		cursor: not-allowed;
+		background: var(--colors-sunk);
+	}
+</style>

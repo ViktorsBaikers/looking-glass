@@ -17,54 +17,11 @@ use serde_json::{json, Value};
 
 use central::{Agent, AppState};
 use common::{
-    assert_status, body_string, complete_setup, secure_request, send, session_cookie, test_state,
-    SETUP_TOKEN, TRUSTED_PROXY,
+    assert_status, authed, body_string, captured_logs, complete_setup, json_body, send,
+    setup_and_login, test_state, TRUSTED_PROXY,
 };
 
-const PASSWORD: &str = "correct-horse-battery-staple";
 const UNTRUSTED_PEER: IpAddr = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7));
-
-async fn setup_and_login(state: &AppState) -> String {
-    let install = send(
-        central::build(state.clone()),
-        secure_request(
-            "POST",
-            "/api/setup",
-            &json!({ "setup_token": SETUP_TOKEN, "username": "alice", "password": PASSWORD })
-                .to_string(),
-        ),
-    )
-    .await;
-    assert_status(&install, StatusCode::CREATED);
-
-    let login = send(
-        central::build(state.clone()),
-        secure_request(
-            "POST",
-            "/api/auth/login",
-            &json!({ "username": "alice", "password": PASSWORD }).to_string(),
-        ),
-    )
-    .await;
-    assert_status(&login, StatusCode::NO_CONTENT);
-    session_cookie(&login).expect("session cookie from login")
-}
-
-fn authed(method: &str, uri: &str, cookie: &str, json: &str) -> Request<Body> {
-    Request::builder()
-        .method(method)
-        .uri(uri)
-        .header("content-type", "application/json")
-        .header("x-forwarded-proto", "https")
-        .header("cookie", cookie)
-        .extension(ConnectInfo(SocketAddr::new(TRUSTED_PROXY, 40000)))
-        .body(Body::from(json.to_string()))
-        .unwrap()
-}
-
-async fn json_body(response: axum::http::Response<Body>) -> Value {
-    serde_json::from_str(&body_string(response).await).expect("json body")
-}
 
 /// Create a local (online) location offering `methods`; returns its id.
 async fn create_local_location(state: &AppState, cookie: &str, methods: Value) -> String {
@@ -124,6 +81,18 @@ async fn public_settings_is_an_unauthenticated_five_field_projection_without_cac
     let cookie = setup_and_login(&state).await;
     let location_id = create_local_location(&state, &cookie, json!(["ping"])).await;
 
+    let locations_before = body_string(
+        send(
+            central::build(state.clone()),
+            Request::builder()
+                .uri("/api/locations")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await,
+    )
+    .await;
+
     let updated = send(
         central::build(state.clone()),
         authed(
@@ -147,18 +116,6 @@ async fn public_settings_is_an_unauthenticated_five_field_projection_without_cac
     )
     .await;
     assert_status(&updated, StatusCode::OK);
-
-    let locations_before = body_string(
-        send(
-            central::build(state.clone()),
-            Request::builder()
-                .uri("/api/locations")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await,
-    )
-    .await;
 
     let response = send(
         central::build(state.clone()),
@@ -205,40 +162,51 @@ async fn corrupt_public_settings_fail_closed_without_cache() {
     use redb::{Database, TableDefinition};
 
     const SETTINGS: TableDefinition<&str, &[u8]> = TableDefinition::new("settings");
-    let db_path = common::temp_db_path();
-    let database = Database::create(&db_path).expect("create corrupt settings database");
-    let write = database
-        .begin_write()
-        .expect("begin corrupt settings write");
-    {
-        let mut settings = write.open_table(SETTINGS).expect("open settings table");
-        settings
-            .insert("global", &br#"{\"site_title\":\"\"}"#[..])
-            .expect("write out-of-contract settings");
+    // Each row is valid JSON that parses into GlobalSettings, so only
+    // the read-side contract check can refuse it.
+    for row in [
+        json!({ "site_title": "" }),
+        json!({ "site_title": "Looking Glass", "logo_url": "http://cdn.example.test/logo.svg" }),
+    ] {
+        let db_path = common::temp_db_path();
+        let database = Database::create(&db_path).expect("create corrupt settings database");
+        let write = database
+            .begin_write()
+            .expect("begin corrupt settings write");
+        {
+            let mut settings = write.open_table(SETTINGS).expect("open settings table");
+            settings
+                .insert("global", row.to_string().as_bytes())
+                .expect("write out-of-contract settings");
+        }
+        write.commit().expect("commit corrupt settings");
+        drop(database);
+
+        let state = common::test_state_at(db_path);
+        complete_setup(&state).await;
+        let response = send(
+            central::build(state),
+            Request::builder()
+                .uri("/api/public/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+
+        assert_status(&response, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response
+                .headers()
+                .get("cache-control")
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+        assert_eq!(
+            json_body(response).await["error"],
+            "internal_error",
+            "{row}"
+        );
     }
-    write.commit().expect("commit corrupt settings");
-    drop(database);
-
-    let state = common::test_state_at(db_path);
-    complete_setup(&state).await;
-    let response = send(
-        central::build(state),
-        Request::builder()
-            .uri("/api/public/settings")
-            .body(Body::empty())
-            .unwrap(),
-    )
-    .await;
-
-    assert_status(&response, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(
-        response
-            .headers()
-            .get("cache-control")
-            .and_then(|value| value.to_str().ok()),
-        Some("no-store")
-    );
-    assert_eq!(json_body(response).await["error"], "internal_error");
 }
 
 #[tokio::test]
@@ -293,6 +261,90 @@ async fn public_settings_enforces_the_custom_block_boundary() {
         } else {
             assert_eq!(body["error"], "internal_error");
         }
+    }
+}
+
+// A logo or terms URL saved under the older https check but refused by
+// the strict one is served as null; the rest of the branding stays intact.
+#[tokio::test]
+async fn public_settings_drop_stored_urls_the_strict_check_refuses() {
+    use redb::{Database, TableDefinition};
+
+    const SETTINGS: TableDefinition<&str, &[u8]> = TableDefinition::new("settings");
+    const GOOD: &str = "https://cdn.example.test/ok";
+    for bad in [
+        "https://1.2.3/logo.png",
+        "https://cdn.example.com:/logo.svg",
+        "https://cdn.example.com:70000/logo.svg",
+    ] {
+        for (field, other) in [("logo_url", "terms_url"), ("terms_url", "logo_url")] {
+            let db_path = common::temp_db_path();
+            let database = Database::create(&db_path).expect("create settings database");
+            let write = database.begin_write().expect("begin settings write");
+            {
+                let mut settings = write.open_table(SETTINGS).expect("open settings table");
+                let row = json!({
+                    "site_title": "Legacy Glass",
+                    "default_theme": "dark",
+                    "custom_block": "hello",
+                    field: bad,
+                    other: GOOD
+                });
+                settings
+                    .insert("global", row.to_string().as_bytes())
+                    .expect("write legacy settings");
+            }
+            write.commit().expect("commit legacy settings");
+            drop(database);
+
+            let state = common::test_state_at(db_path);
+            complete_setup(&state).await;
+            let response = send(
+                central::build(state),
+                Request::builder()
+                    .uri("/api/public/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await;
+
+            assert_status(&response, StatusCode::OK);
+            let body = json_body(response).await;
+            assert_eq!(body[field], Value::Null, "{field} = {bad}");
+            assert_eq!(body[other], GOOD, "{field} = {bad}");
+            assert_eq!(body["site_title"], "Legacy Glass");
+            assert_eq!(body["default_theme"], "dark");
+            assert_eq!(body["custom_block"], "hello");
+        }
+    }
+
+    // An overlong stored URL was never in contract, so it still fails closed.
+    let long = |max: usize| format!("https://cdn.example.test/{}", "a".repeat(max));
+    for (field, url) in [("logo_url", long(500)), ("terms_url", long(300))] {
+        let db_path = common::temp_db_path();
+        let database = Database::create(&db_path).expect("create settings database");
+        let write = database.begin_write().expect("begin settings write");
+        {
+            let mut settings = write.open_table(SETTINGS).expect("open settings table");
+            let row = json!({ "site_title": "Legacy Glass", field: url });
+            settings
+                .insert("global", row.to_string().as_bytes())
+                .expect("write overlong settings");
+        }
+        write.commit().expect("commit overlong settings");
+        drop(database);
+
+        let state = common::test_state_at(db_path);
+        complete_setup(&state).await;
+        let response = send(
+            central::build(state),
+            Request::builder()
+                .uri("/api/public/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_status(&response, StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
 
@@ -392,6 +444,119 @@ async fn run_refuses_an_unknown_location() {
     assert!(
         body.contains("location is not available"),
         "an unknown location is refused: {body}"
+    );
+}
+
+// F-257: a remote that is offline, or online with no connected agent, is
+// refused exactly like an unknown id, so a visitor cannot tell them apart.
+#[tokio::test]
+async fn run_refuses_an_unavailable_remote_like_an_unknown_location() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let id = create_remote_location(&state, &cookie, json!(["ping"])).await;
+    let unknown = run_body(
+        &state,
+        "method=ping&target=8.8.8.8&location=deadbeefdeadbeef",
+    )
+    .await;
+    assert!(unknown.contains("location is not available"), "{unknown}");
+
+    // A stale heartbeat leaves the remote offline; a fresh one makes it
+    // online, but no tunnel is connected.
+    for last_seen in [Some(0), Some(unix_now())] {
+        state
+            .store
+            .put_agent(&Agent {
+                id: "agent-remote".to_string(),
+                location_id: id.clone(),
+                credential_hash: "$argon2id$stub".to_string(),
+                enrolled_at: 0,
+                last_seen,
+                revoked: false,
+            })
+            .unwrap();
+        let body = run_body(&state, &format!("method=ping&target=8.8.8.8&location={id}")).await;
+        assert_eq!(body, unknown, "last_seen {last_seen:?}");
+    }
+}
+
+/// The run stream's body, or a marker when it is still open after 5 s (the run started).
+async fn run_body(state: &AppState, query: &str) -> String {
+    let response = send(central::build(state.clone()), run_get(query)).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), body_string(response))
+        .await
+        .unwrap_or_else(|_| "<run still streaming after 5s>".to_string())
+}
+
+// F-212: a run without `location` is gated on the local location's offered set,
+// exactly like a run naming it; it never falls back to a built-in method set.
+#[tokio::test]
+async fn run_without_location_is_gated_like_the_local_location() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let id = create_local_location(&state, &cookie, json!(["ping"])).await;
+    // A remote's offering never widens what runs on central's own host, even
+    // while it is online (F-258).
+    let remote = create_remote_location(&state, &cookie, json!(["mtr"])).await;
+    state
+        .store
+        .put_agent(&Agent {
+            id: "agent-remote".to_string(),
+            location_id: remote,
+            credential_hash: "$argon2id$stub".to_string(),
+            enrolled_at: 0,
+            last_seen: Some(unix_now()),
+            revoked: false,
+        })
+        .unwrap();
+
+    let named = run_body(&state, &format!("method=mtr&target=8.8.8.8&location={id}")).await;
+    assert!(named.contains("not available on this location"), "{named}");
+    let bare = run_body(&state, "method=mtr&target=8.8.8.8").await;
+    assert!(
+        bare.contains("not available on this location"),
+        "mtr without a location must be refused like mtr at the ping-only local location: {bare}"
+    );
+}
+
+// F-212: with no local location configured, a run without `location` is refused.
+#[tokio::test]
+async fn run_without_location_is_refused_when_no_local_location_exists() {
+    let state = test_state();
+    complete_setup(&state).await;
+    let bare = run_body(&state, "method=traceroute&target=8.8.8.8").await;
+    assert!(
+        bare.contains("not available on this location"),
+        "a remote-only deployment must not run diagnostics on central: {bare}"
+    );
+}
+
+// F-183: the visitor's method and location are logged as quoted values, so an
+// encoded newline cannot start a forged log line, on the cross-origin refusal
+// and on an in-band refusal alike.
+#[tokio::test]
+async fn run_log_fields_cannot_forge_a_log_line() {
+    let logs = captured_logs();
+    let state = test_state();
+    complete_setup(&state).await;
+    let query = "method=ping%0Aforged183m+admin_id%3Dx&target=8.8.8.8&location=L183%0Aforged183l+admin_id%3Dx";
+
+    let mut cross_origin = run_get(query);
+    cross_origin.headers_mut().remove("origin");
+    let refused = send(central::build(state.clone()), cross_origin).await;
+    assert_status(&refused, StatusCode::FORBIDDEN);
+    let in_band = send(central::build(state), run_get(query)).await;
+    assert_status(&in_band, StatusCode::OK);
+
+    let captured = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+    assert!(
+        captured.contains(r#"method="ping\nforged183m admin_id=x""#)
+            && captured.contains(r#"location="L183\nforged183l admin_id=x""#),
+        "the visitor's values must be logged quoted and escaped\n{captured}"
+    );
+    assert!(
+        !captured.lines().any(|line| line.starts_with("forged183")),
+        "a visitor value started a forged log line\n{captured}"
     );
 }
 
@@ -621,13 +786,23 @@ async fn test_file_download_refuses_path_traversal() {
     let cookie = setup_and_login(&state).await;
     let id = create_local_location(&state, &cookie, json!(["ping"])).await;
 
+    // A real file one level above the root, so an unconfined join would
+    // serve it (200) wherever TMPDIR sits.
+    let root_name = state.files_root.file_name().unwrap().to_str().unwrap();
+    let secret_name = format!("{root_name}-outside.txt");
+    std::fs::write(
+        state.files_root.parent().unwrap().join(&secret_name),
+        b"outside the root",
+    )
+    .expect("write file outside the root");
+
     let created = send(
         central::build(state.clone()),
         authed(
             "POST",
             &format!("/api/admin/locations/{id}/files"),
             &cookie,
-            &json!({ "label": "Evil", "declared_size": "?", "source_ref": "../../../etc/passwd" })
+            &json!({ "label": "Evil", "declared_size": "?", "source_ref": format!("../{secret_name}") })
                 .to_string(),
         ),
     )
@@ -644,4 +819,238 @@ async fn test_file_download_refuses_path_traversal() {
     )
     .await;
     assert_status(&response, StatusCode::NOT_FOUND);
+}
+
+// Spec #1 Location schema: the optional ASN is exposed in the public payload —
+// a number where set, null where absent (old rows / no ASN configured).
+#[tokio::test]
+async fn public_locations_expose_the_optional_asn() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+
+    let created = send(
+        central::build(state.clone()),
+        authed(
+            "POST",
+            "/api/admin/locations",
+            &cookie,
+            &json!({ "name": "Vienna", "geo_label": "AT", "kind": "local", "offered_methods": ["ping"], "asn": 64500 })
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_status(&created, StatusCode::CREATED);
+    let _with_asn = create_local_location(&state, &cookie, json!(["ping"])).await;
+
+    let public = send(
+        central::build(state),
+        Request::builder()
+            .uri("/api/locations")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let body = json_body(public).await;
+    let locations = body.as_array().unwrap();
+    let vienna = locations.iter().find(|l| l["name"] == "Vienna").unwrap();
+    assert_eq!(vienna["asn"], json!(64500));
+    let frankfurt = locations.iter().find(|l| l["name"] == "Frankfurt").unwrap();
+    assert_eq!(
+        frankfurt["asn"],
+        Value::Null,
+        "a location without an ASN exposes null, never omits the field"
+    );
+}
+
+// ----- Browser speed-test upload sink (spec #1) ---------------------------------
+
+/// A same-origin public upload POST from an untrusted peer.
+fn upload_request(location: &str, body: Vec<u8>) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(format!("/api/locations/{location}/speedtest/upload"))
+        .header("host", "localhost")
+        .header("origin", "http://localhost")
+        .extension(ConnectInfo(SocketAddr::new(UNTRUSTED_PEER, 50000)))
+        .body(Body::from(body))
+        .unwrap()
+}
+
+// Spec #1 upload sink: a local-node upload streams, is discarded, and reports
+// the received byte count; a remote or unknown location has no central sink (404).
+#[tokio::test]
+async fn upload_sink_discards_the_body_and_reports_its_size() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let local = create_local_location(&state, &cookie, json!(["ping"])).await;
+    let remote = create_remote_location(&state, &cookie, json!(["ping"])).await;
+
+    let uploaded = send(
+        central::build(state.clone()),
+        upload_request(&local, vec![7u8; 4096]),
+    )
+    .await;
+    assert_status(&uploaded, StatusCode::OK);
+    assert_eq!(json_body(uploaded).await, json!({ "bytes": 4096 }));
+
+    // The sink is the local node's: a remote location uploads to its agent's
+    // data-plane, never to central.
+    let remote_refused = send(
+        central::build(state.clone()),
+        upload_request(&remote, vec![7u8; 16]),
+    )
+    .await;
+    assert_status(&remote_refused, StatusCode::NOT_FOUND);
+
+    let unknown = send(
+        central::build(state),
+        upload_request("ghost", vec![7u8; 16]),
+    )
+    .await;
+    assert_status(&unknown, StatusCode::NOT_FOUND);
+}
+
+// Spec #1 upload sink: beyond the 25 MB cap the upload is refused with 413.
+#[tokio::test]
+async fn upload_sink_refuses_more_than_25_mb() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let local = create_local_location(&state, &cookie, json!(["ping"])).await;
+
+    let oversized = send(
+        central::build(state),
+        upload_request(&local, vec![0u8; 25 * 1024 * 1024 + 1]),
+    )
+    .await;
+    assert_status(&oversized, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(json_body(oversized).await["error"], "payload_too_large");
+}
+
+// Spec #1 upload sink: uploads count against the run rate limiter — with a
+// one-request window the second upload is refused 429.
+#[tokio::test]
+async fn upload_sink_counts_against_the_run_rate_limit() {
+    let mut state = test_state();
+    state.run = central::RunService::for_test(8, std::time::Duration::from_secs(30), 1);
+    let cookie = setup_and_login(&state).await;
+    let local = create_local_location(&state, &cookie, json!(["ping"])).await;
+
+    let first = send(
+        central::build(state.clone()),
+        upload_request(&local, vec![1u8; 64]),
+    )
+    .await;
+    assert_status(&first, StatusCode::OK);
+
+    let second = send(central::build(state), upload_request(&local, vec![1u8; 64])).await;
+    assert_status(&second, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(json_body(second).await["error"], "rate_limited");
+}
+
+// F-152: the upload sink's permits are shared per client, keyed like the rate
+// limiter (the trusted proxy's forwarded address): one visitor holding stalled
+// uploads cannot take every permit, so another visitor behind the same proxy
+// still uploads.
+#[tokio::test]
+async fn one_client_cannot_hold_every_upload_permit() {
+    use futures_util::StreamExt;
+    use tower::ServiceExt;
+
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let local = create_local_location(&state, &cookie, json!(["ping"])).await;
+    let app = central::build(state);
+    let upload = |client: &str, body: Body| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/locations/{local}/speedtest/upload"))
+            .header("host", "localhost")
+            .header("origin", "http://localhost")
+            .header("x-forwarded-for", client)
+            .extension(ConnectInfo(SocketAddr::new(TRUSTED_PROXY, 50000)))
+            .body(body)
+            .unwrap()
+    };
+
+    // Four uploads from one client, each sending one byte and then stalling;
+    // a held one signals once the sink starts reading its body.
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        let (started, reading) = tokio::sync::oneshot::channel::<()>();
+        let body = futures_util::stream::once(async move {
+            let _ = started.send(());
+            Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"x"))
+        })
+        .chain(futures_util::stream::pending());
+        let mut task = tokio::spawn(
+            app.clone()
+                .oneshot(upload("203.0.113.66", Body::from_stream(body))),
+        );
+        tokio::select! {
+            _ = reading => held.push(task),
+            refused = &mut task => {
+                assert_status(&refused.unwrap().unwrap(), StatusCode::TOO_MANY_REQUESTS)
+            }
+        }
+    }
+
+    let other = send(
+        app.clone(),
+        upload("198.51.100.9", Body::from(vec![7u8; 1024])),
+    )
+    .await;
+    assert_status(&other, StatusCode::OK);
+
+    // Ending the stalled uploads returns the client's share.
+    for task in held {
+        task.abort();
+        let _ = task.await;
+    }
+    let again = send(app, upload("203.0.113.66", Body::from(vec![7u8; 1024]))).await;
+    assert_status(&again, StatusCode::OK);
+}
+
+// Central serves only its local node's files. Converting a local location
+// to remote hides it from the catalogue, so its download route must 404 too.
+#[tokio::test]
+async fn a_location_converted_to_remote_stops_serving_central_files() {
+    let state = test_state();
+    let cookie = setup_and_login(&state).await;
+    let id = create_local_location(&state, &cookie, json!(["ping"])).await;
+    std::fs::write(state.files_root.join("probe.bin"), b"0123").expect("write test file");
+
+    let created = send(
+        central::build(state.clone()),
+        authed(
+            "POST",
+            &format!("/api/admin/locations/{id}/files"),
+            &cookie,
+            &json!({ "label": "Probe", "declared_size": "4 B", "source_ref": "probe.bin" })
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_status(&created, StatusCode::CREATED);
+    let file_id = json_body(created).await["id"].as_str().unwrap().to_string();
+    let url = format!("/api/locations/{id}/files/{file_id}/download");
+    let download = || Request::builder().uri(&url).body(Body::empty()).unwrap();
+
+    let served = send(central::build(state.clone()), download()).await;
+    assert_status(&served, StatusCode::OK);
+
+    let converted = send(
+        central::build(state.clone()),
+        authed(
+            "PUT",
+            &format!("/api/admin/locations/{id}"),
+            &cookie,
+            &json!({ "name": "Frankfurt", "geo_label": "DE", "kind": "remote", "offered_methods": ["ping"] })
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_status(&converted, StatusCode::OK);
+
+    let hidden = send(central::build(state), download()).await;
+    assert_status(&hidden, StatusCode::NOT_FOUND);
 }

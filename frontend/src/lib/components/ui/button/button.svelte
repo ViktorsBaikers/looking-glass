@@ -1,50 +1,55 @@
 <script lang="ts" module>
-	import { type VariantProps, tv } from 'tailwind-variants';
-
-	export const buttonVariants = tv({
-		base: "inline-flex min-h-11 min-w-11 items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
-		variants: {
-			variant: {
-				default: 'bg-primary text-primary-foreground hover:bg-primary/90',
-				secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-				outline:
-					'border border-input bg-background hover:bg-accent hover:text-accent-foreground',
-				ghost: 'hover:bg-accent hover:text-accent-foreground',
-				destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
-			},
-			size: {
-				default: 'h-11 px-4 py-2',
-				sm: 'h-11 rounded-md px-3 text-sm',
-				lg: 'h-11 rounded-md px-6',
-				icon: 'size-11'
-			}
-		},
-		defaultVariants: {
-			variant: 'default',
-			size: 'default'
-		}
-	});
-
-	export type ButtonVariant = VariantProps<typeof buttonVariants>['variant'];
-	export type ButtonSize = VariantProps<typeof buttonVariants>['size'];
+	export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+	export type ButtonSize = 'sm' | 'md' | 'lg' | 'icon';
 </script>
 
 <script lang="ts">
 	import type { HTMLButtonAttributes } from 'svelte/elements';
-	import { cn } from '$lib/utils.js';
+	import type { Snippet } from 'svelte';
+	import { cx } from 'styled-system/css';
+	import { button } from 'styled-system/recipes';
+	import { spin } from '$lib/styles.js';
+	import Spinner from '~icons/material-symbols/progress-activity';
 
 	let {
+		variant = 'primary',
+		size = 'md',
+		loading = false,
+		disabled = false,
 		class: className,
-		variant = 'default',
-		size = 'default',
+		onclick,
 		children,
 		...rest
-	}: HTMLButtonAttributes & {
+	}: Omit<HTMLButtonAttributes, 'class'> & {
+		class?: string;
 		variant?: ButtonVariant;
 		size?: ButtonSize;
+		/** Shows a spinner and makes the button busy and inert (aria-busy + aria-disabled). */
+		loading?: boolean;
+		children?: Snippet;
 	} = $props();
 </script>
 
-<button class={cn(buttonVariants({ variant, size }), className)} {...rest}>
+<!-- Loading is busy, not `disabled`: disabling the focused button drops focus
+     to <body>. aria-disabled gives the recipe's dimmed look; pointer-events
+     stays on so a press lands here and is swallowed (no click, no submit, and
+     no implicit submission from Enter in a field) instead of falling through.
+     Loading wins over an explicit disabled: forms pass disabled={!canSubmit}
+     with !submitting inside canSubmit. -->
+<button
+	class={cx(button({ variant, size }), className)}
+	disabled={disabled && !loading}
+	aria-busy={loading || undefined}
+	aria-disabled={loading || undefined}
+	style={loading ? 'pointer-events: auto' : undefined}
+	{...rest}
+	onclick={(event) => {
+		if (loading) event.preventDefault();
+		else onclick?.(event);
+	}}
+>
+	{#if loading}
+		<Spinner class={spin} aria-hidden="true" />
+	{/if}
 	{@render children?.()}
 </button>

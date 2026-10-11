@@ -19,11 +19,14 @@ export function downloadUrl(location: LocationDetail, file: TestFile): string {
 	return `/api/locations/${location.id}/files/${file.id}/download`;
 }
 
-function safeOrigin(value: string): string | null {
+/// A data-plane origin, or `null` unless it is a bare https origin (no
+/// credentials, path, query or fragment): the agent serves its data plane over
+/// HTTPS only.
+export function safeOrigin(value: string): string | null {
 	try {
 		const url = new URL(value);
 		if (
-			(url.protocol !== 'http:' && url.protocol !== 'https:') ||
+			url.protocol !== 'https:' ||
 			url.username !== '' ||
 			url.password !== '' ||
 			url.pathname !== '/' ||

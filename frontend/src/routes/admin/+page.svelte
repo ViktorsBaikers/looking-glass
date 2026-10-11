@@ -1,59 +1,210 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
-	import Plus from '@lucide/svelte/icons/plus';
-	import Pencil from '@lucide/svelte/icons/pencil';
-	import Trash2 from '@lucide/svelte/icons/trash-2';
-	import Unplug from '@lucide/svelte/icons/unplug';
+	import { onMount, tick } from 'svelte';
+	import { flip } from 'svelte/animate';
+	import { cx } from 'styled-system/css';
+	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
+	import Field from '$lib/components/ui/field.svelte';
+	import Select from '$lib/components/ui/select.svelte';
+	import StatusBadge from '$lib/components/ui/status-badge.svelte';
 	import Dialog from '$lib/components/ui/dialog.svelte';
-	import LocationEditor from '$lib/admin/LocationEditor.svelte';
-	import EnrollDialog from '$lib/admin/EnrollDialog.svelte';
-	import { toaster } from '$lib/toast.svelte.js';
+	import ConfirmDialog from '$lib/components/ui/confirm-dialog.svelte';
+	import {
+		confirmActions,
+		srOnly,
+		adminPage,
+		adminPageHead,
+		adminTitle,
+		adminLede,
+		statusBadgeDot,
+		statusDotTone
+	} from '$lib/styles.js';
+	import { lineCode, lineStyle } from '$lib/lines.js';
+	import {
+		toolbar,
+		searchField,
+		searchWrap,
+		searchInput,
+		sortField,
+		legend,
+		legendItem,
+		reorderNote,
+		reorderable,
+		dragHandle,
+		list,
+		headRow,
+		row,
+		rowDragging,
+		listDragging,
+		lineMark,
+		roundel,
+		stub,
+		stubState,
+		nameCell,
+		rowTitle,
+		metaRow,
+		cell,
+		cellLabel,
+		actions,
+		quietDelete,
+		stateCard,
+		stateText,
+		errorCard,
+		skeleton,
+		skeletonList,
+		formStack,
+		formError
+	} from '$lib/admin/list-styles.js';
+	import { toast } from '$lib/toast.svelte.js';
 	import {
 		listLocations,
 		createLocation,
 		deleteLocation,
+		reorderLocations,
 		revokeAgent,
 		type LocationInput
 	} from '$lib/admin/api.js';
 	import { formatLastSeen } from '$lib/admin/lastSeen.js';
+	import {
+		filterLocations,
+		locationState,
+		moveItem,
+		sortLocations,
+		STATE_LABEL,
+		type LocationState,
+		type SortKey
+	} from '$lib/admin/locationList.js';
 	import type { Location, NodeKind } from '$lib/admin/types.js';
+	import Add from '~icons/material-symbols/add';
+	import Search from '~icons/material-symbols/search';
+	import VpnKey from '~icons/material-symbols/vpn-key';
+	import Pencil from '~icons/material-symbols/edit';
+	import Trash from '~icons/material-symbols/delete';
+	import LinkOff from '~icons/material-symbols/link-off';
+	import DragIndicator from '~icons/material-symbols/drag-indicator';
 
 	let phase = $state<'loading' | 'ready' | 'error'>('loading');
 	let locations = $state<Location[]>([]);
-	let editingId = $state<string | null>(null);
+	let query = $state('');
+	let sortValue = $state('order');
 
 	// Ticks once a minute so the relative last-seen labels stay current without a
-	// per-second re-render; the derived online/offline status itself comes from the API.
+	// per-second re-render; the online/offline state itself comes from the API.
 	let nowMs = $state(Date.now());
 	$effect(() => {
 		const id = setInterval(() => (nowMs = Date.now()), 60_000);
 		return () => clearInterval(id);
 	});
 
+	const visible = $derived(
+		sortLocations(filterLocations(locations, query), sortValue as SortKey)
+	);
+	// Rows reorder only in the full public order: a filtered or re-sorted list has
+	// no single position to drop into.
+	const canReorder = $derived(sortValue === 'order' && query.trim() === '');
+
+	let listEl = $state<HTMLUListElement>();
+	let dragId = $state<string | null>(null);
+	let dragStartIds: string[] = [];
+	let announcement = $state('');
+	// Saves run one after another so a burst of arrow-key moves lands in order.
+	let saving: Promise<unknown> = Promise.resolve();
+	const flipDuration = () =>
+		matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 160;
+
+	const ids = () => locations.map((location) => location.id);
+
+	function announceMove(id: string) {
+		const index = locations.findIndex((location) => location.id === id);
+		announcement = `${locations[index].name} moved to position ${index + 1} of ${locations.length}.`;
+	}
+
+	async function saveOrder() {
+		const run = saving.then(() => reorderLocations(ids()));
+		saving = run;
+		const result = await run;
+		if (!result.ok) {
+			toast.error(result.message);
+			// The server's order is the truth; show it rather than a guess.
+			const fresh = await listLocations();
+			if (fresh.ok) locations = fresh.data;
+		}
+	}
+
+	function startDrag(event: PointerEvent, id: string) {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		dragId = id;
+		dragStartIds = ids();
+	}
+
+	function drag(event: PointerEvent) {
+		if (!dragId || !listEl) return;
+		// offsetTop ignores the flip transforms, so rows mid-animation still
+		// report their settled slot and the drop point does not jitter.
+		const y = event.clientY - listEl.getBoundingClientRect().top - listEl.clientTop;
+		const from = locations.findIndex((location) => location.id === dragId);
+		const rows = [...listEl.children] as HTMLElement[];
+		const to = rows.filter(
+			(rowEl, index) => index !== from && y > rowEl.offsetTop + rowEl.offsetHeight / 2
+		).length;
+		if (to !== from) locations = moveItem(locations, from, to);
+	}
+
+	async function endDrag() {
+		if (!dragId) return;
+		const id = dragId;
+		dragId = null;
+		if (ids().join() === dragStartIds.join()) return;
+		announceMove(id);
+		await saveOrder();
+	}
+
+	async function moveByKey(event: KeyboardEvent, id: string) {
+		const step = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+		if (!step || dragId) return;
+		event.preventDefault();
+		const from = locations.findIndex((location) => location.id === id);
+		const to = from + step;
+		if (to < 0 || to >= locations.length) return;
+		locations = moveItem(locations, from, to);
+		announceMove(id);
+		// A keyed move can detach the focused node; put focus back on its grip.
+		await tick();
+		listEl?.querySelector<HTMLElement>(`[data-reorder="${id}"]`)?.focus();
+		await saveOrder();
+	}
+
+	const tone: Record<LocationState, 'success' | 'danger' | 'neutral'> = {
+		online: 'success',
+		offline: 'danger',
+		not_enrolled: 'neutral'
+	};
+
 	let showCreate = $state(false);
-	let draft = $state<{ name: string; geo_label: string; kind: NodeKind }>({
-		name: '',
-		geo_label: '',
-		kind: 'local'
-	});
+	let draft = $state({ name: '', geo_label: '', kind: 'local' });
 	let creating = $state(false);
 	let createError = $state('');
 
 	let pendingDelete = $state<Location | null>(null);
 	let showDelete = $state(false);
 	let deleting = $state(false);
-	let deleteError = $state('');
 	let pendingRevoke = $state<Location | null>(null);
 	let showRevoke = $state(false);
 	let revoking = $state(false);
-	let revokeError = $state('');
 
-	let enrollTarget = $state<{ id: string; name: string } | null>(null);
-	let showEnroll = $state(false);
+	const kindItems = [
+		{ label: 'Local (built-in node)', value: 'local' },
+		{ label: 'Remote (enrolled agent)', value: 'remote' }
+	];
+	const sortItems = [
+		{ label: 'Public order', value: 'order' },
+		{ label: 'Name', value: 'name' },
+		{ label: 'Status', value: 'status' },
+		{ label: 'Recent', value: 'recent' }
+	];
 
 	onMount(load);
 
@@ -85,7 +236,7 @@
 			map_query: null,
 			facility: null,
 			facility_url: null,
-			kind: draft.kind,
+			kind: draft.kind as NodeKind,
 			data_plane_origin: null,
 			offered_methods: []
 		};
@@ -93,52 +244,30 @@
 		creating = false;
 		if (result.ok) {
 			showCreate = false;
-			toaster.success('Location created.');
-			await load();
-			// A remote location needs an agent — show its enrollment command before
-			// dropping into the editor. A local node runs on the built-in node, so it
-			// goes straight to configuration.
-			if (result.data.kind === 'remote') {
-				enrollTarget = { id: result.data.id, name: result.data.name };
-				showEnroll = true;
-			} else {
-				editingId = result.data.id;
-			}
+			toast.success('Location created.');
+			// A fresh remote needs its agent enrolled first; a local node runs on
+			// the built-in node, so it goes straight to its settings.
+			const tab = result.data.kind === 'remote' ? 'enrollment' : 'settings';
+			await goto(`/admin/locations/${result.data.id}?tab=${tab}`);
 		} else {
 			createError = result.message;
+			toast.error(result.message);
 		}
-	}
-
-	function askDelete(location: Location) {
-		pendingDelete = location;
-		deleteError = '';
-		showDelete = true;
-	}
-
-	function askRevoke(location: Location) {
-		pendingRevoke = location;
-		revokeError = '';
-		showRevoke = true;
 	}
 
 	async function confirmDelete() {
 		if (!pendingDelete || deleting) return;
 		const location = pendingDelete;
 		deleting = true;
-		try {
-			const result = await deleteLocation(location.id);
-			if (result.ok) {
-				showDelete = false;
-				pendingDelete = null;
-				toaster.success(`Deleted ${location.name} and everything under it.`);
-				await load();
-			} else {
-				deleteError = result.message;
-			}
-		} catch {
-			deleteError = 'The request could not be completed.';
-		} finally {
-			deleting = false;
+		const result = await deleteLocation(location.id);
+		deleting = false;
+		if (result.ok) {
+			showDelete = false;
+			pendingDelete = null;
+			toast.success(`Deleted ${location.name} and everything under it.`);
+			await load();
+		} else {
+			toast.error(result.message);
 		}
 	}
 
@@ -146,127 +275,190 @@
 		if (!pendingRevoke || revoking) return;
 		const location = pendingRevoke;
 		revoking = true;
-		try {
-			const result = await revokeAgent(location.id);
-			if (result.ok) {
-				showRevoke = false;
-				pendingRevoke = null;
-				toaster.success(`Revoked ${location.name}'s agent.`);
-				await load();
-			} else {
-				revokeError = result.message;
-			}
-		} catch {
-			revokeError = 'The request could not be completed.';
-		} finally {
-			revoking = false;
+		const result = await revokeAgent(location.id);
+		revoking = false;
+		if (result.ok) {
+			showRevoke = false;
+			pendingRevoke = null;
+			toast.success(`Revoked ${location.name}'s agent.`);
+			await load();
+		} else {
+			toast.error(result.message);
 		}
-	}
-
-	function statusLabel(location: Location) {
-		if (location.kind === 'remote' && location.status === 'offline' && !location.last_seen) {
-			return 'Not enrolled';
-		}
-		return location.status === 'online' ? 'Online' : 'Offline';
 	}
 </script>
 
-{#if editingId}
-	<LocationEditor
-		locationId={editingId}
-		onclose={() => {
-			editingId = null;
-			void load();
-		}}
-	/>
-{:else}
-	<div class="space-y-6">
-		<div class="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between">
-			<div>
-				<h1 class="text-xl font-semibold tracking-tight">Locations</h1>
-				<p class="text-sm text-muted-foreground">Nodes visitors can run diagnostics from.</p>
-			</div>
-			<Button class="sm:w-auto" onclick={openCreate}>
-				<Plus class="size-4" aria-hidden="true" />
-				Add location
-			</Button>
-		</div>
+<!-- The window, not the grip, tracks the drag: a keyed move re-inserts the
+     dragged row, which would drop a pointer capture set on its grip. -->
+<svelte:window onpointermove={drag} onpointerup={endDrag} onpointercancel={endDrag} />
 
+<div class={adminPage}>
+	<header class={adminPageHead}>
+		<div>
+			<h1 class={adminTitle}>Locations</h1>
+			<p class={adminLede}>Find a diagnostic location, check its status, or continue its setup.</p>
+		</div>
+		<Button onclick={openCreate}>
+			<Add aria-hidden="true" />
+			Add location
+		</Button>
+	</header>
+
+	<section class={toolbar} aria-label="Find locations">
+		<div class={searchField}>
+			<Label for="location-search" class={srOnly}>Search locations</Label>
+			<div class={searchWrap}>
+				<Search aria-hidden="true" />
+				<Input
+					id="location-search"
+					class={searchInput}
+					bind:value={query}
+					placeholder="Search by name, place, status, or ASN"
+				/>
+			</div>
+		</div>
+		<div class={sortField}>
+			<Label for="location-sort">Sort locations</Label>
+			<Select id="location-sort" items={sortItems} bind:value={sortValue} />
+		</div>
+	</section>
+
+	<div class={canReorder ? reorderable : undefined}>
 		{#if phase === 'loading'}
-			<div class="space-y-2" aria-hidden="true">
-				{#each { length: 3 } as _, i (i)}
-					<div class="h-16 animate-pulse rounded-md border border-border bg-muted/40"></div>
+			<div class={skeletonList} aria-hidden="true">
+				{#each { length: 4 } as _, i (i)}
+					<div class={skeleton}></div>
 				{/each}
 			</div>
-			<p class="sr-only" aria-live="polite">Loading locations…</p>
+			<p class={srOnly} aria-live="polite">Loading locations…</p>
 		{:else if phase === 'error'}
-			<div class="rounded-md border border-destructive/40 px-4 py-6 text-sm text-destructive" role="alert">
+			<div class={errorCard} role="alert">
 				<p>Locations could not be loaded.</p>
-				<Button variant="outline" size="sm" class="mt-3" onclick={load}>Try again</Button>
+				<Button variant="secondary" onclick={load}>Try again</Button>
 			</div>
 		{:else if locations.length === 0}
-			<div class="rounded-md border border-dashed border-border px-4 py-12 text-center">
-				<p class="text-sm text-muted-foreground">No locations yet — add your first.</p>
-				<Button class="mt-4" onclick={openCreate}>
-					<Plus class="size-4" aria-hidden="true" />
+			<div class={stateCard}>
+				<p class={stateText}>No locations yet — add your first.</p>
+				<Button onclick={openCreate}>
+					<Add aria-hidden="true" />
 					Add location
 				</Button>
 			</div>
+		{:else if visible.length === 0}
+			<div class={stateCard}>
+				<p class={stateText}>No locations match “{query}”.</p>
+				<Button variant="secondary" onclick={() => (query = '')}>Clear search</Button>
+			</div>
 		{:else}
-			<ul class="space-y-2">
-				{#each locations as location (location.id)}
+			{#if sortValue === 'order'}
+				<p class={reorderNote} id="reorder-hint">
+					{canReorder
+						? 'Visitors see online locations as tabs in this order. Drag a row by its grip, or focus the grip and press the Up and Down arrow keys.'
+						: 'Clear the search to reorder locations.'}
+				</p>
+			{/if}
+			<div class={headRow} aria-hidden="true">
+				<span>Line</span>
+				<span>Location</span>
+				<span>Status</span>
+				<span>Last seen</span>
+				<span>Methods</span>
+				<span></span>
+			</div>
+			<ul class={cx(list, dragId && listDragging)} bind:this={listEl}>
+				{#each visible as location (location.id)}
+					{@const state = locationState(location)}
 					<li
-						class="grid grid-cols-1 gap-3 rounded-md border border-border p-4 sm:grid-cols-[1fr_auto_auto_auto_auto] sm:items-center"
+						class={cx(row, dragId === location.id && rowDragging)}
+						data-line
+						style={lineStyle(location.id)}
+						animate:flip={{ duration: flipDuration }}
 					>
-						<div class="min-w-0">
-							<p class="truncate font-medium">{location.name}</p>
-							<p class="truncate text-sm text-muted-foreground">
-								{location.geo_label || '—'} · {location.kind}
+						<span class={lineMark}>
+							{#if canReorder}
+								<button
+									type="button"
+									class={dragHandle}
+									data-reorder={location.id}
+									data-dragging={dragId === location.id || undefined}
+									aria-label="Reorder {location.name}"
+									aria-describedby="reorder-hint"
+									onpointerdown={(event) => startDrag(event, location.id)}
+									onkeydown={(event) => moveByKey(event, location.id)}
+								>
+									<DragIndicator aria-hidden="true" />
+								</button>
+							{/if}
+							<span class={roundel} aria-hidden="true">{lineCode(location.name)}</span>
+							<span class={cx(stub, stubState[state])} aria-hidden="true"></span>
+						</span>
+						<div class={nameCell}>
+							<h2 class={rowTitle}>{location.name}</h2>
+							<p class={metaRow}>
+								{[location.geo_label, location.kind === 'remote' ? 'Remote' : 'Local']
+									.filter(Boolean)
+									.join(' ⋅ ')}
 							</p>
 						</div>
-						<span class="flex items-center gap-2 text-sm">
-							<span
-								class="inline-block size-2 rounded-full"
-								class:bg-status-online={location.status === 'online'}
-								class:bg-status-offline={location.status === 'offline'}
-								aria-hidden="true"
-							></span>
-							{statusLabel(location)}
-						</span>
-						<span class="text-sm text-muted-foreground tabular-nums">
-							{location.kind === 'local' ? '—' : formatLastSeen(location.last_seen, nowMs)}
-						</span>
-						<span class="text-sm text-muted-foreground">
-							{location.offered_methods.length} method{location.offered_methods.length === 1
-								? ''
-								: 's'}
-						</span>
-						<div class="flex gap-1 justify-self-end">
+						<div class={cell}>
+							<span class={cellLabel}>Status</span>
+							<StatusBadge tone={tone[state]} size="lg">{STATE_LABEL[state]}</StatusBadge>
+						</div>
+						<div class={cell}>
+							<span class={cellLabel}>Last seen</span>
+							<span>{location.kind === 'local' ? '—' : formatLastSeen(location.last_seen, nowMs)}</span>
+						</div>
+						<div class={cell}>
+							<span class={cellLabel}>Methods</span>
+							<span>
+								{location.offered_methods.length} method{location.offered_methods.length === 1
+									? ''
+									: 's'} offered
+							</span>
+						</div>
+						<div class={actions}>
 							{#if location.kind === 'remote'}
 								<Button
+									variant="secondary"
 									size="sm"
-									variant="outline"
-									onclick={() => askRevoke(location)}
+									onclick={() => goto(`/admin/locations/${location.id}?tab=enrollment`)}
 								>
-									<Unplug class="size-4" aria-hidden="true" />
+									<VpnKey aria-hidden="true" />
+									Enroll
+								</Button>
+							{/if}
+							<Button
+								variant="secondary"
+								size="sm"
+								onclick={() => goto(`/admin/locations/${location.id}?tab=settings`)}
+							>
+								<Pencil aria-hidden="true" />
+								Edit
+							</Button>
+							{#if location.kind === 'remote' && state !== 'not_enrolled'}
+								<Button
+									variant="ghost"
+									size="sm"
+									onclick={() => {
+										pendingRevoke = location;
+										showRevoke = true;
+									}}
+								>
+									<LinkOff aria-hidden="true" />
 									Revoke
 								</Button>
 							{/if}
 							<Button
-								size="sm"
-								variant="outline"
-								onclick={() => (editingId = location.id)}
-							>
-								<Pencil class="size-4" aria-hidden="true" />
-								Edit
-							</Button>
-							<Button
+								variant="danger"
 								size="icon"
-								variant="ghost"
-								onclick={() => askDelete(location)}
+								class={quietDelete}
 								aria-label="Delete {location.name}"
+								onclick={() => {
+									pendingDelete = location;
+									showDelete = true;
+								}}
 							>
-								<Trash2 class="size-4 text-destructive" aria-hidden="true" />
+								<Trash aria-hidden="true" />
 							</Button>
 						</div>
 					</li>
@@ -274,97 +466,66 @@
 			</ul>
 		{/if}
 	</div>
-{/if}
 
-<Dialog
-	bind:open={showCreate}
-	title="Add location"
-	description="Name the location; add its IPs, files, and methods next."
->
-	<form class="space-y-4" onsubmit={submitCreate} novalidate>
-		<div class="space-y-2">
-			<Label for="new-name">Display name</Label>
-			<Input id="new-name" bind:value={draft.name} disabled={creating} required />
-		</div>
-		<div class="space-y-2">
-			<Label for="new-geo">Geographic label</Label>
-			<Input id="new-geo" bind:value={draft.geo_label} placeholder="Frankfurt, DE" disabled={creating} />
-		</div>
-		<div class="space-y-2">
-			<Label for="new-kind">Node kind</Label>
-			<select
-				id="new-kind"
-				bind:value={draft.kind}
-				disabled={creating}
-				class="h-11 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-			>
-				<option value="local">Local (built-in node)</option>
-				<option value="remote">Remote (enrolled agent)</option>
-			</select>
-		</div>
+	<div class={legend} aria-label="Line states" role="note">
+		<span class={legendItem}><span class={cx(statusBadgeDot, statusDotTone.success)}></span>Solid line: online</span>
+		<span class={legendItem}><span class={cx(statusBadgeDot, statusDotTone.danger)}></span>Dotted line: offline</span>
+		<span class={legendItem}><span class={cx(statusBadgeDot, statusDotTone.neutral)}></span>Dashed line: not enrolled</span>
+	</div>
+	<p class={srOnly} aria-live="polite">{announcement}</p>
+</div>
+
+<Dialog bind:open={showCreate} title="Add location" description="Name it; configure it next.">
+	<form class={formStack} onsubmit={submitCreate} novalidate aria-busy={creating || undefined}>
+		<Field label="Display name" for="new-name">
+			<Input
+				id="new-name"
+				bind:value={draft.name}
+				readonly={creating}
+				aria-disabled={creating || undefined}
+				required
+			/>
+		</Field>
+		<Field label="Geographic label" for="new-geo">
+			<Input
+				id="new-geo"
+				bind:value={draft.geo_label}
+				placeholder="Frankfurt, DE"
+				readonly={creating}
+				aria-disabled={creating || undefined}
+			/>
+		</Field>
+		<Field label="Node kind" for="new-kind">
+			<Select id="new-kind" items={kindItems} bind:value={draft.kind} disabled={creating} portaled={false} />
+		</Field>
 		{#if createError}
-			<p class="text-sm text-destructive" role="alert">{createError}</p>
+			<p class={formError} role="alert">{createError}</p>
 		{/if}
-		<div class="flex justify-end gap-2">
+		<div class={confirmActions}>
 			<Button type="button" variant="ghost" onclick={() => (showCreate = false)} disabled={creating}>
 				Cancel
 			</Button>
-			<Button type="submit" disabled={creating}>{creating ? 'Creating…' : 'Create'}</Button>
+			<Button type="submit" loading={creating}>Create</Button>
 		</div>
 	</form>
 </Dialog>
 
-{#if enrollTarget}
-	<EnrollDialog
-		bind:open={showEnroll}
-		locationId={enrollTarget.id}
-		locationName={enrollTarget.name}
-		onclose={() => {
-			const id = enrollTarget?.id ?? null;
-			enrollTarget = null;
-			if (id) editingId = id;
-		}}
-	/>
-{/if}
-
-<Dialog
+<ConfirmDialog
 	bind:open={showDelete}
-	preventClose={deleting}
 	title="Delete this location?"
-	description="Its test IPs, iperf endpoints, files, agent, and tokens are all removed. This cannot be undone."
->
-	<div class="space-y-4">
-		{#if deleteError}
-			<p class="text-sm text-destructive" role="alert">{deleteError}</p>
-		{/if}
-		<div class="flex justify-end gap-2">
-		<Button type="button" variant="ghost" onclick={() => (showDelete = false)} disabled={deleting}>
-			Cancel
-		</Button>
-		<Button type="button" variant="destructive" onclick={confirmDelete} disabled={deleting}>
-			{deleting ? 'Deleting…' : 'Delete location'}
-		</Button>
-		</div>
-	</div>
-</Dialog>
+	message={`${pendingDelete?.name ?? 'This location'} and its test IPs, iperf endpoints, files, agent, and tokens are all removed. This cannot be undone.`}
+	confirmLabel="Delete location"
+	danger
+	busy={deleting}
+	onconfirm={confirmDelete}
+/>
 
-<Dialog
+<ConfirmDialog
 	bind:open={showRevoke}
-	preventClose={revoking}
 	title="Revoke this agent?"
-	description="The live tunnel is dropped and the location returns to not enrolled until a new agent enrolls."
->
-	<div class="space-y-4">
-		{#if revokeError}
-			<p class="text-sm text-destructive" role="alert">{revokeError}</p>
-		{/if}
-		<div class="flex justify-end gap-2">
-		<Button type="button" variant="ghost" onclick={() => (showRevoke = false)} disabled={revoking}>
-			Cancel
-		</Button>
-		<Button type="button" variant="destructive" onclick={confirmRevoke} disabled={revoking}>
-			{revoking ? 'Revoking…' : 'Revoke agent'}
-		</Button>
-		</div>
-	</div>
-</Dialog>
+	message={`${pendingRevoke?.name ?? 'This location'}'s agent credential stops working and its tunnel closes now. The location shows Not enrolled until you enroll a new agent.`}
+	confirmLabel="Revoke agent"
+	danger
+	busy={revoking}
+	onconfirm={confirmRevoke}
+/>

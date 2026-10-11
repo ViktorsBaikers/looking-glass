@@ -13,7 +13,9 @@ use axum::http::{Request, StatusCode};
 use central::RunService;
 
 mod common;
-use common::{body_string, complete_setup, send, test_state};
+use common::{
+    assert_status, authed, body_string, complete_setup, send, setup_and_login, test_state,
+};
 
 const UNTRUSTED_PEER: IpAddr = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7));
 
@@ -27,6 +29,23 @@ fn run_request(query: &str, host: &str, origin: Option<&str>, peer: IpAddr) -> R
         builder = builder.header("origin", origin);
     }
     builder.body(Body::empty()).unwrap()
+}
+
+/// Install, then configure a local location offering ping: a run without
+/// `location` is gated on the local locations' offered set (F-212).
+async fn setup_with_local_ping(state: &central::AppState) {
+    let cookie = setup_and_login(state).await;
+    let created = send(
+        central::build(state.clone()),
+        authed(
+            "POST",
+            "/api/admin/locations",
+            &cookie,
+            r#"{"name":"Local","geo_label":"DE","kind":"local","offered_methods":["ping"]}"#,
+        ),
+    )
+    .await;
+    assert_status(&created, StatusCode::CREATED);
 }
 
 fn content_type(response: &axum::http::Response<Body>) -> String {
@@ -93,7 +112,7 @@ async fn cross_origin_run_is_refused() {
 #[tokio::test]
 async fn same_origin_request_opens_an_event_stream() {
     let state = test_state();
-    complete_setup(&state).await;
+    setup_with_local_ping(&state).await;
     let app = central::build(state);
     let response = send(
         app,
@@ -107,7 +126,17 @@ async fn same_origin_request_opens_an_event_stream() {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     assert!(content_type(&response).contains("text/event-stream"));
-    // Drop without draining: closing the stream makes the engine kill the run.
+    // The run itself starts and reaches the engine's terminal: no refusal. Its
+    // exit status is not asserted, since a test host may have no ICMP route or
+    // no ping at all (the engine then reports the tool missing, after admission).
+    let body = body_string(response).await;
+    let refused = body.contains("event: run-error")
+        && !body.contains("data: the diagnostic tool is not available on this node\n");
+    assert!(
+        !refused,
+        "the local node must run it, not refuse it: {body}"
+    );
+    assert!(body.contains("event: done"), "{body}");
 }
 
 // AC40 — at the global cap a run is refused with a clear "node busy" message and
@@ -116,7 +145,7 @@ async fn same_origin_request_opens_an_event_stream() {
 async fn node_busy_streams_a_refusal_without_spawning() {
     let mut state = test_state();
     state.run = RunService::for_test(0, Duration::from_secs(30), 100);
-    complete_setup(&state).await;
+    setup_with_local_ping(&state).await;
     let app = central::build(state);
 
     let response = send(
@@ -182,7 +211,7 @@ async fn exec_rate_limit_refuses_repeat_requests() {
 #[tokio::test]
 async fn private_target_streams_a_clear_error() {
     let state = test_state();
-    complete_setup(&state).await;
+    setup_with_local_ping(&state).await;
     let app = central::build(state);
     let response = send(
         app,
@@ -200,4 +229,61 @@ async fn private_target_streams_a_clear_error() {
         body.contains("public address"),
         "clear non-technical target message: {body}"
     );
+}
+
+// A same-origin EventSource GET carries no Origin, and a page served with
+// `Referrer-Policy: no-referrer` sends no Referer either; the browser-set
+// `Sec-Fetch-Site: same-origin` is then the only proof and must be accepted.
+#[tokio::test]
+async fn sec_fetch_site_same_origin_without_origin_or_referer_opens_an_event_stream() {
+    let state = test_state();
+    setup_with_local_ping(&state).await;
+    let app = central::build(state);
+    let mut request = run_request(
+        "method=ping&target=8.8.8.8",
+        "localhost",
+        None,
+        UNTRUSTED_PEER,
+    );
+    request
+        .headers_mut()
+        .insert("sec-fetch-site", "same-origin".parse().unwrap());
+    let response = send(app, request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(content_type(&response).contains("text/event-stream"));
+}
+
+// Any other Sec-Fetch-Site value is not same-origin proof, and a present
+// Origin/Referer still decides over Sec-Fetch-Site.
+#[tokio::test]
+async fn sec_fetch_site_other_than_same_origin_is_refused() {
+    let state = test_state();
+    complete_setup(&state).await;
+    let cases: [(&str, Option<(&str, &str)>); 5] = [
+        ("cross-site", None),
+        ("same-site", None),
+        ("none", None),
+        ("same-origin", Some(("origin", "https://evil.test"))),
+        ("same-origin", Some(("referer", "https://evil.test/attack"))),
+    ];
+    for (site, claimed) in cases {
+        let mut request = run_request(
+            "method=ping&target=8.8.8.8",
+            "localhost",
+            None,
+            UNTRUSTED_PEER,
+        );
+        request
+            .headers_mut()
+            .insert("sec-fetch-site", site.parse().unwrap());
+        if let Some((name, value)) = claimed {
+            request.headers_mut().insert(name, value.parse().unwrap());
+        }
+        let response = send(central::build(state.clone()), request).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "sec-fetch-site={site}, claimed={claimed:?} must be refused"
+        );
+    }
 }

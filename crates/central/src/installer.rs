@@ -16,7 +16,10 @@ use axum::Json;
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 
-use crate::auth::{hash_password, random_hex, random_id, ApiError, ClientContext};
+use crate::admin_api::AdminJson;
+use crate::auth::{
+    argon2_off_runtime, hash_password, random_hex, random_id, ApiError, ClientContext,
+};
 use crate::observability::{correlation_id, log_validation_rejected};
 use crate::AppState;
 
@@ -52,7 +55,7 @@ pub struct SetupRequest {
     pub password: String,
 }
 
-fn username_allowed(username: &str) -> bool {
+pub(crate) fn username_allowed(username: &str) -> bool {
     username
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
@@ -69,7 +72,7 @@ pub async fn create_admin(
     State(state): State<AppState>,
     ctx: ClientContext,
     headers: HeaderMap,
-    Json(body): Json<SetupRequest>,
+    AdminJson(body): AdminJson<SetupRequest>,
 ) -> Result<StatusCode, ApiError> {
     let correlation_id = correlation_id(&headers);
     if !ctx.secure {
@@ -109,10 +112,14 @@ pub async fn create_admin(
         ));
     }
 
-    let password_hash = hash_password(&body.password)?;
-    let admin = state
-        .store
-        .create_admin(random_id(), body.username, password_hash)?;
+    let password = body.password;
+    let password_hash = argon2_off_runtime(move || hash_password(&password))
+        .await
+        .ok_or(ApiError::Internal)??;
+    let admin =
+        state
+            .store
+            .create_first_administrator(random_id(), body.username, password_hash)?;
     tracing::info!(
         event = "auth.setup",
         correlation_id = %correlation_id,
@@ -151,4 +158,64 @@ pub async fn require_setup(
 
 fn is_exempt(path: &str) -> bool {
     EXEMPT_PATHS.contains(&path)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode};
+
+    use super::{create_admin, SetupRequest};
+    use crate::admin_api::AdminJson;
+    use crate::auth::{random_id, ClientContext};
+    use crate::{
+        AppState, EnrollConfig, LoginLimiter, RunService, Store, TransportConfig, TunnelHub,
+    };
+
+    // F-184/C-041: the first administrator's password is hashed through
+    // argon2_off_runtime, so setup cannot hold an async worker.
+    #[tokio::test]
+    async fn the_first_admin_hash_runs_off_the_async_workers() {
+        let dir = std::env::temp_dir().join(format!(
+            "lg-installer-unit-{}-{}",
+            std::process::id(),
+            random_id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let state = AppState {
+            store: Store::open(dir.join("db.redb")).expect("open test store"),
+            transport: TransportConfig::new([std::net::IpAddr::from(Ipv4Addr::LOCALHOST)]),
+            login_limiter: Arc::new(LoginLimiter::default()),
+            setup_token: Some(Arc::from("setup-token")),
+            run: RunService::for_test(8, Duration::from_secs(30), 100),
+            files_root: Arc::from(dir.as_path()),
+            enroll: EnrollConfig::for_test("https://central.test", b"identity".to_vec()),
+            tunnel_hub: TunnelHub::new(),
+        };
+        let ctx = ClientContext {
+            ip: None,
+            secure: true,
+        };
+        let body = SetupRequest {
+            setup_token: "setup-token".to_string(),
+            username: "alice".to_string(),
+            password: "correct-horse-battery-staple".to_string(),
+        };
+
+        let created =
+            create_admin(State(state.clone()), ctx, HeaderMap::new(), AdminJson(body)).await;
+        assert_eq!(created.ok(), Some(StatusCode::CREATED));
+
+        let admins = state.store.list_administrators().unwrap();
+        let hash = admins[0].password_hash.as_deref().unwrap();
+        assert_eq!(
+            crate::auth::tests::off_runtime_count(hash),
+            1,
+            "the first admin's password must hash off the runtime"
+        );
+    }
 }

@@ -228,3 +228,35 @@ async fn required_events_are_structured_correlated_and_secret_free() {
         );
     }
 }
+
+// A client-sent X-Request-Id with spaces must not forge key=value fields;
+// it is logged as one quoted value.
+#[tokio::test]
+async fn forged_request_id_is_logged_quoted() {
+    let logs = captured_logs();
+    let state = test_state();
+    setup_and_login(&state).await;
+    let forged = "f006probe outcome=success admin_id=forged";
+
+    let rejected = send(
+        central::build(state),
+        request(
+            "POST",
+            "/api/auth/login",
+            &json!({ "username": "alice", "password": BAD_PASSWORD }).to_string(),
+            forged,
+        ),
+    )
+    .await;
+    assert_status(&rejected, StatusCode::UNAUTHORIZED);
+
+    let captured = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+    assert!(
+        captured.contains(&format!("correlation_id=\"{forged}\"")),
+        "the forged request id must be one quoted value\n{captured}"
+    );
+    assert!(
+        !captured.contains("correlation_id=f006probe"),
+        "the forged request id was logged unquoted\n{captured}"
+    );
+}

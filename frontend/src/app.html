@@ -5,12 +5,14 @@
 		<link rel="icon" href="%sveltekit.assets%/favicon.svg" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="description" content="Looking Glass — a self-hostable network diagnostics console." />
+		<meta name="theme-color" content="#f3f3f0" />
 		<title>Looking Glass</title>
 		<script>
 			try {
 				const stored = localStorage.getItem('theme');
 				const dark = stored ? stored === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
 				document.documentElement.classList.toggle('dark', dark);
+				if (dark) document.querySelector('meta[name="theme-color"]').content = '#111214';
 			} catch (_) {}
 		</script>
 		%sveltekit.head%

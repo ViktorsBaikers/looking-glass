@@ -1,6 +1,6 @@
 export type PublicTheme = 'system' | 'light' | 'dark';
 
-export interface PublicSettings {
+interface PublicSettings {
 	site_title: string;
 	logo_url: string | null;
 	default_theme: PublicTheme;

@@ -1,10 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
-	import { Label } from '$lib/components/ui/label/index.js';
+	import Field from '$lib/components/ui/field.svelte';
 	import {
 		Card,
 		CardContent,
@@ -13,8 +12,17 @@
 		CardTitle
 	} from '$lib/components/ui/card/index.js';
 	import { fetchSetupStatus, postJson } from '$lib/api.js';
+	import {
+		authPage,
+		authCard,
+		authTitle,
+		formStack,
+		formErrorText,
+		fullWidth
+	} from '$lib/auth/styles.js';
 
 	const MIN_PASSWORD = 12;
+	const MAX_PASSWORD = 512;
 	const USERNAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 	let setupToken = $state('');
@@ -29,18 +37,28 @@
 			? 'Use only letters, digits, and . _ -'
 			: ''
 	);
+	// Central counts UTF-8 bytes, so a character beyond ASCII counts as 2 to 4.
+	const passwordBytes = $derived(new TextEncoder().encode(password).length);
+	const byteNote = $derived(passwordBytes > password.length ? ' Accented letters, other scripts and emoji count as 2 to 4 each.' : '');
 	const passwordError = $derived(
-		password.length > 0 && password.length < MIN_PASSWORD
-			? `At least ${MIN_PASSWORD} characters.`
-			: ''
+		passwordBytes > MAX_PASSWORD
+			? `At most ${MAX_PASSWORD} characters.${byteNote}`
+			: passwordBytes > 0 && passwordBytes < MIN_PASSWORD
+				? `At least ${MIN_PASSWORD} characters.${byteNote}`
+				: ''
 	);
-	const confirmError = $derived(
-		confirm.length > 0 && confirm !== password ? 'Passwords do not match.' : ''
-	);
+	const confirmError = $derived(confirm.length > 0 && confirm !== password ? 'Passwords do not match.' : '');
+	// A rule is a hint while its field is being typed in; leaving the field
+	// shows it as an error (Create account stays disabled until the rules pass).
+	// Editing Password makes the match rule a hint again until Password is left.
+	// Typing resets in the capture phase: a delegated oninput runs after
+	// bind:value has already rendered the alert (F-260).
+	let shown = $state({ password: false, confirm: false });
 	const canSubmit = $derived(
 		setupToken.length > 0 &&
 			username.length > 0 &&
-			password.length >= MIN_PASSWORD &&
+			passwordBytes >= MIN_PASSWORD &&
+			passwordBytes <= MAX_PASSWORD &&
 			confirm === password &&
 			!usernameError &&
 			!submitting
@@ -70,96 +88,94 @@
 	}
 </script>
 
-<div class="mx-auto flex max-w-md flex-col justify-center">
-	<Card>
+<div class={authPage}>
+	<Card class={authCard}>
 		<CardHeader>
-			<CardTitle>Create the admin account</CardTitle>
+			<CardTitle class={authTitle}>Create the first administrator</CardTitle>
 			<CardDescription>
-				This one-time step creates the single administrator for this Looking Glass.
+				This one-time step creates the first administrator for this Looking Glass. You can add more
+				from Administrators later.
 			</CardDescription>
 		</CardHeader>
 		<CardContent>
-			<form class="space-y-4" onsubmit={submit} novalidate>
-				<div class="space-y-2">
-					<Label for="setup-token">Setup token</Label>
+			<form class={formStack} onsubmit={submit} novalidate aria-busy={submitting || undefined}>
+				<Field
+					label="Setup token"
+					for="setup-token"
+					hint="Read it from the setup-token file beside the database, or set LG_SETUP_TOKEN before first start."
+				>
 					<Input
 						id="setup-token"
 						name="setup_token"
 						autocomplete="off"
 						bind:value={setupToken}
-						disabled={submitting}
-						aria-describedby="setup-token-hint"
+						readonly={submitting}
+						aria-disabled={submitting || undefined}
 						required
 					/>
-					<p id="setup-token-hint" class="text-sm text-muted-foreground">
-						Read it from the setup-token file beside the database, or set LG_SETUP_TOKEN before first start.
-					</p>
-				</div>
+				</Field>
 
-				<div class="space-y-2">
-					<Label for="username">Username</Label>
+				<Field label="Username" for="username" error={usernameError}>
 					<Input
 						id="username"
 						name="username"
 						autocomplete="username"
 						bind:value={username}
-						disabled={submitting}
-						aria-invalid={usernameError ? 'true' : undefined}
-						aria-describedby={usernameError ? 'username-error' : undefined}
+						readonly={submitting}
+						aria-disabled={submitting || undefined}
+						invalid={!!usernameError}
 						required
 					/>
-					{#if usernameError}
-						<p id="username-error" class="text-sm text-destructive" role="alert">{usernameError}</p>
-					{/if}
-				</div>
+				</Field>
 
-				<div class="space-y-2">
-					<Label for="password">Password</Label>
+				<Field
+					label="Password"
+					for="password"
+					error={shown.password ? passwordError : undefined}
+					hint={shown.password ? undefined : passwordError}
+				>
 					<Input
 						id="password"
 						name="password"
 						type="password"
 						autocomplete="new-password"
 						bind:value={password}
-						disabled={submitting}
-						aria-invalid={passwordError ? 'true' : undefined}
-						aria-describedby={passwordError ? 'password-error' : undefined}
+						readonly={submitting}
+						aria-disabled={submitting || undefined}
+						invalid={shown.password && !!passwordError}
+						oninputcapture={() => (shown = { password: false, confirm: false })}
+						onblur={() => (shown = { password: true, confirm: shown.confirm || confirm.length > 0 })}
 						required
 					/>
-					{#if passwordError}
-						<p id="password-error" class="text-sm text-destructive" role="alert">{passwordError}</p>
-					{/if}
-				</div>
+				</Field>
 
-				<div class="space-y-2">
-					<Label for="confirm">Confirm password</Label>
+				<Field
+					label="Confirm password"
+					for="confirm"
+					error={shown.confirm ? confirmError : undefined}
+					hint={shown.confirm ? undefined : confirmError}
+				>
 					<Input
 						id="confirm"
 						name="confirm"
 						type="password"
 						autocomplete="new-password"
 						bind:value={confirm}
-						disabled={submitting}
-						aria-invalid={confirmError ? 'true' : undefined}
-						aria-describedby={confirmError ? 'confirm-error' : undefined}
+						readonly={submitting}
+						aria-disabled={submitting || undefined}
+						invalid={shown.confirm && !!confirmError}
+						oninputcapture={() => (shown.confirm = false)}
+						onblur={() => (shown.confirm = true)}
 						required
 					/>
-					{#if confirmError}
-						<p id="confirm-error" class="text-sm text-destructive" role="alert">{confirmError}</p>
-					{/if}
-				</div>
+				</Field>
 
 				{#if formError}
-					<p class="text-sm text-destructive" role="alert">{formError}</p>
+					<p class={formErrorText} role="alert">{formError}</p>
 				{/if}
 
-				<Button type="submit" class="w-full" disabled={!canSubmit}>
-					{#if submitting}
-						<LoaderCircle class="animate-spin" aria-hidden="true" />
-						Creating account
-					{:else}
-						Create account
-					{/if}
+				<Button type="submit" class={fullWidth} loading={submitting} disabled={!canSubmit}>
+					{submitting ? 'Creating account' : 'Create account'}
 				</Button>
 			</form>
 		</CardContent>
