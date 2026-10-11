@@ -23,10 +23,6 @@ mkdir looking-glass && cd looking-glass
 curl -fsSLO https://raw.githubusercontent.com/ViktorsBaikers/looking-glass/main/compose.yaml
 ```
 
-The Compose setup needs the first release after `v0.1.3`, and `latest` points at
-`v0.1.3` until then. Meanwhile, build the image yourself, as in
-[Run a build of your own tree](#run-a-build-of-your-own-tree).
-
 Point a public DNS name at the host, open TCP 80, 443 and 8443 to the internet, and
 put the name in `.env` beside `compose.yaml`:
 
@@ -262,7 +258,7 @@ The published `v0.1.3` image and agent pin the SHA-256 of the whole certificate.
 them, every renewal disconnects every agent, even a renewal that keeps the private
 key: after renewing, re-enroll each node with a newly generated install command.
 
-A central and agents built from a later tree pin the SHA-256 of the certificate's
+Release `v0.2.0` and later, and a central and agents built from a later tree, pin the SHA-256 of the certificate's
 public key (its SubjectPublicKeyInfo) instead. There, a renewed certificate that keeps
 the same private key keeps every enrolled agent connected. Renew with key reuse, for
 example `certbot renew --reuse-key` (or `certbot certonly --reuse-key` when the
@@ -282,19 +278,19 @@ agent URLs and their SHA-256 pins. A release image carries its own release's val
 so neither setup above sets them; a source build needs them set by hand (see
 [Run a build of your own tree](#run-a-build-of-your-own-tree)). Central refuses to
 generate an enrollment command if any URL or SHA-256 pin is missing or invalid.
-The URL/SHA-256 values below identify the published `v0.1.3` release assets. They
-pair with the published `v0.1.3` image only:
+The URL/SHA-256 values below identify the published `v0.2.0` release assets. They
+pair with the published `v0.2.0` image only:
 
 ```sh
-LG_INSTALLER_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/install-agent.sh
-LG_INSTALLER_SHA256=d824313a58f19e937f5365b9f5db019e05ba5163e00ec6249513b118142a7880
-LG_AGENT_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/lg-agent-x86_64-unknown-linux-gnu
-LG_AGENT_SHA256=9bb238a79847683432e9f20066b37ea1fbd027829ebb792d14fc983b6e9bb8c7
+LG_INSTALLER_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.2.0/install-agent.sh
+LG_INSTALLER_SHA256=ba5e930a161a6a124b9490d3ddcc8384132fb7f7d0e181105dcce4ab44b4ac62
+LG_AGENT_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.2.0/lg-agent-x86_64-unknown-linux-gnu
+LG_AGENT_SHA256=3531c4e67819b451e2c528c281daffa45e9bc7a7c6eb8cd28671c14c004e68ee
 ```
 
 In central's environment the installer pair is named `LG_AGENT_INSTALL_SCRIPT_URL`
 and `LG_AGENT_INSTALL_SCRIPT_SHA256`. Remote installation from a release central uses
-the published `v0.1.3` assets and the URL/SHA-256 values shown above.
+the published `v0.2.0` assets and the URL/SHA-256 values shown above.
 
 After the central container is healthy, finish first-run setup with the token, sign
 in as the administrator, create a remote location, and use that location's
@@ -491,7 +487,7 @@ the SHA-256 pins in this README, so update the README pins before tagging:
 
 1. Pull the new image: `docker compose pull` with Compose,
    `docker pull ghcr.io/viktorsbaikers/looking-glass:latest` without. To pin a
-   version, replace `latest` with a tag such as `v0.1.3` in `compose.yaml` (or the
+   version, replace `latest` with a tag such as `v0.2.0` in `compose.yaml` (or the
    `docker run` command).
 2. Stop the old central container and back up the data volume (below).
 3. With Compose, `docker compose up -d` starts the new image on the same volume.

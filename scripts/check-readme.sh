@@ -134,10 +134,10 @@ grep -Fqx 'docker pull ghcr.io/viktorsbaikers/looking-glass:latest' "$readme" ||
   echo "README missing: docker pull of the published image" >&2
   exit 1
 }
-need 'The URL/SHA-256 values below identify the published `v0.1.3` release assets' "published release-asset status"
-need 'LG_INSTALLER_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/install-agent.sh' "published installer URL"
-need 'LG_AGENT_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.1.3/lg-agent-x86_64-unknown-linux-gnu' "published agent URL"
-need 'published `v0.1.3` assets and the URL/SHA-256 values shown above' "published remote-install status"
+need 'The URL/SHA-256 values below identify the published `v0.2.0` release assets' "published release-asset status"
+need 'LG_INSTALLER_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.2.0/install-agent.sh' "published installer URL"
+need 'LG_AGENT_URL=https://github.com/ViktorsBaikers/looking-glass/releases/download/v0.2.0/lg-agent-x86_64-unknown-linux-gnu' "published agent URL"
+need 'published `v0.2.0` assets and the URL/SHA-256 values shown above' "published remote-install status"
 need 'A central built from source needs an agent and installer built from the same tree' "same-tree agent and installer for a source-built central"
 need 'The published `v0.1.3` image and agent pin the SHA-256 of the whole certificate' "v0.1.3 agents disconnect on every certificate renewal"
 need '/var/lib/lookingglass-agent/data/files' "remote node speed-test files directory"
@@ -153,8 +153,8 @@ need_advanced_run '-v looking-glass-data:/data' "persistent data volume"
 need_advanced_run '-e LG_TRUSTED_PROXIES="$LG_TRUSTED_PROXIES"' "trusted proxy source"
 need_advanced_run '-e LG_TUNNEL_URL="https://$LG_PUBLIC_NAME:8443"' "tunnel HTTPS origin"
 need 'The HTTPS enrollment proxy must present the same leaf certificate configured at `LG_CENTRAL_CERT`' "proxy enrollment certificate identity"
-need 'LG_INSTALLER_SHA256=d824313a58f19e937f5365b9f5db019e05ba5163e00ec6249513b118142a7880' "verified installer SHA-256"
-need 'LG_AGENT_SHA256=9bb238a79847683432e9f20066b37ea1fbd027829ebb792d14fc983b6e9bb8c7' "verified agent SHA-256"
+need 'LG_INSTALLER_SHA256=ba5e930a161a6a124b9490d3ddcc8384132fb7f7d0e181105dcce4ab44b4ac62' "verified installer SHA-256"
+need 'LG_AGENT_SHA256=3531c4e67819b451e2c528c281daffa45e9bc7a7c6eb8cd28671c14c004e68ee' "verified agent SHA-256"
 need 'Generate install command' "generated enrollment-command flow"
 need 'must pass the original `Host` header through' "reverse-proxy Host preservation"
 grep -Fq 'proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;' "$readme" || {
